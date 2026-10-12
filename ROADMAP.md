@@ -156,6 +156,7 @@ Results, with the CPU at the 600–816 MHz the `ondemand` governor picks for thi
 | Frames from another thread | An emulator thread with a shared, surfaceless GL context uploads CPU-made frames into textures and hands them over with a GL fence; Slint shows them as borrowed textures. A texture goes back to the emulator only after the present that replaced it, with a fence. No tearing: each read-back rendered frame holds exactly one emulator frame |
 | Composite vs direct | Drawing each game frame through the Slint scene costs 2.8–3.3 ms of UI-thread CPU per frame, against 2.1–2.3 ms for our own one-quad blit. With the emulator paced by the display, the latency is the same in both: a press reaches the end of the present 24–25 ms later on average (33 ms worst). An emulator on its own clock (60.0988 Hz) drifts against the display (60.2 Hz), and its frames sometimes wait a whole refresh: 21–38 ms on average |
 | Display queue | Drawing and then swapping, as every toolkit does by default, puts a frame on screen 32 ms (two vsyncs) after it was started: the swap waits for the previous frame's flip, and the new frame flips at the vsync after that. Starting each frame only once the previous one is on screen takes 16 ms at the same 60 fps. Also delaying the start by 10 ms (a "frame delay", so the work and the reading of the buttons happen later) takes 6 ms, still at 60 fps; at 13 ms, frames start to miss the vsync. Measured with the display driver's record of the flip (`/dev/fb0`'s pan offset) |
+| Vsync event | Our kernel now implements the standard `FBIO_WAITFORVSYNC` on `/dev/fb0`: it returns when the display takes a new frame (buffer switches follow it by a median 0.1 ms). Waiting for it, then drawing: the swap no longer blocks (about 1 ms), 60 fps, 16.6 ms from frame start to on screen; with a 10 ms frame delay, 6.5 ms at 60 fps |
 | Memory, start-up | 20 MB resident with the scene, fonts and frame textures. First frame on screen about 1.1 s after `main()` starts |
 | Text | Geist from 27 to 96 px is clean on the panel |
 | Sleep | The GL context and textures survive sleep, and rendering resumes without errors |
@@ -163,7 +164,7 @@ Results, with the CPU at the 600–816 MHz the `ondemand` governor picks for thi
 Proposed from these results (to confirm):
 - **Keep FemtoVG.** The Skia renderer would cost about 6–10 MB more, and the text doesn't need it.
 - **Always composite.** Slint adds about 1 ms of CPU per frame and no latency, so gameplay frames go through the Slint scene. The second, direct path isn't needed.
-- **Pace everything by the display, not by draw-then-swap.** Latency comes from when frames are started, not from the toolkit. Our platform owns the event loop, so it can start each frame (the emulator's work, then the UI's draw) at a set time after the previous flip, with a frame delay that adapts to how long the core takes. Measured on this hardware, that cuts the start-to-screen time from 32 ms to about 6 ms. It needs a vsync event: the display driver has one (`fb_wait_for_vsync`), but its standard `FBIO_WAITFORVSYNC` ioctl is stubbed out, so the kernel should enable it. Until then, the time a blocking swap returns gives the vsync phase.
+- **Pace everything by the display, not by draw-then-swap.** Latency comes from when frames are started, not from the toolkit. Our platform owns the event loop, so it can start each frame (the emulator's work, then the UI's draw) at a set time after the previous flip, with a frame delay that adapts to how long the core takes. Measured on this hardware, that cuts the start-to-screen time from 32 ms to about 6 ms. The vsync event is `FBIO_WAITFORVSYNC` (implemented in our kernel for this; see "Vsync event"). On a device whose kernel lacks it, the time a blocking swap returns gives the vsync phase.
 
 Press to photons, by the same measurements: the press waits about 8 ms on average for the next frame to read it, then the frame takes 32 ms (draw-then-swap) or about 6 ms (paced, with a 10 ms frame delay) to go on screen, then scanout takes up to 16 ms to reach a given row. That totals about 48 ms or about 22 ms to the middle of the screen. Confirming it with a camera (a 240 fps phone video of an LED and the screen) is still to do.
 
@@ -195,7 +196,7 @@ Found along the way:
 ### 5. Runtime
 
 1. The libretro runtime in C, behind `specular-runtime`: audio/video rate control and save states, borrowing from Pickles.
-2. Frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Includes the vsync event (`FBIO_WAITFORVSYNC`) in the Brick's kernel, and a camera check of press-to-photon latency.
+2. Frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Uses `FBIO_WAITFORVSYNC` (in the Brick's kernel since the spike). Includes a camera check of press-to-photon latency.
 3. 3D-capable cores with a shared GL context.
 4. Per-system cores and defaults.
 5. Pausing on sleep.

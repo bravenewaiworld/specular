@@ -13,8 +13,10 @@
 //!                so a frame never waits behind another
 //!   late N       like wait-flip, then also wait N ms before starting the frame (a "frame
 //!                delay": the work, and reading the buttons, happen later, closer to the vsync)
-//!   vsync N      after each swap, block in the FBIO_WAITFORVSYNC ioctl, then wait N ms (no
-//!                polling): the same pacing from a blocking vsync wait
+//!   phase        like plain, while another thread timestamps FBIO_WAITFORVSYNC returns; reports
+//!                when the display switches buffers relative to them
+//!   vsync N      before each frame, block in the FBIO_WAITFORVSYNC ioctl (the next vsync), then
+//!                wait N ms: the same pacing from a blocking vsync wait, without polling
 
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
@@ -49,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fb = std::fs::OpenOptions::new().read(true).open("/dev/fb0")?;
     let fb_vsync = fb.try_clone()?;
     let mut vsync_waits = Vec::new();
+    let mut swaps = Vec::new();
     let info = var_info(&fb);
     let (w, h, pages) = (info.xres as usize, info.yres as usize, (info.yres_virtual / info.yres) as usize);
     let map = unsafe { libc::mmap(std::ptr::null_mut(), w * h * 4 * pages, libc::PROT_READ, libc::MAP_SHARED, fb.as_raw_fd(), 0) };
@@ -60,18 +63,35 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // When each frame number (mod 256) went on screen.
     let on_screen: Arc<Mutex<[Option<Instant>; 256]>> = Arc::new(Mutex::new([None; 256]));
     let watch = on_screen.clone();
+    let switches: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    let sw = switches.clone();
     std::thread::spawn(move || {
         let mut page = usize::MAX;
         loop {
             let p = var_info(&fb).yoffset as usize / h;
-            if p != page { page = p; watch.lock().unwrap()[frame_in(p) as usize] = Some(Instant::now()); }
+            if p != page { page = p; let t = Instant::now(); watch.lock().unwrap()[frame_in(p) as usize] = Some(t); sw.lock().unwrap().push(t); }
             std::thread::sleep(Duration::from_micros(250));
         }
     });
 
+    let vsyncs: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    if mode == "phase" {
+        let (v, fb2) = (vsyncs.clone(), fb_vsync.try_clone()?);
+        std::thread::spawn(move || loop {
+            let zero = 0u32;
+            unsafe { libc::ioctl(fb2.as_raw_fd(), FBIO_WAITFORVSYNC, &zero) };
+            v.lock().unwrap().push(Instant::now());
+        });
+    }
     let mut started = vec![Instant::now(); frames as usize];
     let begin = Instant::now();
     for n in 0..frames {
+        if mode == "vsync" {
+            let t = Instant::now();
+            let zero = 0u32;
+            if unsafe { libc::ioctl(fb_vsync.as_raw_fd(), FBIO_WAITFORVSYNC, &zero) } < 0 { return Err(std::io::Error::last_os_error().into()); }
+            vsync_waits.push(t.elapsed().as_secs_f64() * 1e3);
+        }
         std::thread::sleep(delay);
         started[n as usize] = Instant::now();
         on_screen.lock().unwrap()[(n % 256) as usize] = None;
@@ -80,13 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             gl.clear_color(0.2, (n % 256) as f32 / 255.0, 0.4, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
         }
+        let t = Instant::now();
         egl.swap_buffers()?;
+        swaps.push(t.elapsed().as_secs_f64() * 1e3);
         if mode == "vsync" {
-            let t = Instant::now();
-            let zero = 0u32;
-            if unsafe { libc::ioctl(fb_vsync.as_raw_fd(), FBIO_WAITFORVSYNC, &zero) } < 0 { return Err(std::io::Error::last_os_error().into()); }
-            vsync_waits.push(t.elapsed().as_secs_f64() * 1e3);
-        } else if mode != "plain" {
+            continue;
+        } else if mode != "plain" && mode != "phase" {
             let t = Instant::now();
             while on_screen.lock().unwrap()[(n % 256) as usize].is_none() && t.elapsed() < Duration::from_millis(50) {
                 std::thread::sleep(Duration::from_micros(250));
@@ -94,6 +113,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     let fps = frames as f64 / begin.elapsed().as_secs_f64();
+    if mode == "phase" {
+        // For each buffer switch, how long after the latest vsync return it was seen.
+        let v = vsyncs.lock().unwrap();
+        let mut after: Vec<f64> = switches.lock().unwrap().iter()
+            .filter_map(|&s| v.iter().rev().find(|&&t| t <= s).map(|&t| (s - t).as_secs_f64() * 1e3)).collect();
+        after.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        if !after.is_empty() {
+            println!("  buffer switches came {:.2} min, {:.2} median, {:.2} max ms after the latest FBIO_WAITFORVSYNC return ({} vsyncs, {} switches)",
+                after[0], after[after.len() / 2], after[after.len() - 1], v.len(), after.len());
+        }
+    }
     std::thread::sleep(Duration::from_millis(50));
     // Frames still in the 256-entry table (the last ones), start → on screen.
     let table = on_screen.lock().unwrap();
@@ -102,6 +132,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .collect();
     ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
     if ms.is_empty() { println!("{mode}: no switches seen"); return Ok(()); }
+    swaps.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    println!("  the swap blocked {:.1} min, {:.1} median, {:.1} max ms", swaps[0], swaps[swaps.len() / 2], swaps[swaps.len() - 1]);
     if !vsync_waits.is_empty() {
         vsync_waits.sort_by(|a, b| a.partial_cmp(b).unwrap());
         println!("  FBIO_WAITFORVSYNC blocked {:.1} min, {:.1} median, {:.1} max ms", vsync_waits[0], vsync_waits[vsync_waits.len() / 2], vsync_waits[vsync_waits.len() - 1]);
