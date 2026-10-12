@@ -9,22 +9,10 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::{Duration, Instant};
 
-/// The buttons Specular knows, by position (A = right, B = bottom, X = top, Y = left).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Button { Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power }
+pub use specular_core::input::{Button, ButtonEvent};
 
-/// A press or release.
-#[derive(Clone, Copy, Debug)]
-pub struct ButtonEvent {
-    pub button: Button,
-    /// True for a press, false for a release. Key auto-repeat from the kernel is not reported.
-    pub pressed: bool,
-    /// When the kernel saw it, on the CLOCK_MONOTONIC timeline (see `clock`).
-    pub time: Duration,
-}
-
-/// The time on one of the kernel's clocks (e.g. CLOCK_MONOTONIC, or CLOCK_THREAD_CPUTIME_ID for
-/// the CPU time the calling thread has used).
+/// The time on one of the kernel's clocks (e.g. CLOCK_MONOTONIC, the timeline of button event
+/// times, or CLOCK_THREAD_CPUTIME_ID for the CPU time the calling thread has used).
 pub fn clock(id: libc::clockid_t) -> Duration {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     unsafe { libc::clock_gettime(id, &mut ts) };

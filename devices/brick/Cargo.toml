@@ -10,6 +10,7 @@ publish = false
 khronos-egl = { version = "6.0.0", default-features = false, features = ["1_5", "dynamic"] }
 libc = "0.2"
 libloading = "0.8"
+specular-core = { path = "../../crates/specular-core" }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 # Slint's text layout (fontique) uses fontconfig for system fonts; load it at runtime, if present,
 # instead of linking it, since Specular ships its own fonts. Must match the fontique Slint uses.

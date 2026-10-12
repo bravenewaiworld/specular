@@ -3573,7 +3573,12 @@ dependencies = [
  "libc",
  "libloading",
  "slint",
+ "specular-core",
 ]
+
+[[package]]
+name = "specular-core"
+version = "0.1.0"
 
 [[package]]
 name = "spin_on"
