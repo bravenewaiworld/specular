@@ -1,0 +1,961 @@
+<title>Specular UI Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@600;800&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: the page (the "bench") is a plain backdrop around the simulated device screen, scaled to fit.
+   Everything inside .screen is sized in "u": 1u = one Brick panel pixel at its ~400 ppi, so a
+   device with a different density keeps the same physical sizes. */
+:root {
+  color-scheme: dark;
+  --page: #050607;
+  --page-fg: #c4c8cd;
+  --page-dim: #6b7178;
+  --page-line: #1b1e22;
+  --page-chip: #101215;
+  --page-font: "Geist", "IBM Plex Sans", system-ui, sans-serif;
+  --page-mono: "Geist Mono", "IBM Plex Mono", ui-monospace, monospace;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body {
+  background: var(--page); color: var(--page-fg); font: 14px/1.45 var(--page-font);
+  margin: 0; padding-inline: 16px; padding-block: 16px; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+.bench-head { width: 100%; max-width: 1100px; display: flex; flex-wrap: wrap; gap: 8px 20px;
+  align-items: center; justify-content: space-between; }
+.wordmark { font: 600 15px/1 var(--page-font); letter-spacing: .02em; color: var(--page-fg); }
+.wordmark span { color: var(--page-dim); font-weight: 400; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--page-line); border-radius: 6px; overflow: hidden; }
+.seg button { font: 500 12px/1 var(--page-font); color: var(--page-dim); background: var(--page-chip);
+  border: 0; padding: 7px 10px; cursor: pointer; }
+.seg button[aria-pressed="true"] { color: var(--page-fg); background: #1c1f23; }
+.seg button:focus-visible, .ppi input:focus-visible { outline: 2px solid #5aa9ff; outline-offset: -2px; }
+.ppi { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--page-font); color: var(--page-dim); }
+.ppi input { width: 56px; font: 12px var(--page-mono); color: var(--page-fg); background: var(--page-chip);
+  border: 1px solid var(--page-line); border-radius: 6px; padding: 6px; }
+.bench { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; }
+.leds { display: flex; gap: 6px; align-items: center; height: 10px; }
+.leds i { width: 22px; height: 4px; border-radius: 2px; background: #15171a; transition: background .25s, box-shadow .25s; }
+.leds-cap { font: 11px var(--page-mono); color: var(--page-dim); letter-spacing: .04em; }
+.frame { position: relative; }
+.legend { width: 100%; max-width: 1100px; display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center;
+  font: 12px var(--page-font); color: var(--page-dim); }
+.legend kbd { font: 11px var(--page-mono); color: var(--page-fg); background: var(--page-chip);
+  border: 1px solid var(--page-line); border-radius: 4px; padding: 1px 5px; }
+.pad { display: none; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.pad button { font: 600 14px var(--page-font); color: var(--page-fg); background: var(--page-chip);
+  border: 1px solid var(--page-line); border-radius: 8px; width: 46px; height: 40px; touch-action: manipulation; }
+@media (pointer: coarse) { .pad { display: flex; } }
+
+/* ---------------------------------------------------------------- device screen -------------- */
+.screen {
+  --u: 1px;
+  /* sizes in u (1 u = 1 Brick panel pixel) */
+  --t-title: calc(64 * var(--u)); --t-body: calc(42 * var(--u)); --t-sec: calc(33 * var(--u));
+  --t-cap: calc(27 * var(--u)); --row: calc(92 * var(--u)); --gut: calc(48 * var(--u));
+  --rb: calc(12 * var(--u)); --line: calc(2 * var(--u)); --bar: calc(72 * var(--u)); --hint: calc(76 * var(--u));
+  position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden;
+  background: var(--bg); color: var(--fg); font-family: var(--font);
+  -webkit-font-smoothing: antialiased; font-kerning: normal;
+}
+.screen.lightbar {
+  --bg: #08090a; --surface: #141518; --raised: #202226; --fg: #f2f2f2; --dim: #8a8f96; --faint: #3a3d42;
+  --accent: #2ec4b6; --tint: var(--accent);
+  --font: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace; --display: "Geist", system-ui, sans-serif;
+  --m-move: 220ms; --e-move: cubic-bezier(.3, 1.4, .5, 1);
+  --m-scroll: 280ms; --e-scroll: cubic-bezier(.2, 0, 0, 1);
+  --m-view: 260ms; --e-view: cubic-bezier(.2, 0, 0, 1);
+  --m-fade: 160ms;
+}
+.screen.instrument {
+  --bg: #0a0a0a; --surface: #161616; --raised: #222222; --fg: #ededed; --dim: #6e6e6e; --faint: #2a2a2a;
+  --accent: #ff5a1f; --tint: var(--accent);
+  --font: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace; --display: "Doto", "IBM Plex Mono", monospace;
+  --m-move: 90ms; --e-move: steps(3, end);
+  --m-scroll: 90ms; --e-scroll: steps(3, end);
+  --m-view: 120ms; --e-view: steps(4, end);
+  --m-fade: 90ms;
+}
+.dim-overlay { position: absolute; inset: 0; background: #000; pointer-events: none; z-index: 50; transition: opacity .2s; }
+
+/* status bar */
+.status { position: absolute; left: 0; right: 0; top: 0; height: var(--bar); display: flex; align-items: center;
+  justify-content: space-between; padding: 0 var(--gut); z-index: 20; transition: opacity var(--m-fade), transform var(--m-view) var(--e-view); }
+.status .crumb { font: 500 var(--t-cap)/1 var(--font); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status .right { display: flex; align-items: center; gap: calc(22 * var(--u)); font: 500 var(--t-cap)/1 var(--mono);
+  color: var(--dim); font-variant-numeric: tabular-nums; }
+.batt { display: inline-flex; align-items: center; gap: calc(8 * var(--u)); }
+.batt i { position: relative; width: calc(40 * var(--u)); height: calc(20 * var(--u)); border: var(--line) solid var(--dim);
+  border-radius: 0 0 calc(4 * var(--u)) calc(4 * var(--u)); box-sizing: border-box; }
+.batt i::before { content: ""; position: absolute; left: calc(2 * var(--u)); top: calc(2 * var(--u)); bottom: calc(2 * var(--u));
+  width: calc((100% - 4 * var(--u)) * var(--lvl)); background: var(--fg); }
+.batt i::after { content: ""; position: absolute; right: calc(-6 * var(--u)); top: calc(5 * var(--u)); width: calc(3 * var(--u));
+  height: calc(6 * var(--u)); background: var(--dim); }
+.wifi { width: calc(30 * var(--u)); height: calc(22 * var(--u)); }
+.instrument .status { border-bottom: var(--line) solid var(--faint); }
+.instrument .status .crumb { font: 500 var(--t-cap)/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.instrument .clock { font: 800 calc(34 * var(--u))/1 var(--display); color: var(--fg); letter-spacing: .02em; }
+.instrument .wifi, .instrument .batt i { display: none; }
+.instrument .batt::before { content: "BAT"; color: var(--dim); }
+.lightbar .wifi-txt, .lightbar .clock-label { display: none; }
+.instrument .wifi-txt { color: var(--dim); }
+
+/* light bar along the top edge */
+.lbar { position: absolute; left: 0; right: 0; top: 0; height: calc(3 * var(--u)); background: var(--tint); z-index: 30;
+  box-shadow: 0 0 calc(18 * var(--u)) calc(2 * var(--u)) color-mix(in srgb, var(--tint) 45%, transparent);
+  transition: background .35s, box-shadow .35s, opacity .2s; }
+.instrument .lbar { display: none; }
+
+/* hint bar */
+.hints { position: absolute; left: 0; right: 0; bottom: 0; height: var(--hint); display: flex; align-items: center;
+  justify-content: flex-end; gap: calc(34 * var(--u)); padding: 0 var(--gut); z-index: 20;
+  font: 500 var(--t-cap)/1 var(--font); color: var(--dim); transition: opacity var(--m-fade); }
+.hint { display: inline-flex; align-items: center; gap: calc(12 * var(--u)); white-space: nowrap; }
+.btn { display: inline-grid; place-items: center; min-width: calc(40 * var(--u)); height: calc(40 * var(--u));
+  padding: 0 calc(8 * var(--u)); box-sizing: border-box; border-radius: 999px; background: var(--raised); color: var(--fg);
+  font: 600 calc(22 * var(--u))/1 var(--font); }
+.instrument .hints { border-top: var(--line) solid var(--faint); font: 500 var(--t-cap)/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.instrument .btn { border-radius: 0 0 calc(6 * var(--u)) calc(6 * var(--u)); background: transparent; border: var(--line) solid var(--dim); font-family: var(--mono); }
+
+/* views */
+.stage { position: absolute; left: 0; right: 0; top: var(--bar); bottom: var(--hint); }
+.view { position: absolute; inset: 0; display: flex; transition: transform var(--m-view) var(--e-view), opacity var(--m-view) var(--e-view); }
+.view.from-right { transform: translateX(calc(64 * var(--u))); opacity: 0; }
+.view.to-left { transform: translateX(calc(-64 * var(--u))); opacity: 0; }
+.view.from-left { transform: translateX(calc(-64 * var(--u))); opacity: 0; }
+.view.to-right { transform: translateX(calc(64 * var(--u))); opacity: 0; }
+.instrument .view.from-right, .instrument .view.to-left, .instrument .view.from-left, .instrument .view.to-right { transform: none; }
+
+.pane-list { position: relative; flex: 1 1 58%; min-width: 0; overflow: hidden; }
+.pane-side { position: relative; flex: 0 0 42%; min-width: 0; padding: calc(24 * var(--u)) var(--gut) calc(24 * var(--u)) calc(16 * var(--u));
+  box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: calc(18 * var(--u)); }
+.view.wide .pane-list { flex-basis: 100%; }
+
+.title { position: absolute; left: var(--gut); right: calc(16 * var(--u)); top: calc(18 * var(--u)); font: 600 var(--t-title)/1.1 var(--display); letter-spacing: -.02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.instrument .title { font: 800 calc(58 * var(--u))/1 var(--display); letter-spacing: .01em; text-transform: uppercase; }
+.list { position: absolute; left: 0; right: 0; top: calc(108 * var(--u)); bottom: 0; overflow: hidden; }
+.list::before, .list::after { content: ""; position: absolute; left: 0; right: 0; height: calc(56 * var(--u)); z-index: 2; pointer-events: none; }
+.list::before { top: 0; background: linear-gradient(var(--bg), transparent); }
+.list::after { bottom: 0; background: linear-gradient(transparent, var(--bg)); }
+.sheet .list::before { background: linear-gradient(var(--surface), transparent); }
+.sheet .list::after { background: linear-gradient(transparent, var(--surface)); }
+.gmenu .list::before, .gmenu .list::after { display: none; }
+.track { position: absolute; left: 0; right: 0; top: 0; transition: transform var(--m-scroll) var(--e-scroll); }
+.plate { position: absolute; left: calc(var(--gut) - 20 * var(--u)); right: calc(var(--gut) - 20 * var(--u)); top: 0; height: var(--row);
+  background: var(--raised); border-radius: 0 0 var(--rb) var(--rb);
+  box-shadow: inset 0 var(--line) 0 rgba(255, 255, 255, .13);
+  transition: transform var(--m-move) var(--e-move), height var(--m-move) var(--e-move); }
+.plate::before { content: ""; position: absolute; left: 0; top: calc(18 * var(--u)); bottom: calc(18 * var(--u)); width: calc(4 * var(--u));
+  background: var(--accent); box-shadow: 0 0 calc(12 * var(--u)) color-mix(in srgb, var(--accent) 70%, transparent); }
+.instrument .plate { background: var(--surface); box-shadow: inset 0 0 0 var(--line) var(--faint); left: calc(var(--gut) - 16 * var(--u)); right: calc(var(--gut) - 16 * var(--u)); }
+.instrument .plate::before { left: calc(16 * var(--u)); top: calc(50% - 7 * var(--u)); bottom: auto; width: calc(14 * var(--u)); height: calc(14 * var(--u)); box-shadow: none; }
+
+.row { position: relative; height: var(--row); display: flex; align-items: center; gap: calc(20 * var(--u));
+  padding: 0 var(--gut); box-sizing: border-box; color: var(--dim); font: 400 var(--t-body)/1.1 var(--font); }
+.row.focus { color: var(--fg); }
+.row.disabled { opacity: .4; }
+.lbl { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color var(--m-fade); }
+.row.focus .lbl { font-weight: 500; }
+.det { flex: none; font: 400 var(--t-sec)/1 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.row.hdr { height: calc(76 * var(--u)); align-items: flex-end; padding-bottom: calc(12 * var(--u));
+  font: 500 var(--t-cap)/1 var(--font); color: var(--dim); letter-spacing: .02em; }
+.instrument .row { padding-left: calc(var(--gut) + 24 * var(--u)); }
+.instrument .row.hdr { font: 500 var(--t-cap)/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; padding-left: 0;
+  border-bottom: var(--line) solid var(--faint); margin: 0 var(--gut); padding-right: 0; }
+.instrument .row.hdr::after { content: attr(data-n); margin-left: auto; color: var(--faint); }
+.instrument .row.focus .lbl { font-weight: 500; }
+.idx { display: none; }
+.instrument .idx { display: inline; flex: none; font: 400 var(--t-cap)/1 var(--mono); color: var(--faint); width: calc(64 * var(--u)); font-variant-numeric: tabular-nums; }
+.instrument .row.focus .idx { color: var(--dim); }
+
+/* values */
+.val { flex: none; display: flex; align-items: center; gap: calc(16 * var(--u)); font: 500 var(--t-sec)/1 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
+.row.focus .val { color: var(--fg); }
+.arw { opacity: 0; color: var(--dim); transition: opacity var(--m-fade); }
+.row.focus .arw { opacity: 1; }
+.tog { position: relative; width: calc(80 * var(--u)); height: calc(42 * var(--u)); border-radius: calc(21 * var(--u)); background: var(--faint);
+  transition: background var(--m-fade); }
+.tog::after { content: ""; position: absolute; top: calc(5 * var(--u)); left: calc(5 * var(--u)); width: calc(32 * var(--u)); height: calc(32 * var(--u));
+  border-radius: 50%; background: var(--dim); transition: transform var(--m-move) var(--e-move), background var(--m-fade); }
+.tog.on { background: color-mix(in srgb, var(--accent) 38%, var(--raised)); }
+.tog.on::after { transform: translateX(calc(38 * var(--u))); background: var(--fg); }
+.instrument .tog { width: auto; height: auto; background: none; border-radius: 0; font: 500 var(--t-sec)/1 var(--mono); letter-spacing: .06em; }
+.instrument .tog::after { display: none; }
+.instrument .tog::before { content: "OFF"; color: var(--dim); }
+.instrument .tog.on::before { content: "ON"; color: var(--accent); }
+.gauge { position: relative; width: calc(200 * var(--u)); height: calc(8 * var(--u)); background: var(--faint); border-radius: 0 0 calc(4 * var(--u)) calc(4 * var(--u)); overflow: hidden; }
+.gauge i { position: absolute; left: 0; top: 0; bottom: 0; width: calc(100% * var(--f)); background: var(--fg);
+  transition: width var(--m-move) var(--e-move); }
+.row.focus .gauge i { background: var(--accent); }
+.instrument .gauge { height: calc(26 * var(--u)); border-radius: 0; background: repeating-linear-gradient(90deg, var(--faint) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); }
+.instrument .gauge i { background: repeating-linear-gradient(90deg, var(--dim) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); width: calc(100% * var(--f)); }
+.instrument .row.focus .gauge i { background: repeating-linear-gradient(90deg, var(--accent) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); }
+.num { min-width: calc(64 * var(--u)); text-align: right; }
+.chev { font: 400 var(--t-sec)/1 var(--mono); color: var(--dim); }
+
+/* side panel */
+.big { font: 600 calc(150 * var(--u))/0.9 var(--display); letter-spacing: -.04em; color: var(--fg); font-variant-numeric: tabular-nums; }
+.instrument .big { font: 800 calc(150 * var(--u))/0.9 var(--display); letter-spacing: 0; }
+.cap { font: 400 var(--t-cap)/1.35 var(--font); color: var(--dim); }
+.instrument .cap { font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.cap b { color: var(--fg); font-weight: 500; }
+.meta { display: grid; grid-template-columns: auto 1fr; gap: calc(10 * var(--u)) calc(24 * var(--u)); font: 400 var(--t-cap)/1.2 var(--font); color: var(--dim); }
+.meta dd { margin: 0; color: var(--fg); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.meta dt { white-space: nowrap; }
+.instrument .meta { font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.side-swap { display: flex; flex-direction: column; gap: calc(18 * var(--u)); transition: opacity var(--m-fade); }
+
+/* box art: placeholder covers generated per game */
+.art { position: relative; aspect-ratio: 1 / 1; width: 100%; max-width: 100%; border-radius: 0 0 var(--rb) var(--rb); overflow: hidden;
+  background: linear-gradient(160deg, hsl(var(--h) 45% 34%), hsl(calc(var(--h) + 40) 50% 14%));
+  box-shadow: inset 0 var(--line) 0 rgba(255, 255, 255, .18); }
+.art::before { content: ""; position: absolute; inset: 0;
+  background: radial-gradient(circle at 70% 30%, hsl(var(--h) 70% 60% / .55), transparent 45%),
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, .05) 0 calc(6 * var(--u)), transparent 0 calc(18 * var(--u))); }
+.art span { position: absolute; left: 8%; right: 8%; bottom: 8%; font: 600 calc(30 * var(--u))/1.1 var(--font); color: rgba(255, 255, 255, .92);
+  text-wrap: balance; text-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
+.art em { position: absolute; left: 8%; top: 8%; font: 500 calc(20 * var(--u))/1 var(--mono); font-style: normal; color: rgba(255, 255, 255, .7); letter-spacing: .1em; }
+.side-art { width: min(100%, calc(400 * var(--u))); }
+.instrument .art { border-radius: 0 0 calc(6 * var(--u)) calc(6 * var(--u)); }
+
+/* grid */
+.grid { position: absolute; left: 0; right: 0; top: calc(108 * var(--u)); bottom: 0; overflow: hidden; }
+.gtrack { position: absolute; left: var(--gut); right: var(--gut); top: calc(8 * var(--u)); display: grid; gap: calc(28 * var(--u)) calc(28 * var(--u));
+  transition: transform var(--m-scroll) var(--e-scroll); }
+.cell { display: flex; flex-direction: column; gap: calc(10 * var(--u)); min-width: 0; transition: transform var(--m-move) var(--e-move), opacity var(--m-fade); opacity: .55; }
+.cell .art span { font-size: calc(22 * var(--u)); }
+.cell .art em { font-size: calc(16 * var(--u)); }
+.cell .nm { font: 400 var(--t-cap)/1.15 var(--font); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell.focus { opacity: 1; transform: translateY(calc(-8 * var(--u))); }
+.cell.focus .nm { color: var(--fg); }
+.cell.focus .art { box-shadow: inset 0 var(--line) 0 rgba(255, 255, 255, .28), 0 calc(10 * var(--u)) calc(30 * var(--u)) rgba(0, 0, 0, .55), 0 0 0 var(--line) var(--accent); }
+.instrument .cell.focus { transform: none; }
+.instrument .cell .nm { font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+
+/* game layer */
+.game { position: absolute; inset: 0; z-index: 40; background: #000; opacity: 0; pointer-events: none; }
+.game.on { opacity: 1; }
+.game .blur { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity .2s; }
+.game .shade { position: absolute; inset: 0; background: #000; opacity: 0; transition: opacity .2s; }
+.game .gframe { position: absolute; transform-origin: 0 0; transition: transform 280ms cubic-bezier(.2, 0, 0, 1); }
+.instrument .game .gframe { transition: transform 120ms steps(4, end); }
+.game canvas.live { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.game.paused .blur { opacity: 1; }
+.game.paused .shade { opacity: .45; }
+.flyer { position: absolute; z-index: 45; transform-origin: 0 0; pointer-events: none; }
+.flyer .art { width: 100%; height: 100%; aspect-ratio: auto; }
+.gmenu { position: absolute; left: 0; top: 0; bottom: 0; width: 46%; z-index: 46; display: flex; flex-direction: column; justify-content: center;
+  transform: translateX(-100%); transition: transform 240ms cubic-bezier(.2, 0, 0, 1); }
+.instrument .gmenu { transition: transform 100ms steps(4, end); }
+.gmenu.open { transform: none; }
+.gmenu .panel { position: relative; height: 100%; background: color-mix(in srgb, var(--bg) 82%, transparent); display: flex; flex-direction: column;
+  box-shadow: inset calc(-2 * var(--u)) 0 0 rgba(255, 255, 255, .08); }
+.gmenu .gtitle { padding: calc(56 * var(--u)) var(--gut) calc(8 * var(--u)); font: 600 var(--t-sec)/1.15 var(--font); color: var(--fg); }
+.gmenu .gsub { padding: 0 var(--gut); font: 400 var(--t-cap)/1 var(--mono); color: var(--dim); }
+.instrument .gmenu .gtitle { font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+.gmenu .list { top: calc(170 * var(--u)); }
+
+/* sheet (picker for long choices) */
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 74%; z-index: 35; background: var(--surface);
+  border-top: var(--line) solid rgba(255, 255, 255, .1); transform: translateY(100%); transition: transform 260ms cubic-bezier(.2, 0, 0, 1); }
+.sheet.open { transform: none; }
+.instrument .sheet { left: auto; top: var(--bar); width: 52%; height: auto; border-top: 0; border-left: var(--line) solid var(--faint);
+  transform: translateX(100%); transition: transform 100ms steps(4, end); }
+.instrument .sheet.open { transform: none; }
+.sheet .title { font-size: var(--t-sec); top: calc(28 * var(--u)); }
+.sheet .list { top: calc(92 * var(--u)); }
+.scrim { position: absolute; inset: 0; z-index: 34; background: #000; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.scrim.on { opacity: .5; }
+
+/* volume indicator and toast */
+.osd { position: absolute; right: calc(28 * var(--u)); top: 50%; z-index: 60; width: calc(12 * var(--u)); height: calc(320 * var(--u));
+  margin-top: calc(-160 * var(--u)); border-radius: 0 0 calc(6 * var(--u)) calc(6 * var(--u)); background: rgba(255, 255, 255, .12);
+  opacity: 0; transition: opacity .18s; overflow: hidden; }
+.osd i { position: absolute; left: 0; right: 0; bottom: 0; height: calc(100% * var(--f)); background: var(--fg); transition: height 120ms cubic-bezier(.2, 0, 0, 1); }
+.osd.on { opacity: 1; }
+.instrument .osd { right: auto; left: 50%; top: calc(var(--bar) + 20 * var(--u)); margin: 0; width: calc(420 * var(--u)); height: calc(54 * var(--u));
+  margin-left: calc(-210 * var(--u)); background: var(--surface); border-radius: 0; box-shadow: inset 0 0 0 var(--line) var(--faint); }
+.instrument .osd i { top: calc(14 * var(--u)); bottom: calc(14 * var(--u)); left: calc(16 * var(--u)); height: auto; width: calc((100% - 32 * var(--u)) * var(--f));
+  background: repeating-linear-gradient(90deg, var(--accent) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); transition: width 90ms steps(2, end); }
+.toast { position: absolute; left: 50%; bottom: calc(var(--hint) + 24 * var(--u)); z-index: 60; transform: translate(-50%, calc(24 * var(--u))); opacity: 0;
+  padding: calc(18 * var(--u)) calc(30 * var(--u)); background: var(--raised); color: var(--fg); border-radius: 0 0 var(--rb) var(--rb);
+  box-shadow: inset 0 var(--line) 0 rgba(255, 255, 255, .13), 0 calc(10 * var(--u)) calc(40 * var(--u)) rgba(0, 0, 0, .5);
+  font: 500 var(--t-cap)/1 var(--font); white-space: nowrap; transition: transform 220ms cubic-bezier(.2, 0, 0, 1), opacity 160ms; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+.instrument .toast { font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; box-shadow: inset 0 0 0 var(--line) var(--accent); background: var(--bg); transition: opacity 80ms; }
+.ingame .status, .ingame .hints, .ingame .lbar { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .screen { --m-move: 1ms; --m-scroll: 1ms; --m-view: 1ms; }
+  .game .gframe, .gmenu, .sheet, .toast { transition-duration: 1ms !important; }
+}
+</style>
+
+<header class="bench-head">
+  <div class="wordmark">Specular <span>· interface mockup, two directions</span></div>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Direction">
+      <button id="dir-lightbar" aria-pressed="true">Light Bar</button>
+      <button id="dir-instrument" aria-pressed="false">Instrument</button>
+    </div>
+    <div class="seg" role="group" aria-label="Screen" id="profiles"></div>
+    <div class="seg" role="group" aria-label="Size">
+      <button id="size-fit" aria-pressed="true">Fit</button>
+      <button id="size-phys" aria-pressed="false">Physical</button>
+    </div>
+    <label class="ppi" for="monitor-ppi">Monitor ppi <input id="monitor-ppi" type="number" min="60" max="600" value="110"></label>
+  </div>
+</header>
+
+<main class="bench" id="bench">
+  <div class="leds" id="leds" aria-hidden="true"></div>
+  <div class="frame" id="frame"><div class="screen lightbar" id="screen"></div></div>
+  <div class="leds-cap" id="leds-cap">top light bar (device LEDs, synced to the accent)</div>
+  <div class="pad" id="pad">
+    <button data-b="left">◀</button><button data-b="up">▲</button><button data-b="down">▼</button><button data-b="right">▶</button>
+    <button data-b="a">A</button><button data-b="b">B</button><button data-b="y">Y</button><button data-b="menu">☰</button>
+  </div>
+</main>
+
+<footer class="legend">
+  <span>key → button:</span><span><kbd>←↑↓→</kbd> d-pad</span><span><kbd>X</kbd> A</span><span><kbd>Z</kbd> B</span><span><kbd>A</kbd> Y (grid)</span>
+  <span><kbd>Q</kbd><kbd>W</kbd> L1 / R1</span><span><kbd>Esc</kbd> Menu</span><span><kbd>−</kbd><kbd>=</kbd> volume</span>
+  <span><kbd>T</kbd> direction</span><span><kbd>R</kbd> screen</span><span><kbd>P</kbd> physical size</span>
+</footer>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------------------------
+// Device profiles: the UI's base unit u = ppi / 400, so physical sizes match the Brick's.
+const PROFILES = [
+  { id: "brick", label: "Brick 1024×768", w: 1024, h: 768, ppi: 400 },
+  { id: "4x3", label: '3.5" 640×480', w: 640, h: 480, ppi: 229 },
+  { id: "16x9", label: '5.5" 1280×720', w: 1280, h: 720, ppi: 267 },
+];
+// Sample game list (placeholder). Each system's native resolution sets the rectangle the game
+// fills on screen, which is where the launch zoom ends.
+const SYSTEMS = [
+  { id: "gb", name: "Game Boy", short: "GB", res: [160, 144], tint: "#8fb24a", games: ["Kirby's Dream Land", "Link's Awakening", "Metroid II", "Super Mario Land 2", "Tetris", "Wario Land"] },
+  { id: "gbc", name: "Game Boy Color", short: "GBC", res: [160, 144], tint: "#c46bd6", games: ["Dragon Warrior Monsters", "Link's Awakening DX", "Oracle of Ages", "Oracle of Seasons", "Pokémon Crystal", "Shantae", "Wario Land 3"] },
+  { id: "gba", name: "Game Boy Advance", short: "GBA", res: [240, 160], tint: "#6a7be8", games: ["Advance Wars", "Aria of Sorrow", "F-Zero Maximum Velocity", "Fire Emblem", "Golden Sun", "Kirby & the Amazing Mirror", "Mario & Luigi", "Metroid Fusion", "Minish Cap", "Mother 3", "Pokémon Emerald", "Wario Land 4", "Zero Mission"] },
+  { id: "nes", name: "NES", short: "NES", res: [256, 240], tint: "#e05a4f", games: ["Castlevania", "Kirby's Adventure", "Mega Man 2", "Metroid", "Punch-Out!!", "Super Mario Bros. 3"] },
+  { id: "snes", name: "Super Nintendo", short: "SNES", res: [256, 224], tint: "#9c8cf0", games: ["A Link to the Past", "Chrono Trigger", "Donkey Kong Country 2", "EarthBound", "Final Fantasy VI", "Mega Man X", "Super Metroid", "Super Mario World", "Yoshi's Island"] },
+  { id: "md", name: "Mega Drive", short: "MD", res: [320, 224], tint: "#3e7bf0", games: ["Gunstar Heroes", "Ristar", "Shinobi III", "Sonic 3 & Knuckles", "Streets of Rage 2"] },
+  { id: "ps1", name: "PlayStation", short: "PS1", res: [320, 240], tint: "#a0b4c8", games: ["Castlevania: SotN", "Crash Bandicoot", "Final Fantasy IX", "Spyro the Dragon", "Vagrant Story"] },
+  { id: "pce", name: "PC Engine", short: "PCE", res: [256, 224], tint: "#f08a3c", games: ["Bonk's Adventure", "Dracula X", "Lords of Thunder"] },
+];
+SYSTEMS.forEach((s, si) => s.games = s.games.map((t, i) => ({
+  title: t, sys: s, hue: (si * 47 + i * 29) % 360,
+  played: ((si * 7 + i * 13) % 9) * 37 + 12, // minutes, for the side panel
+  saves: (si + i) % 4,
+})));
+const ACCENTS = { lightbar: [["Lagoon", "#2ec4b6"], ["Moss", "#7fb069"], ["Rose", "#e3a08a"], ["Sky", "#5aa9ff"]],
+                  instrument: [["Signal", "#ff5a1f"], ["Amber", "#ffb21f"], ["Cyan", "#3ad6e0"], ["White", "#ededed"]] };
+const LANGS = ["Deutsch", "English", "Español", "Français", "Italiano", "日本語", "한국어", "Nederlands", "Polski", "Português", "Русский", "中文"];
+
+const S = {
+  dir: "lightbar", prof: 0, phys: false,
+  stack: [], sheet: null, game: null, paused: false,
+  last: SYSTEMS[1].games[1],
+  set: { brightness: 7, scaling: 0, smoothing: 0, volume: 12, clicks: true, accent: 0, tint: true, leds: 3,
+         lang: 1, sleep: 2, dev: false, slot: 0 },
+};
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtTime = (m) => m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
+const screen = $("#screen");
+
+// ---------------------------------------------------------------------------------------------
+// Screen chrome
+screen.innerHTML = `
+  <div class="lbar" id="lbar"></div>
+  <div class="status" id="status">
+    <div class="crumb" id="crumb"></div>
+    <div class="right">
+      <span class="wifi-txt">WIFI</span>
+      <svg class="wifi" viewBox="0 0 30 22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M3 8a17 17 0 0 1 24 0"/><path d="M8 13a10 10 0 0 1 14 0"/><circle cx="15" cy="18" r="1.6" fill="currentColor" stroke="none"/></svg>
+      <span class="batt" style="--lvl:.78"><i></i>78%</span>
+      <span class="clock" id="clock">21:47</span>
+    </div>
+  </div>
+  <div class="stage" id="stage"></div>
+  <div class="hints" id="hints"></div>
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet" id="sheet"></div>
+  <div class="game" id="game"><canvas class="blur" id="blur"></canvas><div class="gframe" id="gframe"><canvas class="live" id="live"></canvas></div><div class="shade"></div></div>
+  <div class="gmenu" id="gmenu"><div class="panel"></div></div>
+  <div class="osd" id="osd"><i></i></div>
+  <div class="toast" id="toast"></div>
+  <div class="dim-overlay" id="dimmer"></div>`;
+
+function hints(list) {
+  $("#hints").innerHTML = list.map(([b, t]) => `<span class="hint"><span class="btn">${b}</span>${esc(t)}</span>`).join("");
+}
+function crumb(t) { $("#crumb").textContent = t; }
+function tint(color) { screen.style.setProperty("--tint", color || "var(--accent)"); paintLeds(); }
+
+// ---------------------------------------------------------------------------------------------
+// Rows: one model, one renderer; the two directions differ only in CSS.
+// kinds: hdr, text, action, toggle, choice, number
+function rowEl(r, i) {
+  const e = h("div", "row" + (r.kind === "hdr" ? " hdr" : "") + (r.disabled ? " disabled" : ""));
+  if (r.kind === "hdr") { e.textContent = r.label; if (r.n != null) e.dataset.n = String(r.n).padStart(2, "0"); return e; }
+  e.append(h("span", "idx", String(i).padStart(3, "0")), h("span", "lbl", esc(r.label)));
+  if (r.detail != null) e.append(h("span", "det", esc(r.detail)));
+  const v = h("span", "val");
+  e.append(v);
+  r.paint = () => {
+    if (r.kind === "toggle") v.innerHTML = `<span class="tog${r.get() ? " on" : ""}"></span>`;
+    else if (r.kind === "choice") v.innerHTML = `<span class="arw">‹</span><span>${esc(r.options[r.get()])}</span><span class="arw">›</span>`;
+    else if (r.kind === "number") {
+      const x = r.get(), f = (x - r.min) / (r.max - r.min);
+      if (!v.firstChild) v.innerHTML = `<span class="gauge"><i></i></span><span class="num"></span>`;
+      $(".gauge", v).style.setProperty("--f", f); $(".num", v).textContent = x;
+    }
+    else if (r.kind === "action") v.innerHTML = r.value ? `<span>${esc(r.value())}</span><span class="chev">›</span>` : `<span class="chev">›</span>`;
+    else if (r.kind === "text" && r.value) v.innerHTML = `<span>${esc(r.value())}</span>`;
+  };
+  r.paint();
+  return e;
+}
+
+// A focusable vertical list with a moving focus plate. The selection settles about 40% from the
+// top; the track scrolls under it and clamps at both ends.
+function makeList(rows, { onFocus } = {}) {
+  const el = h("div", "list"), track = h("div", "track"), plate = h("div", "plate");
+  track.append(plate);
+  let y = 0, n = 0;
+  const els = rows.map((r) => { const e = rowEl(r, r.kind === "hdr" ? 0 : ++n); e.style.top = y + "px"; r.y = y; track.append(e); return e; });
+  const L = { el, rows, els, focus: -1 };
+  // positions are in u, measured once the screen is sized
+  function layout() {
+    const u = parseFloat(getComputedStyle(screen).getPropertyValue("--u")) || 1;
+    let yy = 0;
+    rows.forEach((r, i) => { const hh = (r.kind === "hdr" ? 76 : 92) * u; els[i].style.position = "absolute"; els[i].style.left = 0; els[i].style.right = 0; els[i].style.top = yy + "px"; r.y = yy; r.h = hh; yy += hh; });
+    L.total = yy;
+    if (L.focus >= 0) place(false);
+  }
+  function place(animate) {
+    const r = rows[L.focus];
+    if (!animate) { plate.style.transition = "none"; track.style.transition = "none"; }
+    plate.style.transform = `translateY(${r.y}px)`;
+    plate.style.height = r.h + "px";
+    const view = el.clientHeight || 400;
+    let off = r.y - view * 0.4 + r.h / 2;
+    off = Math.max(0, Math.min(off, L.total - view));
+    if (L.total <= view) off = 0;
+    track.style.transform = `translateY(${-off}px)`;
+    els.forEach((e, i) => e.classList.toggle("focus", i === L.focus));
+    if (!animate) requestAnimationFrame(() => { plate.style.transition = ""; track.style.transition = ""; });
+  }
+  L.layout = layout;
+  L.set = (i, animate = true) => { L.focus = i; place(animate); onFocus && onFocus(rows[i], i); };
+  const ok = (i) => rows[i] && rows[i].kind !== "hdr";
+  L.move = (d, repeat) => {
+    let i = L.focus + d;
+    while (i >= 0 && i < rows.length && !ok(i)) i += d;
+    if (i < 0 || i >= rows.length) {
+      if (repeat) return;                      // a held direction never wraps
+      i = d > 0 ? 0 : rows.length - 1;
+      while (!ok(i)) i -= d;
+    }
+    if (i !== L.focus) { L.set(i); click(); }
+  };
+  L.page = (d) => { // L1/R1: jump about a screenful
+    const target = rows[L.focus].y + d * el.clientHeight * 0.8;
+    let best = -1;
+    rows.forEach((r, i) => { if (ok(i) && (d > 0 ? r.y <= target : r.y >= target) && (best < 0 || (d > 0 ? i > best : i < best))) best = i; });
+    if (best >= 0 && best !== L.focus) { L.set(best); click(); }
+  };
+  L.first = () => rows.findIndex((r, i) => ok(i));
+  el.append(track);
+  return L;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Views
+function viewHome() {
+  const v = h("div", "view"), left = h("div", "pane-list"), side = h("div", "pane-side");
+  left.append(h("div", "title", "Library"));
+  const rows = [
+    { kind: "action", label: "Continue", detail: S.last.sys.short, open: () => launch(S.last, null) },
+    { kind: "hdr", label: "Systems", n: SYSTEMS.length },
+    ...SYSTEMS.map((s) => ({ kind: "text", label: s.name, detail: String(s.games.length), sys: s, open: () => push(viewGames(s)) })),
+    { kind: "hdr", label: "Device" },
+    { kind: "action", label: "Settings", open: () => push(viewSettings()) },
+  ];
+  const swap = h("div", "side-swap");
+  side.append(swap);
+  const list = makeList(rows, { onFocus: (r) => {
+    tint(r.sys && S.set.tint ? r.sys.tint : null);
+    if (r.label === "Continue") swap.innerHTML = `${artHtml(S.last)}<div class="cap"><b>${esc(S.last.title)}</b><br>${esc(S.last.sys.name)} · resume where you left off</div>`;
+    else if (r.sys) swap.innerHTML = `<div class="big">${r.sys.games.length}</div><div class="cap">games<br>Last played <b>${esc(r.sys.games[0].title)}</b></div>`;
+    else swap.innerHTML = `<div class="cap"><b>Display, sound, network</b><br>and everything about this device</div>`;
+  } });
+  left.append(list.el);
+  v.append(left, side);
+  v.list = list;
+  v.enter = () => { crumb(""); hints([["A", "Open"]]); };
+  v.press = (b, rep) => listKeys(list, b, rep) || (b === "a" && rows[list.focus].open());
+  return v;
+}
+
+function artHtml(g, cls = "") {
+  return `<div class="art ${cls}" style="--h:${g.hue}"><em>${esc(g.sys.short)}</em><span>${esc(g.title)}</span></div>`;
+}
+
+function viewGames(sys) {
+  const v = h("div", "view"), left = h("div", "pane-list"), side = h("div", "pane-side");
+  let gridMode = false, gi = 0;
+  left.append(h("div", "title", esc(sys.name)));
+  const rows = sys.games.map((g) => ({ kind: "text", label: g.title, game: g }));
+  const swap = h("div", "side-swap");
+  side.append(swap);
+  let pending;
+  const list = makeList(rows, { onFocus: (r) => {
+    gi = rows.indexOf(r);
+    clearTimeout(pending);
+    // While a direction is held, the side panel updates only once the focus stops (in the real
+    // UI this avoids decoding box art for every row passed).
+    pending = setTimeout(() => {
+      const g = r.game;
+      swap.innerHTML = `${artHtml(g, "side-art")}<dl class="meta"><dt>Played</dt><dd>${fmtTime(g.played)}</dd><dt>Saves</dt><dd>${g.saves || "–"}</dd></dl>`;
+    }, rep.active ? 120 : 0);
+  } });
+  left.append(list.el);
+  // grid
+  const grid = h("div", "grid"), gtrack = h("div", "gtrack");
+  grid.append(gtrack); grid.hidden = true;
+  sys.games.forEach((g) => { const c = h("div", "cell", `${artHtml(g)}<div class="nm">${esc(g.title)}</div>`); gtrack.append(c); });
+  left.append(grid);
+  v.append(left, side);
+  let cols = 4;
+  function gridPlace(animate = true) {
+    const u = parseFloat(getComputedStyle(screen).getPropertyValue("--u"));
+    const W = screen.clientWidth - 2 * 48 * u;
+    cols = Math.max(3, Math.floor((W + 28 * u) / (210 * u + 28 * u)));
+    gtrack.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    [...gtrack.children].forEach((c, i) => c.classList.toggle("focus", i === gi));
+    const cell = gtrack.children[gi], view = grid.clientHeight;
+    const top = cell.offsetTop, ch = cell.offsetHeight;
+    let off = Math.max(0, Math.min(top - view * 0.35 + ch / 2, gtrack.offsetHeight - view + 16 * u));
+    if (gtrack.offsetHeight <= view) off = 0;
+    if (!animate) gtrack.style.transition = "none";
+    gtrack.style.transform = `translateY(${-off}px)`;
+    if (!animate) requestAnimationFrame(() => gtrack.style.transition = "");
+  }
+  function setMode(g) {
+    gridMode = g;
+    list.el.hidden = g; grid.hidden = !g; side.hidden = g;
+    v.classList.toggle("wide", g);
+    if (g) gridPlace(false); else list.set(gi, false);
+    v.enter();
+  }
+  v.list = list;
+  v.relayout = () => { if (gridMode) gridPlace(false); };
+  v.enter = () => { crumb("Library"); tint(S.set.tint ? sys.tint : null); hints([["Y", gridMode ? "List" : "Grid"], ["B", "Back"], ["A", "Play"]]); };
+  v.art = () => gridMode ? $(".art", gtrack.children[gi]) : $(".side-art", side);
+  v.press = (b, repeat) => {
+    if (b === "y") { setMode(!gridMode); click(); return true; }
+    if (gridMode) {
+      const n = sys.games.length, d = { left: -1, right: 1, up: -cols, down: cols }[b];
+      if (d) {
+        let i = gi + d;
+        if (i < 0 || i >= n) { if (repeat || Math.abs(d) > 1) i = Math.max(0, Math.min(n - 1, i)); else i = (i + n) % n; }
+        if (i !== gi) { gi = i; gridPlace(); click(); }
+        return true;
+      }
+      if (b === "a") { launch(sys.games[gi], v.art()); return true; }
+      if (b === "b") { pop(); return true; }
+      return false;
+    }
+    if (listKeys(list, b, repeat)) return true;
+    if (b === "a") { launch(rows[list.focus].game, v.art()); return true; }
+    if (b === "b") { pop(); return true; }
+  };
+  return v;
+}
+
+function settingsRows() {
+  const st = S.set, acc = () => ACCENTS[S.dir];
+  const num = (label, key, min, max, after) => ({ kind: "number", label, min, max, get: () => st[key], set: (x) => { st[key] = x; after && after(); } });
+  const choice = (label, key, options, after) => ({ kind: "choice", label, options, get: () => st[key], set: (x) => { st[key] = x; after && after(); } });
+  const toggle = (label, key, after) => ({ kind: "toggle", label, get: () => st[key], set: (x) => { st[key] = x; after && after(); } });
+  const rows = [
+    { kind: "hdr", label: "Display", n: 1 },
+    num("Brightness", "brightness", 1, 10, applyBrightness),
+    choice("Scaling", "scaling", ["Integer", "Fit", "Stretch"]),
+    choice("Pixels", "smoothing", ["Sharp", "Smooth"]),
+    { kind: "hdr", label: "Sound", n: 2 },
+    num("Volume", "volume", 0, 20, () => osd()),
+    toggle("Button sounds", "clicks"),
+    { kind: "hdr", label: "Look", n: 3 },
+    { kind: "choice", label: "Accent", get: () => st.accent, set: (x) => { st.accent = x; applyAccent(); }, get options() { return acc().map((a) => a[0]); } },
+    toggle("Tint by system", "tint"),
+    num("Light bar", "leds", 0, 5, paintLeds),
+    { kind: "hdr", label: "System", n: 4 },
+    { kind: "action", label: "Language", value: () => LANGS[st.lang], open: () => openSheet("Language", LANGS, st.lang, (i) => { st.lang = i; }) },
+    choice("Sleep after", "sleep", ["Never", "1 min", "3 min", "5 min", "10 min"]),
+    { kind: "action", label: "Wi-Fi", value: () => "Home 2.4", open: () => toast("Connected to Home 2.4 · 192.168.1.41") },
+    toggle("Developer details", "dev", () => rebuildSettings()),
+  ];
+  if (st.dev) rows.push(
+    { kind: "hdr", label: "Developer", n: 5 },
+    { kind: "text", label: "Frame time", value: () => "2.1 ms · 60.2 Hz" },
+    { kind: "text", label: "GPU", value: () => "GLES 3.2 · 702 MHz" },
+    { kind: "text", label: "Memory", value: () => "31 MB" },
+    { kind: "text", label: "Config", value: () => "configs/specular.json" },
+  );
+  rows.push(
+    { kind: "hdr", label: "About", n: st.dev ? 6 : 5 },
+    { kind: "text", label: "Storage", value: () => "41 GB free" },
+    { kind: "text", label: "Battery", value: () => "Good · 78%" },
+  );
+  return rows;
+}
+function viewSettings() {
+  const v = h("div", "view wide"), left = h("div", "pane-list");
+  left.append(h("div", "title", "Settings"));
+  const rows = settingsRows();
+  const list = makeList(rows, { onFocus: (r) => v.enter && v.enter() });
+  left.append(list.el);
+  v.append(left);
+  v.list = list;
+  v.enter = () => {
+    crumb("Library"); tint(null);
+    const r = rows[list.focus];
+    hints(r && (r.kind === "choice" || r.kind === "number") ? [["◀▶", "Change"], ["B", "Back"]] : r && r.kind === "toggle" ? [["A", "Switch"], ["B", "Back"]] : [["B", "Back"], ["A", "Open"]]);
+  };
+  v.press = (b, rep) => {
+    const r = rows[list.focus];
+    if (listKeys(list, b, rep)) return true;
+    if (b === "b") { pop(); return true; }
+    return rowKeys(r, b, rep);
+  };
+  return v;
+}
+function rowKeys(r, b, rep) {
+  if (!r) return false;
+  if (r.kind === "toggle" && (b === "a" || b === "left" || b === "right")) { if (rep) return true; r.set(!r.get()); r.paint(); click(); return true; }
+  if (r.kind === "choice" && (b === "left" || b === "right" || b === "a")) {
+    const n = r.options.length, d = b === "left" ? -1 : 1; let x = r.get() + d;
+    if (b !== "a" && (x < 0 || x >= n)) { if (rep) return true; }
+    r.set((x + n) % n); r.paint(); click(); return true;
+  }
+  if (r.kind === "number" && (b === "left" || b === "right")) {
+    const x = Math.max(r.min, Math.min(r.max, r.get() + (b === "left" ? -1 : 1)));
+    if (x !== r.get()) { r.set(x); r.paint(); click(); }
+    return true;
+  }
+  if (r.kind === "action" && b === "a") { r.open(); return true; }
+  return false;
+}
+function rebuildSettings() {
+  const top = S.stack[S.stack.length - 1], keep = top.list.rows[top.list.focus].label;
+  const v = viewSettings();
+  replaceTop(v);
+  const i = v.list.rows.findIndex((r) => r.label === keep);
+  v.list.set(i >= 0 ? i : v.list.first(), false);
+}
+function listKeys(list, b, rep) {
+  if (b === "up") { list.move(-1, rep); return true; }
+  if (b === "down") { list.move(1, rep); return true; }
+  if (b === "l1") { list.page(-1); return true; }
+  if (b === "r1") { list.page(1); return true; }
+  return false;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Navigation stack and transitions
+const stage = () => $("#stage");
+function mount(v) { stage().append(v); v.list && v.list.layout(); if (v.list && v.list.focus < 0) v.list.set(v.list.first(), false); v.relayout && v.relayout(); v.enter(); }
+function slide(oldV, newV, back) {
+  newV.classList.add(back ? "from-left" : "from-right");
+  mount(newV);
+  newV.getBoundingClientRect();
+  newV.classList.remove("from-left", "from-right");
+  if (oldV) { oldV.classList.add(back ? "to-right" : "to-left"); setTimeout(() => oldV.remove(), 400); }
+}
+function push(v) { const old = S.stack[S.stack.length - 1]; S.stack.push(v); slide(old, v, false); click(); }
+function pop() { if (S.stack.length < 2) return; const old = S.stack.pop(), v = S.stack[S.stack.length - 1]; v.style.transition = "none"; v.classList.remove("to-left"); v.classList.add("from-left"); v.getBoundingClientRect(); v.style.transition = ""; v.classList.remove("from-left"); v.enter(); old.classList.add("to-right"); setTimeout(() => old.remove(), 400); click(); }
+function replaceTop(v) { const old = S.stack.pop(); old.remove(); S.stack.push(v); mount(v); }
+function home() { while (S.stack.length > 1) { const o = S.stack.pop(); o.remove(); } const v = S.stack[0]; v.classList.remove("to-left", "from-left"); v.enter(); }
+
+// ---------------------------------------------------------------------------------------------
+// Sheet: a picker for long lists (Language)
+function openSheet(title, options, sel, done) {
+  const sh = $("#sheet");
+  sh.innerHTML = "";
+  sh.append(h("div", "title", esc(title)));
+  const rows = options.map((o, i) => ({ kind: "text", label: o, value: i === sel ? () => "✓" : null }));
+  const list = makeList(rows);
+  sh.append(list.el);
+  sh.classList.add("open"); $("#scrim").classList.add("on");
+  requestAnimationFrame(() => { list.layout(); list.set(sel, false); });
+  S.sheet = { list, close: (pick) => {
+    sh.classList.remove("open"); $("#scrim").classList.remove("on"); S.sheet = null;
+    if (pick != null) { done(pick); const top = S.stack[S.stack.length - 1]; top.list.rows.forEach((r) => r.paint && r.paint()); toast(`Language: ${options[pick]}`); }
+  } };
+  hints([["B", "Cancel"], ["A", "Choose"]]); click();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Game: box art zooms into the game's on-screen rectangle, then crossfades to the live frame.
+const live = $("#live"), blur = $("#blur"), gframe = $("#gframe"), gameEl = $("#game");
+let raf = 0, t0 = 0;
+function gameRect(sys) {
+  const W = screen.clientWidth, H = screen.clientHeight, [w, hh] = sys.res;
+  if (S.set.scaling === 2) return { x: 0, y: 0, w: W, h: H };
+  let k = Math.min(W / w, H / hh);
+  if (S.set.scaling === 0) k = Math.max(1, Math.floor(k));
+  return { x: (W - w * k) / 2, y: (H - hh * k) / 2, w: w * k, h: hh * k };
+}
+function screenRect(el) {
+  const a = el.getBoundingClientRect(), b = screen.getBoundingClientRect(), k = b.width / screen.clientWidth;
+  return { x: (a.left - b.left) / k, y: (a.top - b.top) / k, w: a.width / k, h: a.height / k };
+}
+function launch(g, artEl) {
+  S.game = g; S.last = g; S.paused = false;
+  const sys = g.sys, R = gameRect(sys);
+  live.width = sys.res[0]; live.height = sys.res[1];
+  live.style.imageRendering = S.set.smoothing ? "auto" : "pixelated";
+  Object.assign(gframe.style, { left: R.x + "px", top: R.y + "px", width: R.w + "px", height: R.h + "px", transform: "none" });
+  const from = artEl ? screenRect(artEl) : { x: R.x + R.w * 0.3, y: R.y + R.h * 0.3, w: R.w * 0.4, h: R.h * 0.4 };
+  const fly = h("div", "flyer", artHtml(g));
+  Object.assign(fly.style, { left: R.x + "px", top: R.y + "px", width: R.w + "px", height: R.h + "px" });
+  const sx = from.w / R.w, sy = from.h / R.h;
+  fly.style.transform = `translate(${from.x - R.x}px, ${from.y - R.y}px) scale(${sx}, ${sy})`;
+  screen.append(fly);
+  const inst = S.dir === "instrument";
+  const dur = inst ? 200 : 420, ease = inst ? "steps(5, end)" : "cubic-bezier(.05, .7, .1, 1)";
+  screen.classList.add("ingame");
+  fly.getBoundingClientRect();
+  fly.style.transition = `transform ${dur}ms ${ease}, opacity 160ms ease-out ${dur}ms`;
+  fly.style.transform = "none";
+  startCore();
+  setTimeout(() => { gameEl.classList.add("on"); gameEl.style.transition = "opacity 160ms ease-out"; fly.style.opacity = 0; }, dur);
+  setTimeout(() => fly.remove(), dur + 200);
+  hints([]); click();
+}
+function quitGame() {
+  closeMenu(true);
+  const g = S.game, top = S.stack[S.stack.length - 1];
+  const artEl = top.art ? top.art() : null, R = gameRect(g.sys);
+  const to = artEl ? screenRect(artEl) : { x: R.x + R.w * .3, y: R.y + R.h * .3, w: R.w * .4, h: R.h * .4 };
+  stopCore();
+  const fly = h("div", "flyer", artHtml(g));
+  Object.assign(fly.style, { left: R.x + "px", top: R.y + "px", width: R.w + "px", height: R.h + "px" });
+  screen.append(fly);
+  gameEl.classList.remove("on", "paused");
+  screen.classList.remove("ingame");
+  const inst = S.dir === "instrument", dur = inst ? 160 : 340;
+  fly.getBoundingClientRect();
+  fly.style.transition = `transform ${dur}ms ${inst ? "steps(4, end)" : "cubic-bezier(.3, 0, .1, 1)"}`;
+  fly.style.transform = `translate(${to.x - R.x}px, ${to.y - R.y}px) scale(${to.w / R.w}, ${to.h / R.h})`;
+  setTimeout(() => fly.remove(), dur + 30);
+  S.game = null;
+  top.enter();
+}
+// A stand-in for the emulator: draws a moving test scene at the system's native resolution. It
+// only runs while a game is playing, so the page is idle otherwise.
+function startCore() { cancelAnimationFrame(raf); t0 = performance.now(); const loop = (t) => { drawFrame((t - t0) / 1000); raf = requestAnimationFrame(loop); }; raf = requestAnimationFrame(loop); }
+function stopCore() { cancelAnimationFrame(raf); raf = 0; }
+function drawFrame(t) {
+  const c = live.getContext("2d"), W = live.width, H = live.height, hue = S.game.hue;
+  c.imageSmoothingEnabled = false;
+  c.fillStyle = `hsl(${hue} 55% 28%)`; c.fillRect(0, 0, W, H);
+  for (let i = 0; i < 8; i++) { c.fillStyle = `hsl(${hue} 55% ${70 - i * 6}%)`; c.fillRect(0, (H * 0.6 / 8) * i, W, H * 0.6 / 8 + 1); }
+  const hill = (amp, base, speed, l) => { c.fillStyle = `hsl(${(hue + 120) % 360} 35% ${l}%)`; c.beginPath(); c.moveTo(0, H);
+    for (let x = 0; x <= W; x += 4) c.lineTo(x, H * base - amp * Math.sin((x + t * speed) / 23) - amp * 0.5 * Math.sin((x + t * speed) / 9));
+    c.lineTo(W, H); c.fill(); };
+  hill(H * 0.06, 0.62, 12, 42); hill(H * 0.05, 0.74, 30, 30);
+  c.fillStyle = `hsl(${(hue + 120) % 360} 30% 18%)`; c.fillRect(0, H * 0.84, W, H * 0.16);
+  c.fillStyle = `hsl(${(hue + 120) % 360} 30% 24%)`;
+  for (let x = -16 + ((-t * 60) % 16); x < W; x += 16) c.fillRect(x, H * 0.84, 8, 4);
+  const s = Math.max(8, Math.round(H / 14)), bx = W * 0.3 + Math.sin(t * 1.3) * W * 0.12, by = H * 0.84 - s - Math.abs(Math.sin(t * 4)) * H * 0.22;
+  c.fillStyle = "#fff4d6"; c.fillRect(Math.round(bx), Math.round(by), s, s);
+  c.fillStyle = "#1a1a1a"; c.fillRect(Math.round(bx + s * 0.6), Math.round(by + s * 0.25), Math.max(1, s / 6), Math.max(1, s / 6));
+  c.fillStyle = "rgba(255,255,255,.85)"; c.font = `${Math.max(7, Math.round(H / 18))}px monospace`; c.fillText("TEST CORE", 6, Math.round(H / 12));
+}
+// In-game menu over the paused frame. The backdrop is one blurred copy of the frame, made once by
+// shrinking it 10x and stretching it back: a cheap blur the real UI can do once on the GPU.
+function openMenu() {
+  S.paused = true; stopCore();
+  blur.width = Math.max(8, live.width / 10 | 0); blur.height = Math.max(6, live.height / 10 | 0);
+  const bc = blur.getContext("2d"); bc.imageSmoothingEnabled = true; bc.drawImage(live, 0, 0, blur.width, blur.height);
+  gameEl.classList.add("paused");
+  const R = gameRect(S.game.sys), W = screen.clientWidth, H = screen.clientHeight;
+  const k = Math.min((W * 0.5) / R.w, (H * 0.78) / R.h);
+  gframe.style.transform = `translate(${W * 0.73 - R.w * k / 2 - R.x}px, ${H / 2 - R.h * k / 2 - R.y}px) scale(${k})`;
+  const panel = $("#gmenu .panel"); panel.innerHTML = "";
+  const slot = () => S.set.slot + 1;
+  panel.append(h("div", "gtitle", esc(S.game.title)), h("div", "gsub", `${esc(S.game.sys.name)} · ${fmtTime(S.game.played)}`));
+  const rows = [
+    { kind: "action", label: "Resume", open: () => closeMenu() },
+    { kind: "action", label: "Save state", open: () => { toast(`Saved to slot ${slot()}`); } },
+    { kind: "action", label: "Load state", open: () => { toast(`Loaded slot ${slot()}`); closeMenu(); } },
+    { kind: "choice", label: "Slot", options: ["1", "2", "3", "4"], get: () => S.set.slot, set: (x) => S.set.slot = x },
+    { kind: "action", label: "Game settings", open: () => toast("Per-game settings: next mockup") },
+    { kind: "action", label: "Quit game", open: () => quitGame() },
+  ];
+  const list = makeList(rows);
+  panel.append(list.el);
+  $("#gmenu").classList.add("open");
+  requestAnimationFrame(() => { list.layout(); list.set(0, false); });
+  S.menu = list;
+  screen.classList.remove("ingame");
+  $("#status").style.opacity = 1; crumb(""); tint(S.set.tint ? S.game.sys.tint : null);
+  hints([["B", "Resume"], ["A", "Select"]]); click();
+}
+function closeMenu(quitting) {
+  $("#gmenu").classList.remove("open");
+  gameEl.classList.remove("paused");
+  gframe.style.transform = "none";
+  S.menu = null; S.paused = false;
+  $("#status").style.opacity = "";
+  if (!quitting) { screen.classList.add("ingame"); hints([]); startCore(); click(); }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feedback: volume indicator, toast, click, LEDs, brightness
+let osdT, toastT, actx;
+function osd() { const o = $("#osd"); o.style.setProperty("--f", S.set.volume / 20); o.querySelector("i").style.setProperty("--f", S.set.volume / 20); o.classList.add("on"); clearTimeout(osdT); osdT = setTimeout(() => o.classList.remove("on"), 1200); }
+function toast(t) { const e = $("#toast"); e.textContent = t; e.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => e.classList.remove("on"), 1600); }
+function click() {
+  if (!S.set.clicks || !userActed) return;
+  try {
+    actx = actx || new AudioContext();
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.type = S.dir === "instrument" ? "square" : "sine"; o.frequency.value = S.dir === "instrument" ? 1800 : 1250;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.03, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.025);
+    o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.03);
+  } catch (e) { /* audio is optional */ }
+}
+const ledsEl = $("#leds");
+for (let i = 0; i < 8; i++) ledsEl.append(document.createElement("i"));
+function paintLeds() {
+  const c = getComputedStyle(screen).getPropertyValue("--tint").trim() || "#2ec4b6";
+  const col = c.startsWith("var") ? getComputedStyle(screen).getPropertyValue("--accent").trim() : c;
+  const a = S.set.leds / 5;
+  [...ledsEl.children].forEach((e) => { e.style.background = a ? `color-mix(in srgb, ${col} ${20 + a * 80}%, #15171a)` : "#15171a"; e.style.boxShadow = a ? `0 0 ${4 + a * 10}px color-mix(in srgb, ${col} ${a * 60}%, transparent)` : "none"; });
+}
+function applyAccent() { const a = ACCENTS[S.dir][S.set.accent] || ACCENTS[S.dir][0]; screen.style.setProperty("--accent", a[1]); paintLeds(); }
+function applyBrightness() { $("#dimmer").style.opacity = (10 - S.set.brightness) * 0.06; }
+
+// ---------------------------------------------------------------------------------------------
+// Input: one entry point; held directions repeat after 350 ms at ~14/s, ~30/s after 1.5 s of
+// repeating. Keyboard keys map to device buttons (KEYS).
+const KEYS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", x: "a", z: "b", s: "x", a: "y",
+               q: "l1", w: "r1", "1": "l2", "2": "r2", Enter: "start", Escape: "menu", "-": "voldn", "=": "volup" };
+const REPEATS = new Set(["up", "down", "left", "right", "l1", "r1", "voldn", "volup"]);
+const rep = { active: false, b: null, timer: 0, t0: 0 };
+let userActed = false;
+function press(b, repeat = false) {
+  if (b === "volup" || b === "voldn") { S.set.volume = Math.max(0, Math.min(20, S.set.volume + (b === "volup" ? 1 : -1))); osd();
+    const top = S.stack[S.stack.length - 1]; top.list && top.list.rows.forEach((r) => r.label === "Volume" && r.paint()); return; }
+  if (S.sheet) {
+    const L = S.sheet.list;
+    if (listKeys(L, b, repeat)) return;
+    if (b === "b") { S.sheet.close(null); S.stack[S.stack.length - 1].enter(); click(); }
+    if (b === "a") { const i = L.focus; S.sheet.close(i); S.stack[S.stack.length - 1].enter(); click(); }
+    return;
+  }
+  if (S.menu) {
+    if (listKeys(S.menu, b, repeat)) return;
+    const r = S.menu.rows[S.menu.focus];
+    if (b === "b" || b === "menu") { closeMenu(); return; }
+    rowKeys(r, b, repeat); return;
+  }
+  if (S.game) { if (b === "menu") openMenu(); return; }
+  if (b === "menu") { home(); click(); return; }
+  S.stack[S.stack.length - 1].press(b, repeat);
+}
+function down(b) {
+  userActed = true;
+  press(b, false);
+  if (!REPEATS.has(b)) return;
+  clearTimeout(rep.timer);
+  Object.assign(rep, { b, t0: performance.now(), active: false });
+  const tick = () => { rep.active = true; press(b, true); rep.timer = setTimeout(tick, performance.now() - rep.t0 > 1850 ? 33 : 70); };
+  rep.timer = setTimeout(tick, 350);
+}
+function up(b) { if (rep.b === b) { clearTimeout(rep.timer); rep.b = null; rep.active = false; } }
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k === "t") { setDir(S.dir === "lightbar" ? "instrument" : "lightbar"); return; }
+  if (k === "r") { setProfile((S.prof + 1) % PROFILES.length); return; }
+  if (k === "p") { setPhys(!S.phys); return; }
+  const b = e.code === "ShiftRight" ? "select" : KEYS[k];
+  if (!b) return;
+  e.preventDefault();
+  if (!e.repeat) down(b);
+});
+addEventListener("keyup", (e) => { const k = e.key.length === 1 ? e.key.toLowerCase() : e.key; const b = KEYS[k]; if (b) up(b); });
+$("#pad").addEventListener("pointerdown", (e) => { const b = e.target.dataset.b; if (b) { e.preventDefault(); down(b); } });
+$("#pad").addEventListener("pointerup", (e) => { const b = e.target.dataset.b; if (b) up(b); });
+$("#pad").addEventListener("pointerleave", () => rep.b && up(rep.b));
+
+// ---------------------------------------------------------------------------------------------
+// Bench controls: direction, device profile, fit vs physical size
+function setDir(d) {
+  S.dir = d;
+  screen.classList.toggle("lightbar", d === "lightbar"); screen.classList.toggle("instrument", d === "instrument");
+  $("#dir-lightbar").setAttribute("aria-pressed", d === "lightbar"); $("#dir-instrument").setAttribute("aria-pressed", d === "instrument");
+  S.set.accent = 0; applyAccent();
+  $("#leds-cap").textContent = "top light bar (device LEDs, synced to the accent)";
+  relayoutAll();
+  try { localStorage.setItem("specular-dir", d); } catch (e) {}
+}
+function setProfile(i) {
+  S.prof = i; const p = PROFILES[i];
+  [...$("#profiles").children].forEach((b, j) => b.setAttribute("aria-pressed", j === i));
+  screen.style.width = p.w + "px"; screen.style.height = p.h + "px";
+  screen.style.setProperty("--u", (p.ppi / 400) + "px");
+  fit(); relayoutAll();
+}
+function setPhys(on) { S.phys = on; $("#size-fit").setAttribute("aria-pressed", !on); $("#size-phys").setAttribute("aria-pressed", on); fit(); }
+function fit() {
+  const p = PROFILES[S.prof], bench = $("#bench"), frame = $("#frame");
+  let k;
+  if (S.phys) { const ppi = Math.max(60, +$("#monitor-ppi").value || 110); k = (ppi / devicePixelRatio) / p.ppi; }
+  else { const availW = bench.clientWidth, availH = Math.max(200, bench.clientHeight - 60); k = Math.min(availW / p.w, availH / p.h, 1.25); }
+  screen.style.transform = `scale(${k})`;
+  frame.style.width = p.w * k + "px"; frame.style.height = p.h * k + "px";
+  ledsEl.style.width = p.w * k * 0.6 + "px"; ledsEl.style.justifyContent = "space-between";
+}
+function relayoutAll() {
+  requestAnimationFrame(() => {
+    S.stack.forEach((v) => { v.list && v.list.layout(); v.relayout && v.relayout(); });
+    if (S.sheet) S.sheet.list.layout();
+    if (S.menu) S.menu.layout();
+    if (S.game) { const R = gameRect(S.game.sys); Object.assign(gframe.style, { left: R.x + "px", top: R.y + "px", width: R.w + "px", height: R.h + "px" }); if (S.paused) { closeMenu(true); openMenu(); } }
+    paintLeds();
+  });
+}
+PROFILES.forEach((p, i) => { const b = h("button", null, esc(p.label)); b.id = "prof-" + p.id; b.setAttribute("aria-pressed", i === 0); b.onclick = () => setProfile(i); $("#profiles").append(b); });
+$("#dir-lightbar").onclick = () => setDir("lightbar");
+$("#dir-instrument").onclick = () => setDir("instrument");
+$("#size-fit").onclick = () => setPhys(false);
+$("#size-phys").onclick = () => setPhys(true);
+$("#monitor-ppi").addEventListener("input", () => S.phys && fit());
+addEventListener("resize", fit);
+
+function tickClock() { const d = new Date(); $("#clock").textContent = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; }
+tickClock(); setInterval(tickClock, 15000);
+
+// boot
+setProfile(0);
+let saved = "lightbar"; try { saved = localStorage.getItem("specular-dir") || saved; } catch (e) {}
+setDir(saved);
+applyBrightness();
+const homeV = viewHome(); S.stack.push(homeV); mount(homeV);
+if (document.fonts) document.fonts.ready.then(relayoutAll);
+</script>
