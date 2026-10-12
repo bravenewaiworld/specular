@@ -17,7 +17,7 @@ impl ScreenState {
 
 /// How the UI should animate a change of screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Transition { Push, Pop, Replace }
+pub enum Transition { Push, Pop }
 
 /// The screens the user went through; the bottom one (home) is never popped.
 #[derive(Clone, Debug)]
@@ -29,6 +29,8 @@ impl NavStack {
     pub fn top(&self) -> &ScreenState { self.0.last().unwrap() }
     pub fn top_mut(&mut self) -> &mut ScreenState { self.0.last_mut().unwrap() }
     pub fn depth(&self) -> usize { self.0.len() }
+    /// The screen below the top one, if any.
+    pub fn parent(&self) -> Option<&ScreenState> { self.0.iter().rev().nth(1) }
 
     pub fn push(&mut self, s: ScreenState) -> Transition { self.0.push(s); Transition::Push }
 
@@ -36,9 +38,6 @@ impl NavStack {
     pub fn pop(&mut self) -> Option<Transition> {
         (self.0.len() > 1).then(|| { self.0.pop(); Transition::Pop })
     }
-
-    /// Swaps the top screen for another (e.g. list ↔ grid of the same games).
-    pub fn replace(&mut self, s: ScreenState) -> Transition { *self.top_mut() = s; Transition::Replace }
 
     /// Back to home; None if already there.
     pub fn home(&mut self) -> Option<Transition> {

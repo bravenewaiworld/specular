@@ -1,15 +1,7 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::*;
-
-/// A fresh, empty directory for one test.
-fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("specular-test-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
 
 fn touch(root: &Path, rel: &str, content: &[u8]) {
     let p = root.join(rel);
@@ -36,28 +28,30 @@ fn zip_of(names: &[&str]) -> Vec<u8> {
 
 #[test]
 fn finds_games_by_extension_and_zip_contents() {
-    let roms = temp_dir("scan");
-    touch(&roms, "gba/Golden Sun (USA, Europe).gba", b"");
-    touch(&roms, "gba/RPG/Mother 3 (Japan).GBA", b""); // any folder depth, any case
-    touch(&roms, "snes/Super Metroid (Japan, USA).zip", &zip_of(&["readme.txt", "Super Metroid (Japan, USA).sfc"]));
-    touch(&roms, "misc/notes.txt", b"");
-    touch(&roms, "gba/._Golden Sun (USA, Europe).gba", b""); // macOS metadata
-    touch(&roms, ".Trashes/old.gba", b"");
-    touch(&roms, "broken.zip", b"not a zip");
-    let games = scan(&roms, &builtin_systems());
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path();
+    touch(roms, "gba/Golden Sun (USA, Europe).gba", b"");
+    touch(roms, "gba/RPG/Mother 3 (Japan).GBA", b""); // any folder depth, any case
+    touch(roms, "snes/Super Metroid (Japan, USA).zip", &zip_of(&["readme.txt", "Super Metroid (Japan, USA).sfc"]));
+    touch(roms, "misc/notes.txt", b"");
+    touch(roms, "gba/._Golden Sun (USA, Europe).gba", b""); // macOS metadata
+    touch(roms, ".Trashes/old.gba", b"");
+    touch(roms, "broken.zip", b"not a zip");
+    let games = scan(roms, &builtin_systems());
     let found: Vec<(&str, &str)> = games.iter().map(|g| (g.system, g.title.as_str())).collect();
     assert_eq!(found, [("gba", "Golden Sun"), ("gba", "Mother 3"), ("snes", "Super Metroid")]);
 }
 
 #[test]
 fn disc_tracks_and_playlist_discs_are_not_games() {
-    let roms = temp_dir("discs");
-    touch(&roms, "ps1/Vagrant Story (USA).cue", b"FILE \"Vagrant Story (USA).bin\" BINARY\n  TRACK 01 MODE2/2352\n");
-    touch(&roms, "ps1/Vagrant Story (USA).bin", b"");
-    touch(&roms, "ps1/FF9/Final Fantasy IX (USA).m3u", b"Final Fantasy IX (USA) (Disc 1).chd\nFinal Fantasy IX (USA) (Disc 2).chd\n");
-    touch(&roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 1).chd", b"");
-    touch(&roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 2).chd", b"");
-    let games = scan(&roms, &builtin_systems());
+    let dir = tempfile::tempdir().unwrap();
+    let roms = dir.path();
+    touch(roms, "ps1/Vagrant Story (USA).cue", b"FILE \"Vagrant Story (USA).bin\" BINARY\n  TRACK 01 MODE2/2352\n");
+    touch(roms, "ps1/Vagrant Story (USA).bin", b"");
+    touch(roms, "ps1/FF9/Final Fantasy IX (USA).m3u", b"Final Fantasy IX (USA) (Disc 1).chd\n./final fantasy ix (usa) (disc 2).chd\n");
+    touch(roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 1).chd", b"");
+    touch(roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 2).chd", b"");
+    let games = scan(roms, &builtin_systems());
     let paths: Vec<&Path> = games.iter().map(|g| g.path.as_path()).collect();
     assert_eq!(paths, [Path::new("ps1/FF9/Final Fantasy IX (USA).m3u"), Path::new("ps1/Vagrant Story (USA).cue")]);
 }
@@ -67,6 +61,7 @@ fn saves_mirror_the_rom_tree() {
     let g = Game { system: "gba", path: "gba/RPG/Golden Sun (USA, Europe).gba".into(), title: "Golden Sun".into(), sort_key: String::new() };
     assert_eq!(g.save_path(Path::new("/sd/saves"), "srm"), Path::new("/sd/saves/gba/RPG/Golden Sun (USA, Europe).srm"));
     assert_eq!(g.stem(), "Golden Sun (USA, Europe)");
+    assert_eq!(g.settings_layer().path(Path::new("/sd/configs")), Path::new("/sd/configs/games/gba/RPG/Golden Sun (USA, Europe).json"));
 }
 
 #[test]
@@ -81,7 +76,8 @@ fn titles_and_sorting() {
 
 #[test]
 fn reads_zip_directories() {
-    let dir = temp_dir("zip");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let p = dir.join("a.zip");
     std::fs::File::create(&p).unwrap().write_all(&zip_of(&["a.gb", "b.txt"])).unwrap();
     assert_eq!(zip::file_names(&p).unwrap(), ["a.gb", "b.txt"]);

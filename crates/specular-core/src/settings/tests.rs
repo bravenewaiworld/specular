@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use serde_json::{Map, json};
 
 use super::store::{LoadError, load_layer, store_layer};
@@ -11,16 +9,16 @@ const SCALING: &[(&str, &str)] = &[("integer", "Integer"), ("fit", "Fit"), ("str
 fn decls() -> Vec<SettingDecl> {
     vec![
         SettingDecl { key: "display.brightness", section: "Display", label: "Brightness", kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" },
-            default: json!(7), visibility: Visibility::User, deepest: Layer::Global },
+            default: json!(7), visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: "video.scaling", section: "Display", label: "Scaling", kind: SettingKind::Choice(SCALING),
-            default: json!("integer"), visibility: Visibility::User, deepest: Layer::Game { system: String::new(), game: String::new() } },
+            default: json!("integer"), visibility: Visibility::User, deepest: Scope::Game },
         SettingDecl { key: "dev.frame_stats", section: "Developer", label: "Frame stats", kind: SettingKind::Bool,
-            default: json!(false), visibility: Visibility::Developer, deepest: Layer::Global },
+            default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global },
     ]
 }
 
 fn gba() -> Layer { Layer::System("gba".into()) }
-fn golden_sun() -> Layer { Layer::Game { system: "gba".into(), game: "Golden Sun".into() } }
+fn golden_sun() -> Layer { Layer::Game { system: "gba".into(), game: "gba/Golden Sun".into() } }
 fn press(button: Button) -> Press { Press { button, repeat: false } }
 fn held(button: Button) -> Press { Press { button, repeat: true } }
 
@@ -91,49 +89,45 @@ fn presses_change_values() {
     let mut s = Settings::new(decls());
     let g = Layer::Global;
     // numbers step and stop at their ends, also while held
-    assert!(s.press("display.brightness", &g, press(Button::Right)));
+    assert_eq!(s.press("display.brightness", &g, press(Button::Right)), Some(("display.brightness", json!(8))));
     assert_eq!(s.get("display.brightness", &g).unwrap().0, &json!(8));
     for _ in 0..5 { s.press("display.brightness", &g, held(Button::Right)); }
     assert_eq!(s.get("display.brightness", &g).unwrap().0, &json!(10));
-    assert!(!s.press("display.brightness", &g, press(Button::A)));
+    assert!(s.press("display.brightness", &g, press(Button::A)).is_none());
     // choices wrap on a press, not while held
-    assert!(s.press("video.scaling", &g, press(Button::Left)));
+    assert!(s.press("video.scaling", &g, press(Button::Left)).is_some());
     assert_eq!(s.get("video.scaling", &g).unwrap().0, &json!("stretch"));
-    assert!(!s.press("video.scaling", &g, held(Button::Right)));
-    assert!(s.press("video.scaling", &g, press(Button::Right)));
+    assert!(s.press("video.scaling", &g, held(Button::Right)).is_none());
+    assert!(s.press("video.scaling", &g, press(Button::Right)).is_some());
     assert_eq!(s.get("video.scaling", &g).unwrap().0, &json!("integer"));
     // toggles flip on a press only
-    assert!(s.press("dev.frame_stats", &g, press(Button::A)));
+    assert!(s.press("dev.frame_stats", &g, press(Button::A)).is_some());
     assert_eq!(s.get("dev.frame_stats", &g).unwrap().0, &json!(true));
-    assert!(!s.press("dev.frame_stats", &g, held(Button::Left)));
-}
-
-/// A fresh, empty directory for one test.
-fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("specular-test-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    assert!(s.press("dev.frame_stats", &g, held(Button::Left)).is_none());
 }
 
 #[test]
 fn layers_round_trip_through_files() {
-    let dir = temp_dir("round-trip");
-    let path = golden_sun().path(&dir);
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let path = golden_sun().path(dir);
     assert!(path.ends_with("games/gba/Golden Sun.json"));
     assert!(load_layer(&path).unwrap().is_empty());
     let m = Map::from_iter([("video.scaling".into(), json!("fit")), ("plugin.x".into(), json!([1, 2]))]);
     store_layer(&path, &m).unwrap();
     assert_eq!(load_layer(&path).unwrap(), m);
     assert!(!path.with_extension("json.tmp").exists());
+    // emptying a layer removes its file, and any stale .tmp with it
+    std::fs::write(path.with_extension("json.tmp"), "{}").unwrap();
     store_layer(&path, &Map::new()).unwrap();
-    assert!(!path.exists());
+    assert!(!path.exists() && !path.with_extension("json.tmp").exists());
 }
 
 #[test]
 fn an_interrupted_save_is_recovered() {
-    let dir = temp_dir("interrupted");
-    let path = Layer::Global.path(&dir);
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let path = Layer::Global.path(dir);
     // the power went out after writing the new file, before renaming it
     std::fs::write(path.with_extension("json.tmp"), r#"{"display.brightness": 3}"#).unwrap();
     assert_eq!(load_layer(&path).unwrap().get("display.brightness"), Some(&json!(3)));
@@ -141,8 +135,9 @@ fn an_interrupted_save_is_recovered() {
 
 #[test]
 fn a_corrupt_file_is_moved_aside() {
-    let dir = temp_dir("corrupt");
-    let path = Layer::Global.path(&dir);
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let path = Layer::Global.path(dir);
     std::fs::write(&path, "{ not json").unwrap();
     match load_layer(&path) {
         Err(LoadError::Corrupt { moved_to }) => assert!(moved_to.exists()),

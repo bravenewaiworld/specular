@@ -13,6 +13,7 @@ impl RgbLeds {
     /// The LEDs with these (red, green, blue) names under `root` (normally /sys/class/leds).
     pub fn new(root: &Path, names: &[[String; 3]]) -> Self {
         let leds: Vec<[PathBuf; 3]> = names.iter().map(|n| n.clone().map(|c| root.join(c))).collect();
+        // max_brightness is read from the first LED's colours and taken to hold for all of them.
         let max = leds.first().map_or([255; 3], |l| l.clone().map(|p| {
             std::fs::read_to_string(p.join("max_brightness")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(255)
         }));

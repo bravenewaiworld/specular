@@ -49,14 +49,14 @@ mod tests {
 
     #[test]
     fn reads_a_battery_and_charger() {
-        let root = std::env::temp_dir().join(format!("specular-test-{}-power", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
         for (dir, files) in [("bat", [("type", "Battery"), ("capacity", "78\n"), ("status", "Charging\n")]),
                              ("usb", [("type", "USB"), ("online", "1"), ("status", "")])] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
             for (f, v) in files { std::fs::write(root.join(dir).join(f), v).unwrap(); }
         }
-        let b = PowerSupply::find(&root).battery().unwrap();
+        let b = PowerSupply::find(root).battery().unwrap();
         assert_eq!(b, Battery { percent: Some(78), charging: true, plugged: true });
         assert!(PowerSupply::find(&root.join("nothing")).battery().is_err());
     }

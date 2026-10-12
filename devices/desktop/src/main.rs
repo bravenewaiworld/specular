@@ -19,7 +19,7 @@ impl Device for Desktop {
             light_bar_leds: 0,
         }
     }
-    fn hardware(&self) -> Hardware { simulated::hardware().0 }
+    fn hardware(&self) -> Hardware { simulated::hardware() }
 }
 
 fn main() -> Result<(), specular_ui::Error> {

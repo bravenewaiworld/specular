@@ -1,6 +1,7 @@
 //! Buttons from Linux input devices (evdev), read without blocking inside an event loop. Devices
-//! are found by name and reopened when they appear late or disappear (a device's input bridge
-//! can start after Specular or restart).
+//! are found by name and reopened when they appear late or disappear (the program that presents
+//! a handheld's buttons as a standard gamepad, e.g. the Brick's padbridge, can start after
+//! Specular or restart).
 
 use std::fs::File;
 use std::io::Read;
@@ -25,11 +26,12 @@ const ABS_Z: u16 = 2; const ABS_RZ: u16 = 5; const ABS_HAT0X: u16 = 16; const AB
 /// The d-pad's hat axes (X, Y) and the button for each end (-1, +1).
 const HAT: [[Button; 2]; 2] = [[Button::Left, Button::Right], [Button::Up, Button::Down]];
 
-/// Key codes of an Xbox 360 style pad (what most handhelds' input bridges present, e.g. the
-/// Brick's padbridge) and the power key.
+/// Key codes of an Xbox 360 style pad (what most handhelds' gamepad programs present, e.g. the
+/// Brick's padbridge) and the power key. Specular names buttons by position, so the Xbox pad's
+/// bottom button (its "A") is Specular's B, its left one ("X") Specular's Y, and so on.
 fn key(code: u16) -> Option<Button> {
     Some(match code {
-        0x130 => Button::B, 0x131 => Button::A, 0x133 => Button::Y, 0x134 => Button::X, // BTN_SOUTH/EAST, Xbox Y/X
+        0x130 => Button::B, 0x131 => Button::A, 0x133 => Button::Y, 0x134 => Button::X, // Xbox A, B, X, Y
         0x136 => Button::L1, 0x137 => Button::R1,                                        // BTN_TL/TR
         0x13a => Button::Select, 0x13b => Button::Start, 0x13c => Button::Menu,          // BTN_SELECT/START/MODE
         0x13d => Button::F1, 0x13e => Button::F2,                                        // BTN_THUMBL/THUMBR
@@ -38,11 +40,11 @@ fn key(code: u16) -> Option<Button> {
     })
 }
 
-/// One open input device and what is held on it.
-struct Device { name: &'static str, file: Option<File>, held: Vec<Button>, hat: [i32; 2], dropping: bool }
+/// One input device, and what is held on it.
+struct InputDevice { name: &'static str, file: Option<File>, held: Vec<Button>, hat: [i32; 2], dropping: bool }
 
 /// The input devices Specular reads, by name.
-pub struct Input { devices: Vec<Device>, next_retry: Instant }
+pub struct Input { devices: Vec<InputDevice>, next_retry: Instant }
 
 const RETRY: Duration = Duration::from_secs(1);
 const EVIOCSCLOCKID: libc::c_ulong = 0x4004_45a0; // _IOW('E', 0xa0, int)
@@ -53,9 +55,11 @@ fn open_by_name(name: &str) -> Option<File> {
         let Some(node) = node.to_str().filter(|n| n.starts_with("event")) else { continue };
         if !std::fs::read_to_string(entry.path().join("device/name")).is_ok_and(|s| s.trim() == name) { continue; }
         let file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(format!("/dev/input/{node}")).ok()?;
-        // Timestamp events on CLOCK_MONOTONIC (as `clock` reads it) instead of wall-clock time.
+        // Timestamp events on CLOCK_MONOTONIC (as `clock` reads it) instead of wall-clock time,
+        // which button repeats and latency are measured against. Without it, skip the device.
         if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSCLOCKID, &libc::CLOCK_MONOTONIC) } < 0 {
-            eprintln!("input: {name}: can't use CLOCK_MONOTONIC timestamps");
+            eprintln!("input: {name}: can't use CLOCK_MONOTONIC timestamps; skipped");
+            return None;
         }
         eprintln!("input: {name} open");
         return Some(file);
@@ -67,7 +71,7 @@ impl Input {
     /// Opens the input devices with these names (as in /sys/class/input/*/device/name). Missing
     /// ones are not an error: `retry` opens them later.
     pub fn new(names: &[&'static str]) -> Self {
-        let devices = names.iter().map(|&name| Device { name, file: None, held: Vec::new(), hat: [0; 2], dropping: false }).collect();
+        let devices = names.iter().map(|&name| InputDevice { name, file: None, held: Vec::new(), hat: [0; 2], dropping: false }).collect();
         let mut input = Self { devices, next_retry: Instant::now() };
         input.retry();
         input
@@ -97,7 +101,7 @@ impl Input {
                 match file.read(&mut buf) {
                     Ok(24) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    _ => { eprintln!("input: {} gone", d.name); d.file = None; d.release_all(out, Duration::ZERO); break; }
+                    _ => { eprintln!("input: {} gone", d.name); d.file = None; d.release_all(out, clock(libc::CLOCK_MONOTONIC)); break; }
                 }
                 let n = |r: std::ops::Range<usize>| u64::from_ne_bytes(buf[r].try_into().unwrap());
                 let time = Duration::new(n(0..8), n(8..16) as u32 * 1000);
@@ -110,7 +114,7 @@ impl Input {
     }
 }
 
-impl Device {
+impl InputDevice {
     fn set(&mut self, button: Button, pressed: bool, time: Duration, out: &mut Vec<ButtonEvent>) {
         if self.held.contains(&button) == pressed { return; }
         if pressed { self.held.push(button) } else { self.held.retain(|&b| b != button) }
@@ -131,7 +135,8 @@ impl Device {
         }
         match (kind, code) {
             (EV_SYN, SYN_DROPPED) => { self.release_all(out, time); self.dropping = true; }
-            (EV_KEY, code) => if let Some(b) = key(code) { if value != 2 { self.set(b, value == 1, time, out) } },
+            // value 2 is the kernel's own key repeat; Specular repeats keys itself
+            (EV_KEY, code) => if let (Some(b), 0 | 1) = (key(code), value) { self.set(b, value == 1, time, out) },
             // The d-pad is a hat: -1, 0 or 1 per axis.
             (EV_ABS, c @ (ABS_HAT0X | ABS_HAT0Y)) => {
                 let axis = (c - ABS_HAT0X) as usize;

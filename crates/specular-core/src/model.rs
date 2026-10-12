@@ -15,14 +15,10 @@ pub struct ScreenId(pub Cow<'static, str>);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RowId(pub String);
 
-/// A picture the UI loads (off its thread) and shows.
+/// A picture for a row (e.g. a game's cached box art), loaded by the UI off its thread. Not drawn
+/// yet: it comes with box art.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ImageRef {
-    /// A built-in icon, by name.
-    Icon(&'static str),
-    /// An image file, e.g. cached box art.
-    File(PathBuf),
-}
+pub enum ImageRef { File(PathBuf) }
 
 /// What a row is, and the value it shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -35,7 +31,7 @@ pub enum RowKind {
     Image { image: ImageRef, detail: Option<String> },
     /// On or off; A, left or right switches it.
     Toggle { on: bool },
-    /// One of a few options; left and right step through them. Long lists open a picker.
+    /// One of a few options; left and right step through them.
     Choice { options: Vec<String>, selected: usize },
     /// A number in a range; left and right step it.
     Number { value: i64, min: i64, max: i64, step: i64, unit: &'static str },
@@ -48,32 +44,29 @@ impl RowKind {
     pub fn focusable(&self) -> bool { !matches!(self, RowKind::Header) }
 }
 
+/// One row of a screen.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub id: RowId,
     pub label: String,
     pub kind: RowKind,
-    /// Shown dimmed and inert when false.
+    /// Shown dimmed, and ignoring presses, when false.
     pub enabled: bool,
     /// Its value overrides the layer below (e.g. a per-game setting); the UI marks it.
     pub overridden: bool,
 }
 
 impl Row {
+    /// An enabled row that overrides nothing.
     pub fn new(id: impl Into<String>, label: impl Into<String>, kind: RowKind) -> Self {
         Self { id: RowId(id.into()), label: label.into(), kind, enabled: true, overridden: false }
     }
 }
 
-/// How a screen's rows are arranged.
+/// How a screen's rows are arranged. Only lists exist so far; a grid of box art comes with box
+/// art.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layout {
-    List,
-    /// Box art in columns; the UI picks the column count from the screen's width.
-    Grid,
-    /// A picker over the current screen (e.g. the language list).
-    Sheet,
-}
+pub enum Layout { List }
 
 /// Everything the UI needs to draw one screen.
 #[derive(Clone, Debug, PartialEq)]
@@ -81,7 +74,8 @@ pub struct ScreenView {
     pub title: String,
     pub layout: Layout,
     pub rows: Vec<Row>,
-    /// The focused row's index; always a focusable row while there is one.
+    /// The focused row's index; always a focusable row while there is one. Screens leave it 0
+    /// and the app fills it in.
     pub focus: usize,
     /// Button hints for the bottom bar. The UI shows only buttons the device has.
     pub hints: Vec<(Button, String)>,

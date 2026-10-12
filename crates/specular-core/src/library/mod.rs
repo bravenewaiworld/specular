@@ -3,6 +3,7 @@
 //! Games are found by scanning `roms/` recursively and matching each file to a system by its
 //! extension. A zip is matched by the file inside it. Files that only make up another game (the
 //! tracks a .cue sheet lists, the discs an .m3u playlist lists) aren't listed on their own.
+//! Symbolic links are not followed.
 
 mod names;
 mod zip;
@@ -53,6 +54,12 @@ impl Game {
     /// The file name without its extension: the name of its saves and per-game settings.
     pub fn stem(&self) -> &str { self.path.file_stem().and_then(|s| s.to_str()).unwrap_or_default() }
 
+    /// Its per-game settings layer, keyed by its path so same-named games in different folders
+    /// keep separate settings.
+    pub fn settings_layer(&self) -> crate::settings::Layer {
+        crate::settings::Layer::Game { system: self.system.to_string(), game: self.path.with_extension("").to_string_lossy().into_owned() }
+    }
+
     /// Where a save of this game goes: `saves/` mirrors `roms/`, with the ROM's name and the
     /// save's own extension (e.g. "srm", or "state1" for a save state).
     pub fn save_path(&self, saves: &Path, extension: &str) -> PathBuf {
@@ -66,7 +73,7 @@ fn skip_dir(name: &str) -> bool { name.starts_with('.') || name.eq_ignore_ascii_
 /// Files never listed: hidden ones, including the "._name" files macOS leaves on FAT cards.
 fn skip_file(name: &str) -> bool { name.starts_with('.') }
 
-/// How deep folders are followed, so a loop or a huge tree can't stall the scan.
+/// How deep folders are followed, so a huge tree can't stall the scan.
 const MAX_DEPTH: usize = 8;
 
 /// Finds every game under `roms`, sorted by system order then title. Unreadable folders and
@@ -76,7 +83,7 @@ pub fn scan(roms: &Path, systems: &[SystemDecl]) -> Vec<Game> {
     walk(roms, roms, 0, &mut files);
     let parts = parts_of_other_games(roms, &files);
     let mut games: Vec<Game> = files.iter()
-        .filter(|f| !parts.contains(*f))
+        .filter(|f| !parts.contains(&lower(f)))
         .filter_map(|f| {
             let system = system_of(&roms.join(f), systems)?;
             let stem = f.file_stem()?.to_str()?;
@@ -96,9 +103,8 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         let Ok(kind) = e.file_type() else { continue };
         if kind.is_dir() {
             if depth < MAX_DEPTH && !skip_dir(name) { walk(root, &e.path(), depth + 1, out); }
-        } else if kind.is_file() && !skip_file(name) {
-            if let Ok(rel) = e.path().strip_prefix(root) { out.push(rel.to_path_buf()); }
-        }
+        } else if kind.is_file() && !skip_file(name)
+            && let Ok(rel) = e.path().strip_prefix(root) { out.push(rel.to_path_buf()); }
     }
 }
 
@@ -115,7 +121,12 @@ fn system_of(path: &Path, systems: &[SystemDecl]) -> Option<&'static str> {
     by_ext(&ext)
 }
 
-/// Files that are part of another game: those a .cue or .m3u in the same folder refers to.
+/// A path in lower case: FAT file names are case-insensitive, so a .cue or .m3u may name a file
+/// in a different case.
+fn lower(p: &Path) -> PathBuf { PathBuf::from(p.to_string_lossy().to_lowercase()) }
+
+/// Files that are part of another game (in lower case): those a .cue or .m3u in the same folder
+/// refers to.
 fn parts_of_other_games(roms: &Path, files: &[PathBuf]) -> HashSet<PathBuf> {
     let mut parts = HashSet::new();
     for f in files {
@@ -130,7 +141,7 @@ fn parts_of_other_games(roms: &Path, files: &[PathBuf]) -> HashSet<PathBuf> {
             } else {
                 Some(line).filter(|l| !l.is_empty() && !l.starts_with('#'))
             };
-            if let Some(n) = name { parts.insert(dir.join(n)); }
+            if let Some(n) = name { parts.insert(lower(&dir.join(n.trim_start_matches("./")))); }
         }
     }
     parts

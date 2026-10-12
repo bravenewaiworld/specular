@@ -38,6 +38,7 @@ fn open_a_system_play_and_come_back() {
     let mut a = app();
     assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Redraw(Some(Transition::Push))]);
     assert_eq!(a.view().title, "Game Boy Advance");
+    assert_eq!(a.parent_title().as_deref(), Some("Library"));
     tap(&mut a, Button::Down, 10);
     assert_eq!(focused(&a), "Mother 3");
     assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3"))]);
@@ -69,6 +70,9 @@ fn settings_change_and_save() {
     assert_eq!(focused(&a), "Brightness");
     let e = tap(&mut a, Button::Right, 20);
     assert_eq!(e, vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key: "display.brightness", value: json!(7) }]);
+    // loading settings applies every global one
+    let loaded = a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::new()));
+    assert!(loaded.contains(&Effect::Apply { key: "lights.brightness", value: json!(3) }));
     assert_eq!(a.ctx.settings.layer(&Layer::Global).get("display.brightness"), Some(&json!(7)));
 }
 

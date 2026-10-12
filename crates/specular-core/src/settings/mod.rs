@@ -3,9 +3,9 @@
 //! Each setting is a `SettingDecl`. Its value is looked up from the most specific layer that has
 //! one: a game's file, then its system's, then the global file, then the declared default. Only
 //! overrides are stored, so changing a default in a new version reaches everyone who never
-//! changed it. Keys a layer doesn't declare (settings of a plugin not loaded, or of a newer
-//! version) are kept untouched. A stored value of the wrong type or out of range is ignored, as
-//! if absent.
+//! changed it. Keys in a file that no declaration knows (settings of a plugin not loaded, or of a
+//! newer version) are kept untouched. A stored value of the wrong type or out of range is
+//! ignored, as if absent.
 
 pub mod builtin;
 pub mod store;
@@ -18,22 +18,28 @@ use serde_json::{Map, Value};
 use crate::input::{Button, Press};
 use crate::model::{Row, RowKind};
 
-/// Who a setting is for. Screens show settings up to the visibility the user picked.
+/// Who a setting is for. Settings screens show user settings, and developer ones too while the
+/// "Developer details" setting is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Visibility { User, Advanced, Developer }
+pub enum Visibility { User, Developer }
 
-/// Where a value is stored, from least to most specific.
+/// How specific a layer is; also how deep a setting may be overridden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Scope { Global, System, Game }
+
+/// Where a value is stored.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layer {
     Global,
     System(String),
-    /// A game, by system and ROM file name without its extension.
+    /// A game, by system and by its ROM's path under `roms/` without the extension (e.g.
+    /// "gba/RPG/Golden Sun (USA, Europe)"), so games of the same name in different folders
+    /// keep separate settings.
     Game { system: String, game: String },
 }
 
 impl Layer {
-    /// How specific the layer is: 0 global, 1 system, 2 game.
-    fn depth(&self) -> u8 { match self { Layer::Global => 0, Layer::System(_) => 1, Layer::Game { .. } => 2 } }
+    pub fn scope(&self) -> Scope { match self { Layer::Global => Scope::Global, Layer::System(_) => Scope::System, Layer::Game { .. } => Scope::Game } }
 
     /// The layers a value is looked up in, most specific first.
     fn chain(&self) -> Vec<Layer> {
@@ -44,12 +50,12 @@ impl Layer {
         }
     }
 
-    /// The layer's file under the `configs/` folder.
+    /// The layer's file under the `configs/` folder. Games' files mirror the `roms/` tree.
     pub fn path(&self, configs: &Path) -> PathBuf {
         match self {
             Layer::Global => configs.join("specular.json"),
             Layer::System(s) => configs.join("systems").join(format!("{s}.json")),
-            Layer::Game { system, game } => configs.join("games").join(system).join(format!("{game}.json")),
+            Layer::Game { game, .. } => configs.join("games").join(format!("{game}.json")),
         }
     }
 }
@@ -76,7 +82,7 @@ pub struct SettingDecl {
     pub default: Value,
     pub visibility: Visibility,
     /// The most specific layer allowed to override it (e.g. brightness is global only).
-    pub deepest: Layer,
+    pub deepest: Scope,
 }
 
 impl SettingDecl {
@@ -90,8 +96,16 @@ impl SettingDecl {
     }
 }
 
+/// Why `Settings::set` refused a value.
 #[derive(Debug, PartialEq, Eq)]
-pub enum SettingError { Unknown, WrongValue, NotAtThisLayer }
+pub enum SettingError {
+    /// No such setting is declared.
+    Unknown,
+    /// Not a valid value for the setting.
+    WrongValue,
+    /// The setting can't be overridden that specifically (e.g. per game).
+    NotAtThisLayer,
+}
 
 /// The declared settings and the layers loaded so far.
 #[derive(Debug, Default)]
@@ -105,19 +119,24 @@ impl Settings {
 
     fn decl(&self, key: &str) -> Option<&SettingDecl> { self.decls.iter().find(|d| d.key == key) }
 
-    /// The declared key equal to `key`, with the declaration's lifetime.
-    pub fn key(&self, key: &str) -> Option<&'static str> { self.decl(key).map(|d| d.key) }
+    /// The declared settings.
+    pub fn decls(&self) -> &[SettingDecl] { &self.decls }
 
-    /// Puts a layer's contents in place (as loaded by `store::load_layer`).
-    pub fn set_layer(&mut self, layer: Layer, values: Map<String, Value>) { self.layers.insert(layer, values); }
+    /// Adds a layer's contents as loaded from its file (`store::load_layer`). Values already set
+    /// in memory win: they were changed after the file was written.
+    pub fn set_layer(&mut self, layer: Layer, values: Map<String, Value>) {
+        let map = self.layers.entry(layer).or_default();
+        for (k, v) in values { map.entry(k).or_insert(v); }
+    }
 
     /// A layer's contents, for `store::store_layer`.
     pub fn layer(&self, layer: &Layer) -> Map<String, Value> { self.layers.get(layer).cloned().unwrap_or_default() }
 
     /// A setting's value as seen at `at`, and the layer it comes from (None = the default).
+    /// None if no such setting is declared.
     pub fn get(&self, key: &str, at: &Layer) -> Option<(&Value, Option<Layer>)> {
         let d = self.decl(key)?;
-        for layer in at.chain().into_iter().filter(|l| l.depth() <= d.deepest.depth()) {
+        for layer in at.chain().into_iter().filter(|l| l.scope() <= d.deepest) {
             if let Some(v) = self.layers.get(&layer).and_then(|m| m.get(key)).filter(|v| d.accepts(v)) {
                 return Some((v, Some(layer)));
             }
@@ -129,25 +148,21 @@ impl Settings {
     pub fn set(&mut self, key: &str, at: &Layer, v: Value) -> Result<(), SettingError> {
         let d = self.decl(key).ok_or(SettingError::Unknown)?;
         if !d.accepts(&v) { return Err(SettingError::WrongValue); }
-        if at.depth() > d.deepest.depth() { return Err(SettingError::NotAtThisLayer); }
-        let map = self.layers.entry(at.clone()).or_default();
-        map.remove(key);
-        let inherited = self.get(key, at).map(|(v, _)| v.clone());
-        if inherited.as_ref() != Some(&v) { self.layers.get_mut(at).unwrap().insert(key.to_string(), v); }
+        if at.scope() > d.deepest { return Err(SettingError::NotAtThisLayer); }
+        self.layers.entry(at.clone()).or_default().remove(key);
+        if self.get(key, at).map(|(inherited, _)| inherited) != Some(&v) {
+            self.layers.get_mut(at).unwrap().insert(key.to_string(), v);
+        }
         Ok(())
     }
 
-    /// Removes the override at `at`, if any.
-    pub fn reset(&mut self, key: &str, at: &Layer) {
-        if let Some(m) = self.layers.get_mut(at) { m.remove(key); }
-    }
-
     /// The settings screen for `at`: one row per setting that can be set there and is visible at
-    /// `show`, under a header per section, in declaration order.
+    /// `show`, under a header per section, in declaration order. Rows that override a less
+    /// specific layer are marked.
     pub fn rows(&self, at: &Layer, show: Visibility) -> Vec<Row> {
         let mut rows = Vec::new();
         let mut section = "";
-        for d in self.decls.iter().filter(|d| d.visibility <= show && at.depth() <= d.deepest.depth()) {
+        for d in self.decls.iter().filter(|d| d.visibility <= show && at.scope() <= d.deepest) {
             if d.section != section {
                 section = d.section;
                 rows.push(Row::new(format!("section:{section}"), section, RowKind::Header));
@@ -162,33 +177,34 @@ impl Settings {
                 SettingKind::Int { min, max, step, unit } => RowKind::Number { value: v.as_i64().unwrap_or(min), min, max, step, unit },
             };
             let mut row = Row::new(d.key, d.label, kind);
-            row.overridden = from.as_ref().is_some_and(|l| l == at) && at.depth() > 0;
+            row.overridden = at.scope() > Scope::Global && from.as_ref() == Some(at);
             rows.push(row);
         }
         rows
     }
 
-    /// Applies a press to the setting `key` shown at `at` (A or left/right on its row). Returns
-    /// whether its value changed. Choices wrap around on a real press, not while held.
-    pub fn press(&mut self, key: &str, at: &Layer, p: Press) -> bool {
-        let Some(d) = self.decl(key).cloned() else { return false };
-        let Some((current, _)) = self.get(key, at).map(|(v, l)| (v.clone(), l)) else { return false };
-        let delta = match p.button { Button::Left => -1, Button::Right => 1, Button::A => 1, _ => return false };
-        let new = match d.kind {
-            SettingKind::Bool => { if p.repeat { return false; } Value::Bool(!current.as_bool().unwrap_or(false)) }
+    /// Applies a press to the setting `key` shown at `at` (A, left or right on its row). Returns
+    /// the setting's key and new value if it changed. Choices wrap around on a real press, not
+    /// while held; toggles change only on a real press.
+    pub fn press(&mut self, key: &str, at: &Layer, p: Press) -> Option<(&'static str, Value)> {
+        let d = self.decl(key)?;
+        let (kind, key) = (d.kind, d.key);
+        let current = self.get(key, at)?.0.clone();
+        let delta = match p.button { Button::Left => -1, Button::Right | Button::A => 1, _ => return None };
+        let new = match kind {
+            SettingKind::Bool if !p.repeat => Value::Bool(!current.as_bool().unwrap_or(false)),
+            SettingKind::Bool => return None,
             SettingKind::Choice(options) => {
                 let n = options.len() as i64;
                 let i = options.iter().position(|(o, _)| Some(*o) == current.as_str()).unwrap_or(0) as i64 + delta;
-                if !(0..n).contains(&i) && p.repeat { return false; }
+                if !(0..n).contains(&i) && p.repeat { return None; }
                 Value::from(options[i.rem_euclid(n) as usize].0)
             }
-            SettingKind::Int { min, max, step, .. } => {
-                if p.button == Button::A { return false; }
-                Value::from((current.as_i64().unwrap_or(min) + delta * step).clamp(min, max))
-            }
+            SettingKind::Int { .. } if p.button == Button::A => return None,
+            SettingKind::Int { min, max, step, .. } => Value::from((current.as_i64().unwrap_or(min) + delta * step).clamp(min, max)),
         };
-        if new == current { return false; }
-        self.set(key, at, new).is_ok()
+        if new == current { return None; }
+        self.set(key, at, new.clone()).ok().map(|_| (key, new))
     }
 }
 

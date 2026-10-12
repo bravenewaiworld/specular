@@ -3911,6 +3911,7 @@ name = "specular-core"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3928,6 +3929,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "specular-core",
+ "tempfile",
 ]
 
 [[package]]

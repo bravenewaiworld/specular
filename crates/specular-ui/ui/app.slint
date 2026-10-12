@@ -4,10 +4,12 @@
 import { Theme, Motion } from "theme.slint";
 export { Theme }
 
-// One row, ready to draw. `kind`: 0 header, 1 text, 2 image, 3 toggle, 4 choice, 5 number,
-// 6 action.
+// What a row is (the core's row kinds; rows with pictures are drawn as text for now).
+export enum Kind { header, text, toggle, choice, number, action }
+
+// One row, ready to draw.
 export struct RowData {
-    kind: int,
+    kind: Kind,
     label: string,
     // Right-aligned text: a count, the choice or number shown, an action's value.
     value: string,
@@ -74,11 +76,11 @@ component RowView inherits Rectangle {
     height: data.height * 1px * Theme.u;
     opacity: data.enabled ? 1 : 0.4;
 
-    if data.kind == 0 : Text {
+    if data.kind == Kind.header : Text {
         x: Theme.gutter; y: parent.height - self.height - 12px * Theme.u;
         text: data.label; font-size: Theme.caption; font-weight: 500; color: Theme.dim;
     }
-    if data.kind != 0 : HorizontalLayout {
+    if data.kind != Kind.header : HorizontalLayout {
         padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 20px * Theme.u;
         Text {
             text: data.label; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
@@ -90,14 +92,14 @@ component RowView inherits Rectangle {
             width: 10px * Theme.u; height: self.width; border-radius: self.width / 2; y: (parent.height - self.height) / 2;
             background: Theme.accent;
         }
-        if data.kind == 5 : Gauge { fraction: data.fraction; focused: focused; y: (parent.height - self.height) / 2; }
-        if data.kind == 3 : Toggle { on: data.on; y: (parent.height - self.height) / 2; }
-        if data.kind != 3 && data.value != "" : Text {
-            text: (data.kind == 4 && focused ? "‹  " : "") + data.value + (data.kind == 4 && focused ? "  ›" : "");
+        if data.kind == Kind.number : Gauge { fraction: data.fraction; focused: focused; y: (parent.height - self.height) / 2; }
+        if data.kind == Kind.toggle : Toggle { on: data.on; y: (parent.height - self.height) / 2; }
+        if data.kind != Kind.toggle && data.value != "" : Text {
+            text: (data.kind == Kind.choice && focused ? "‹  " : "") + data.value + (data.kind == Kind.choice && focused ? "  ›" : "");
             vertical-alignment: center; font-family: Theme.mono; font-size: Theme.secondary;
             color: focused ? Theme.fg : Theme.dim;
         }
-        if data.kind == 6 : Text { text: "›"; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.secondary; color: Theme.dim; }
+        if data.kind == Kind.action : Text { text: "›"; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.secondary; color: Theme.dim; }
     }
 }
 
@@ -139,17 +141,23 @@ export component AppWindow inherits Window {
     in property <int> focused-row;
     // The focus plate and scroll offset, in u (from the core's list layout).
     in property <float> plate-top;
-    in property <float> plate-height: 92;
+    in property <float> plate-height;
     in property <float> scroll;
     in property <[Hint]> hints;
     in property <string> clock;
     in property <string> battery;
-    // A screen change: the new screen slides in from `shift` (u) as `fade` goes to 1. Rust sets
-    // these with `animating` false (an instant jump), then again with it true.
+    // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
+    // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
+    // change and eases back to 0, sliding the screen in and fading it up.
+    in property <int> transitions;
     in property <float> shift;
-    in property <float> fade: 1;
-    in property <bool> animating;
-    // Desktop: a key pressed or released (its text, as Slint reports it).
+    property <float> phase: root.transitions;
+    animate phase { duration: Motion.screen; easing: Motion.decelerate; }
+    property <float> arriving: min(1, root.transitions - root.phase);
+    // The list's height in u, for the core's list layout.
+    out property <float> list-height: list.height / 1px / Theme.u;
+    // Desktop: a key pressed or released (its text, as Slint reports it); returns whether the
+    // key was a button.
     callback key(string, bool) -> bool;
 
     background: Theme.bg;
@@ -164,16 +172,15 @@ export component AppWindow inherits Window {
     // The light bar along the top edge, glowing in the current tint.
     Rectangle {
         y: 0; height: 3px * Theme.u; background: Theme.tint;
-        animate background { duration: 350ms; }
+        animate background { duration: Motion.tint; }
         drop-shadow-blur: 18px * Theme.u; drop-shadow-color: Theme.tint.with-alpha(0.45);
     }
     StatusBar { y: 0; width: root.width; crumb: root.crumb; clock: root.clock; battery: root.battery; }
 
     content := Rectangle {
         y: Theme.status-bar; height: root.height - Theme.status-bar - Theme.hint-bar;
-        x: root.shift * 1px * Theme.u;
-        opacity: root.fade;
-        animate x, opacity { duration: root.animating ? Motion.screen : 0ms; easing: Motion.decelerate; }
+        x: root.shift * root.arriving * 1px * Theme.u;
+        opacity: 1 - root.arriving;
         Text {
             x: Theme.gutter; y: 18px * Theme.u; width: parent.width - 2 * Theme.gutter;
             text: root.screen-title; font-size: Theme.title; font-weight: 600; letter-spacing: -0.02 * Theme.title; color: Theme.fg; overflow: elide;

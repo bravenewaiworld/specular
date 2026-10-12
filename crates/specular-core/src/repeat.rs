@@ -69,7 +69,7 @@ impl Repeater {
     /// When the next repeat is due, for the caller's timer.
     pub fn next_deadline(&self) -> Option<Duration> { self.held.as_ref().map(|h| h.next) }
 
-    /// Forgets the held button: after sleep, a lost-events report, or a screen change.
+    /// Forgets the held button, e.g. after waking from sleep or a screen change.
     pub fn reset(&mut self) { self.held = None; }
 }
 

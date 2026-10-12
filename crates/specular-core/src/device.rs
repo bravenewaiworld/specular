@@ -2,8 +2,8 @@
 //! `DeviceProfile` and implements these interfaces; most Linux handhelds can use the standard
 //! implementations in specular-linux and override only their quirks.
 //!
-//! Calls may touch slow hardware (a battery reading can be an I2C transfer), so the app makes
-//! them from a worker thread, never from the UI thread.
+//! Calls may touch slow hardware (a battery reading can be a slow bus transfer), so the UI crate
+//! makes them on its hardware thread, never on the UI thread.
 
 use std::io;
 use std::time::Duration;
@@ -19,7 +19,7 @@ pub struct DeviceProfile {
     pub height: u32,
     /// Pixels per inch. Sizes in the UI scale by `ppi / 400`, so text keeps its physical size.
     pub ppi: u32,
-    /// The display's refresh rate, which game frames are paced against.
+    /// The display's refresh rate (game frames will be paced against it).
     pub refresh_hz: f64,
     /// The buttons the device has; hints never show others.
     pub buttons: &'static [Button],
@@ -37,13 +37,17 @@ pub struct Battery {
     pub plugged: bool,
 }
 
+/// Battery and power state.
 pub trait Power: Send {
+    /// The battery now (may be a slow hardware read).
     fn battery(&self) -> io::Result<Battery>;
     /// Sleeps until woken (power button), returning once awake again.
     fn sleep(&self) -> io::Result<()>;
+    /// Turns the device off.
     fn shutdown(&self) -> io::Result<()>;
 }
 
+/// The screen's backlight and panel.
 pub trait Display: Send {
     /// Backlight brightness, 1–10 (Specular's scale; the device maps it to its own levels).
     fn set_brightness(&self, level: u8) -> io::Result<()>;
@@ -51,16 +55,18 @@ pub trait Display: Send {
     fn set_panel(&self, on: bool) -> io::Result<()>;
 }
 
-/// An RGB colour.
+/// A colour, 0–255 per channel, before the device's brightness limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
+/// The light bar.
 pub trait Lights: Send {
     /// Sets the light bar, one colour per LED (as many as the profile says). Implementations
     /// apply the device's brightness limits.
     fn show(&self, colours: &[Rgb]) -> io::Result<()>;
 }
 
+/// Sound output.
 pub trait Audio: Send {
     /// Output volume, 0–20 (Specular's scale; the device maps it to its own controls).
     fn set_volume(&self, level: u8) -> io::Result<()>;
@@ -77,51 +83,40 @@ pub struct Hardware {
 /// A device: what it is, and its hardware.
 pub trait Device {
     fn profile(&self) -> DeviceProfile;
+    /// The hardware services. Called once; they then move to the UI crate's hardware thread.
     fn hardware(&self) -> Hardware;
 }
 
-/// Simulated hardware, for the desktop build and tests: it logs what it is asked to do, and its
-/// battery drains slowly from 80 %.
+/// Simulated hardware, for the desktop build: it prints what it is asked to do, and its battery
+/// drains from 80 % by 1 % a minute.
 pub mod simulated {
-    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use super::*;
 
-    /// Shared state of the simulated hardware, readable by tests.
-    #[derive(Debug, Default)]
-    pub struct State { pub brightness: u8, pub panel_on: bool, pub volume: u8, pub lights: Vec<Rgb>, pub sleeps: u32 }
-
-    struct Sim { state: Arc<Mutex<State>>, start: Instant }
+    struct Sim(Instant);
 
     impl Power for Sim {
         fn battery(&self) -> io::Result<Battery> {
-            let drained = (self.start.elapsed().as_secs() / 60).min(75) as u8; // 1 % a minute
+            let drained = (self.0.elapsed().as_secs() / 60).min(75) as u8;
             Ok(Battery { percent: Some(80 - drained), charging: false, plugged: false })
         }
-        fn sleep(&self) -> io::Result<()> {
-            eprintln!("simulated: sleep");
-            self.state.lock().unwrap().sleeps += 1;
-            std::thread::sleep(Duration::from_millis(500));
-            Ok(())
-        }
+        fn sleep(&self) -> io::Result<()> { eprintln!("simulated: sleep"); std::thread::sleep(Duration::from_millis(500)); Ok(()) }
         fn shutdown(&self) -> io::Result<()> { eprintln!("simulated: shut down"); Ok(()) }
     }
     impl Display for Sim {
-        fn set_brightness(&self, level: u8) -> io::Result<()> { self.state.lock().unwrap().brightness = level; Ok(()) }
-        fn set_panel(&self, on: bool) -> io::Result<()> { self.state.lock().unwrap().panel_on = on; Ok(()) }
+        fn set_brightness(&self, level: u8) -> io::Result<()> { eprintln!("simulated: brightness {level}"); Ok(()) }
+        fn set_panel(&self, on: bool) -> io::Result<()> { eprintln!("simulated: panel {}", if on { "on" } else { "off" }); Ok(()) }
     }
     impl Lights for Sim {
-        fn show(&self, colours: &[Rgb]) -> io::Result<()> { self.state.lock().unwrap().lights = colours.to_vec(); Ok(()) }
+        fn show(&self, colours: &[Rgb]) -> io::Result<()> { eprintln!("simulated: lights {colours:?}"); Ok(()) }
     }
     impl Audio for Sim {
-        fn set_volume(&self, level: u8) -> io::Result<()> { self.state.lock().unwrap().volume = level; Ok(()) }
+        fn set_volume(&self, level: u8) -> io::Result<()> { eprintln!("simulated: volume {level}"); Ok(()) }
     }
 
-    /// Simulated hardware, and its state.
-    pub fn hardware() -> (Hardware, Arc<Mutex<State>>) {
-        let state = Arc::new(Mutex::new(State { panel_on: true, ..Default::default() }));
-        let sim = || Box::new(Sim { state: state.clone(), start: Instant::now() });
-        (Hardware { power: sim(), display: sim(), lights: sim(), audio: sim() }, state.clone())
+    pub fn hardware() -> Hardware {
+        let t = Instant::now();
+        Hardware { power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)) }
     }
 }

@@ -1,15 +1,16 @@
-// The Light Bar look (see specular/design/README.md). Every size is in u, the device-relative
-// unit: 1 u is one Brick panel pixel, and `u` is the device's ppi / 400, so text keeps the same
-// physical size on every screen. Colours, sizes and timings are defined here and nowhere else.
+// The Light Bar look (see specular/design/README.md). Sizes are in u: 1 u is one pixel of the
+// Brick's 400 ppi panel, and `Theme.u` is this device's pixels per u (ppi / 400), so text keeps
+// its physical size on every screen. The UI's sizes, colours and timings live here; row heights
+// come from specular_core::list, and the accent colour is set from Rust (ACCENT).
 
 import "../../../assets/fonts/Geist.ttf";
 import "../../../assets/fonts/GeistMono.ttf";
 
 export global Theme {
     in property <float> u: 1;
-    // The user's accent, and the light bar's tint (the accent, or the current system's colour).
-    in property <color> accent: #2ec4b6;
-    in property <color> tint: #2ec4b6;
+    // The accent, and the light bar's tint (the accent for now).
+    in property <color> accent;
+    in property <color> tint;
 
     out property <color> bg: #08090a;
     out property <color> surface: #141518;
@@ -43,4 +44,5 @@ export global Motion {
     out property <duration> screen: 260ms;
     out property <easing> decelerate: cubic-bezier(0.2, 0, 0, 1);
     out property <duration> fade: 160ms;
+    out property <duration> tint: 350ms;
 }

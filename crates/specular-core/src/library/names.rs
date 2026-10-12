@@ -1,7 +1,8 @@
 //! Game names from file names, which mostly follow No-Intro and Redump naming, e.g.
 //! "Legend of Zelda, The - The Minish Cap (USA) (Rev 1)".
 
-/// The name to show: tags in brackets removed, and a trailing ", The" moved to the front.
+/// The name to show: everything from the first bracket on removed, and a trailing ", The" moved
+/// to the front.
 /// "Legend of Zelda, The - The Minish Cap (USA)" → "The Legend of Zelda - The Minish Cap".
 pub fn display_title(stem: &str) -> String {
     // Cut at the first tag; a name that is nothing but tags is kept whole.

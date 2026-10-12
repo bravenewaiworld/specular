@@ -34,8 +34,8 @@ fn parse(path: &Path) -> io::Result<Option<Map<String, Value>>> {
     }
 }
 
-/// Reads one settings file. A missing file is an empty layer. If the last save was cut off
-/// before its rename, the complete `<file>.tmp` it left is used instead.
+/// Reads one settings file. A missing file is an empty layer. If the file is missing or not
+/// valid JSON, a valid `<file>.tmp` left by a save that was cut off is used instead.
 pub fn load_layer(path: &Path) -> Result<Map<String, Value>, LoadError> {
     match parse(path) {
         Ok(Some(m)) => Ok(m),
@@ -56,7 +56,11 @@ pub fn load_layer(path: &Path) -> Result<Map<String, Value>, LoadError> {
 /// Writes one settings file safely (see the module doc). An empty layer removes the file.
 pub fn store_layer(path: &Path, map: &Map<String, Value>) -> io::Result<()> {
     if map.is_empty() {
-        return match fs::remove_file(path) { Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e), _ => Ok(()) };
+        // Also a stale .tmp, which `load_layer` would otherwise bring back.
+        for p in [path.to_path_buf(), tmp(path)] {
+            if let Err(e) = fs::remove_file(p) && e.kind() != io::ErrorKind::NotFound { return Err(e); }
+        }
+        return Ok(());
     }
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;

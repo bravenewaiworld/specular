@@ -8,3 +8,6 @@ publish = false
 [dependencies]
 libc = "0.2"
 specular-core = { path = "../specular-core" }
+
+[dev-dependencies]
+tempfile = "3"
