@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use specular_brick::input::{Button, clock};
+use specular_linux::input::{Button, clock};
 use specular_brick::platform::BrickPlatform;
 
 /// The display's frame period (it runs at about 60.2 Hz).

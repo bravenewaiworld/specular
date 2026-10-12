@@ -1,7 +1,6 @@
-//! Buttons from Linux input devices (evdev), read without blocking inside the event loop.
-//! Generic Linux code: it moves to the `specular-linux` crate in roadmap step 3 (Skeleton, see
-//! specular/ROADMAP.md). Devices are found by name and reopened when they appear late or
-//! disappear (padbridge, which creates the pad, can start after us or restart).
+//! Buttons from Linux input devices (evdev), read without blocking inside an event loop. Devices
+//! are found by name and reopened when they appear late or disappear (a device's input bridge
+//! can start after Specular or restart).
 
 use std::fs::File;
 use std::io::Read;
@@ -26,7 +25,8 @@ const ABS_Z: u16 = 2; const ABS_RZ: u16 = 5; const ABS_HAT0X: u16 = 16; const AB
 /// The d-pad's hat axes (X, Y) and the button for each end (-1, +1).
 const HAT: [[Button; 2]; 2] = [[Button::Left, Button::Right], [Button::Up, Button::Down]];
 
-/// Key codes of padbridge's pad (an Xbox 360 layout; see userspace/padbridge) and the power key.
+/// Key codes of an Xbox 360 style pad (what most handhelds' input bridges present, e.g. the
+/// Brick's padbridge) and the power key.
 fn key(code: u16) -> Option<Button> {
     Some(match code {
         0x130 => Button::B, 0x131 => Button::A, 0x133 => Button::Y, 0x134 => Button::X, // BTN_SOUTH/EAST, Xbox Y/X
@@ -139,7 +139,7 @@ impl Device {
                 if old != 0 { self.set(HAT[axis][(old > 0) as usize], false, time, out); }
                 if value != 0 { self.set(HAT[axis][(value > 0) as usize], true, time, out); }
             }
-            // padbridge reports the triggers as 0 or 255; past half is pressed.
+            // Triggers as axes (0–255 on Xbox style pads); past half is pressed.
             (EV_ABS, ABS_Z) => self.set(Button::L2, value > 127, time, out),
             (EV_ABS, ABS_RZ) => self.set(Button::R2, value > 127, time, out),
             _ => {}

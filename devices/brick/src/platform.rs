@@ -20,7 +20,7 @@ use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
 use slint::{PhysicalSize, Window};
 
 use crate::egl::EglDisplay;
-use crate::input::{ButtonEvent, Input, clock};
+use specular_linux::input::{ButtonEvent, Input, clock};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 

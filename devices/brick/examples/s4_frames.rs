@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use glow::HasContext;
 use specular_brick::egl::{EglDisplay, SharedContext};
-use specular_brick::input::{Input, clock};
+use specular_linux::input::{Input, clock};
 use specular_brick::platform::{BrickPlatform, SCREEN};
 
 const W: i32 = 256;
