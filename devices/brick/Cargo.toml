@@ -17,3 +17,7 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 
 [dev-dependencies]
 glow = "0.18"
+
+[[bin]]
+name = "specular"
+path = "src/main.rs"
