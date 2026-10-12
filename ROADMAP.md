@@ -166,7 +166,7 @@ Proposed from these results (to confirm):
 - **Always composite.** Slint adds about 1 ms of CPU per frame and no latency, so gameplay frames go through the Slint scene. The second, direct path isn't needed.
 - **Pace everything by the display, not by draw-then-swap.** Latency comes from when frames are started, not from the toolkit. Our platform owns the event loop, so it can start each frame (the emulator's work, then the UI's draw) at a set time after the previous flip, with a frame delay that adapts to how long the core takes. Measured on this hardware, that cuts the start-to-screen time from 32 ms to about 6 ms. The vsync event is `FBIO_WAITFORVSYNC` (implemented in our kernel for this; see "Vsync event"). On a device whose kernel lacks it, the time a blocking swap returns gives the vsync phase.
 
-Press to photons, by the same measurements: the press waits about 8 ms on average for the next frame to read it, then the frame takes 32 ms (draw-then-swap) or about 6 ms (paced, with a 10 ms frame delay) to go on screen, then scanout takes up to 16 ms to reach a given row. That totals about 48 ms or about 22 ms to the middle of the screen. Confirming it with a camera (a 240 fps phone video of an LED and the screen) is still to do.
+Press to photons, by the same measurements: the press waits about 8 ms on average for the next frame to read it, then the frame takes 32 ms (draw-then-swap) or about 6 ms (paced, with a 10 ms frame delay) to go on screen, then scanout takes up to 16 ms to reach a given row. That totals about 48 ms or about 22 ms to the middle of the screen. Confirming it with a camera (a video of at least 240 fps of an LED and the screen) is deferred until such a camera is available.
 
 Found along the way:
 - **Fonts.** TrimUI's stock system has fontconfig but no fonts, and Slint's text layout (fontique) panics in that case. `devices/brick/src/fonts.rs` gives fontconfig one of our fonts. Fontconfig is loaded at runtime, so our own image can leave it out.
@@ -196,7 +196,7 @@ Found along the way:
 ### 5. Runtime
 
 1. The libretro runtime in C, behind `specular-runtime`: audio/video rate control and save states, borrowing from Pickles.
-2. Frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Uses `FBIO_WAITFORVSYNC` (in the Brick's kernel since the spike). Includes a camera check of press-to-photon latency.
+2. Frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Uses `FBIO_WAITFORVSYNC` (in the Brick's kernel since the spike). A camera check of press-to-photon latency is deferred (it needs a camera of at least 240 fps).
 3. 3D-capable cores with a shared GL context.
 4. Per-system cores and defaults.
 5. Pausing on sleep.

@@ -38,7 +38,7 @@ pub enum RowKind {
     /// One of a few options; left and right step through them. Long lists open a picker.
     Choice { options: Vec<String>, selected: usize },
     /// A number in a range; left and right step it.
-    Number { value: i32, min: i32, max: i32, step: i32, unit: &'static str },
+    Number { value: i64, min: i64, max: i64, step: i64, unit: &'static str },
     /// Does something or opens a screen when A is pressed; may show its current value.
     Action { value: Option<String> },
 }

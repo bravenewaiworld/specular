@@ -7,3 +7,4 @@ pub mod list;
 pub mod model;
 pub mod nav;
 pub mod repeat;
+pub mod settings;
