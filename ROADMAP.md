@@ -20,7 +20,7 @@ Specular is a retro-gaming frontend: a launcher plus a libretro emulation runtim
 - **The runtime is our own clean-room libretro runtime**, using GPLv3 code from muOS's runtime ("Pickles") for the hard parts: audio/video rate control, rendering for 3D cores, and save states. NextUI is reference only: MinUI-derived code has no licence, and NextUI itself has been PolyForm Noncommercial since 2026-08-15. Cores are chosen system by system.
 - **Device-independent.** A port supplies a device crate, `devices/<name>`, holding its screen profile, its hardware services and its display platform. Device names appear nowhere else. `specular-linux` implements the standard Linux interfaces (evdev, power supply, LED class, ALSA), so most ports override only their quirks.
 - **Look: the Light Bar direction** (see `design/`). It is monochrome with one user-chosen accent. A thin glowing bar along the top edge mirrors the device's LED bar, and the LEDs show the same colour. The type is Geist with Geist Mono for numbers. Focus plates copy the Brick Hammer's case: sharp top corners, rounded bottom corners. Motion is short, with a slight overshoot. The Instrument direction was rejected as cluttered: too many typefaces, and hard to read at real size.
-- **Licence: fully open source.** Anything we build on that is GPL decides the licence: GPLv3 for Pickles, and Slint's GPLv3 option. The details are for later.
+- **Licence: fully open source.** Anything we build on that is GPL decides the licence: GPLv3 for Pickles, and Slint's GPL-3.0-only option, which makes Specular GPLv3 as a whole. The details are for later.
 - **Repository:** Specular stays in this repo for now and will be split off later.
 - **Memory:** while a game runs, Specular itself (everything except the core and its game) uses as little as possible, under an upper bound of 50 MB (a ceiling, not a goal). Idle memory matters less, but the design is low-memory throughout, so there is one way of working rather than two.
 - **Startup:** not a priority. 10–15 s is fine, as long as a good loading screen shows while things start.
@@ -139,40 +139,35 @@ pub trait ArtSource: Send + Sync {
 - Light Bar chosen.
 - Next: trim the mockup and spec to Light Bar only.
 
-### 2. Brick spike: next
+### 2. Brick spike: done (2026-10-12)
 
-The spike checks that the stack works on the reference device. It lives in `devices/brick/examples/` and stays as a regression check.
+The spike checked the stack on the reference device. It lives in `devices/brick/` (the platform in `src/`, the measurements in `examples/`) and stays as a regression check. Build it with `make specular`; `tools/run-specular.sh <binary> [args]` runs a build on a Brick over adb, with the test card's frontend service stopped.
 
-**Brick facts it builds on:**
-- The GPU libraries support OpenGL ES 3.2 and EGL 1.4, but the only window system is PowerVR's NULL one: drawing goes straight to `/dev/fb0`, with no DRM, Wayland or X11.
-- The display runs at about 60.2 Hz.
-- On this driver, `eglGetProcAddress` can return NULL for core GLES functions.
+Brick facts it builds on: the GPU libraries offer OpenGL ES 3.2 and EGL 1.4 with only PowerVR's NULL window system (drawing goes straight to `/dev/fb0`; no DRM, Wayland or X11), and the display runs at about 60.2 Hz.
 
-**Dev loop:**
-1. `tools/run-specular.sh` pushes a binary over adb.
-2. It stops the test card's frontend service and runs the binary in the foreground.
-3. It restarts the service afterwards.
+Results, with the CPU at the 600–816 MHz the `ondemand` governor picks for this load:
 
-**Toolchain:**
-- Rust `aarch64-unknown-linux-gnu`, linked with the cross toolchain from `tools/env.sh`, which uses glibc 2.23 (the device has 2.33 or newer). The fallback is `cargo-zigbuild`.
-- The binary is dynamic, because it loads the GPU libraries and the cores at runtime.
+| Check | Result |
+|---|---|
+| Toolchain | Rust `aarch64-unknown-linux-gnu`, linked with the cross toolchain in `tools/env.sh` (GCC 6.4, glibc 2.23); the binary needs glibc 2.18 symbols at most. Dynamic, since it loads the GPU libraries (and later the cores) at runtime |
+| Slint on our EGL | FemtoVG on a GLES 3 context: 60.2 fps, locked to vsync, no late frames. A full redraw costs about 4 ms of CPU; the rest of each 16.6 ms is waiting for vsync. Idle draws nothing: about 0.5 % CPU |
+| GL function lookup | `eglGetProcAddress` also returns core functions in our own context; the lookup tries `libGLESv2` first anyway, which costs nothing |
+| Input | evdev read inside our event loop; a press reaches the screen in 7–10 ms on average (worst 12 ms), measured from the kernel's timestamp to the end of the present, with injected presses (padbridge's own hop not included) |
+| Frames from another thread | An emulator thread with a shared, surfaceless GL context uploads CPU-made frames into textures and hands them over with a GL fence; Slint shows them as borrowed textures. A texture goes back to the emulator only after the present that replaced it, with a fence. No tearing: each read-back rendered frame holds exactly one emulator frame |
+| Composite vs direct | With a 60 Hz core, drawing each game frame through the Slint scene costs 3.1–3.5 ms of UI-thread CPU per frame, and a frame reaches the screen 22–30 ms after it is ready. Our own one-quad blit costs 2.0–2.2 ms and takes about 11 ms: composite adds about one display frame of latency. With a 50 Hz core (PAL games) composite takes 5–8 ms, and the scene redraws only when a new frame arrives |
+| Memory, start-up | 20 MB resident with the scene, fonts and frame textures. First frame on screen about 1.1 s after `main()` starts |
+| Text | Geist from 27 to 96 px is clean on the panel |
+| Sleep | The GL context and textures survive sleep, and rendering resumes without errors |
 
-**Steps:**
-1. Slint's FemtoVG renderer on our EGL setup. Check that it is vsync-locked and that idle really means no redraws.
-2. GL function lookup: core functions through `dlsym`, extensions through `eglGetProcAddress`.
-3. evdev input inside our own event loop. Measure the time from button press to the first changed frame.
-4. A shared GL context on a worker thread, with fences, shown through a Slint borrowed texture.
-5. Game-frame cost, with test patterns at 60.0988 and 50 Hz:
-   - "composite" mode: every frame is drawn through Slint;
-   - "direct" mode: the frame is drawn straight to the screen.
+Proposed from these results (to confirm):
+- **Keep FemtoVG.** The Skia renderer would cost about 6–10 MB more, and the text doesn't need it.
+- **Composite or direct: still open.** Composite's extra CPU is small, but its extra frame of latency at 60 Hz matters for games. Before choosing, find where it comes from (likely when the scene redraws relative to vsync) in the runtime work. If it can't be removed, plain gameplay draws directly and the scene takes over for transitions and menus.
 
-   For each mode, measure the UI-thread time per frame, GPU time per frame, the timing between screen updates, and input latency.
-6. Memory (Specular under 50 MB while a game runs), startup time, text quality from 26 to 160 px, and the cost of glows.
-7. Whether contexts and textures survive sleep.
-
-**Fallbacks:**
-- Text quality: if FemtoVG's text isn't good enough, use the Skia renderer, which costs about 6–10 MB more.
-- Frame cost: if drawing game frames through Slint costs too much, use direct mode during gameplay.
+Found along the way:
+- **Fonts.** TrimUI's stock system has fontconfig but no fonts, and Slint's text layout (fontique) panics in that case. `devices/brick/src/fonts.rs` gives fontconfig one of our fonts. Fontconfig is loaded at runtime, so our own image can leave it out.
+- **Slint's licence** option is GPL-3.0-only, not "or later", so Specular as a whole is GPLv3.
+- **WiFi after waking.** After `sleepnow` restarts WiFi, the WiFi driver can leave the system in a state where every swap waits about two vsyncs (25–50 fps instead of 60), with "miss interrupt" warnings from the XR829. Restarting WiFi again fixes it. Tracked in the repo-wide `ROADMAP.md`.
+- **adb.** The stock adbd kills a session's processes when the session exits. Long or detached runs (such as sleep tests) go over SSH.
 
 ### 3. Skeleton
 
