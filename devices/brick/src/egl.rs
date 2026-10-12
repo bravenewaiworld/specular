@@ -86,6 +86,11 @@ impl EglDisplay {
         Ok(self.libs.egl.make_current(self.display, Some(self.surface), Some(self.surface), Some(self.context))?)
     }
 
+    /// How many vsyncs a swap waits for (1 by default, as `open` sets).
+    pub fn set_swap_interval(&self, interval: egl::Int) -> Result<(), Error> {
+        Ok(self.libs.egl.swap_interval(self.display, interval)?)
+    }
+
     /// Presents the frame; blocks until the next vsync.
     pub fn swap_buffers(&self) -> Result<(), Error> {
         Ok(self.libs.egl.swap_buffers(self.display, self.surface)?)
