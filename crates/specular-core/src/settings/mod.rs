@@ -7,6 +7,7 @@
 //! version) are kept untouched. A stored value of the wrong type or out of range is ignored, as
 //! if absent.
 
+pub mod builtin;
 pub mod store;
 
 use std::collections::HashMap;
@@ -103,6 +104,9 @@ impl Settings {
     pub fn new(decls: Vec<SettingDecl>) -> Self { Self { decls, layers: HashMap::new() } }
 
     fn decl(&self, key: &str) -> Option<&SettingDecl> { self.decls.iter().find(|d| d.key == key) }
+
+    /// The declared key equal to `key`, with the declaration's lifetime.
+    pub fn key(&self, key: &str) -> Option<&'static str> { self.decl(key).map(|d| d.key) }
 
     /// Puts a layer's contents in place (as loaded by `store::load_layer`).
     pub fn set_layer(&mut self, layer: Layer, values: Map<String, Value>) { self.layers.insert(layer, values); }

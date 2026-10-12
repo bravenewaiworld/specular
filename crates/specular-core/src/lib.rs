@@ -2,6 +2,7 @@
 //! hardware. Screens are data (`model`), built by the core and drawn by a fixed set of prefab
 //! components in the UI crate; devices deliver `input::ButtonEvent`s.
 
+pub mod app;
 pub mod device;
 pub mod input;
 pub mod library;
