@@ -25,6 +25,8 @@ pub enum Msg {
     /// A library scan finished.
     Library(Vec<Game>),
     Battery(Battery),
+    /// The device woke from sleep.
+    Woke,
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
 }
@@ -102,6 +104,9 @@ impl App {
     /// Adds a screen (or replaces a built-in one).
     pub fn register(&mut self, id: ScreenId, screen: Box<dyn Screen>) { self.screens.insert(id, screen); }
 
+    /// How many screens deep the user is (1 at home).
+    pub fn depth(&self) -> usize { self.nav.depth() }
+
     /// When the next button repeat is due, so the caller can wake up for it.
     pub fn next_deadline(&self) -> Option<Duration> { self.repeater.next_deadline() }
 
@@ -120,12 +125,18 @@ impl App {
             Msg::Button(e) => self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default(),
             Msg::Tick(now) => self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default(),
             Msg::Library(games) => { self.ctx.games = games; vec![Effect::Redraw(None)] }
+            Msg::Woke => { self.repeater.reset(); vec![] }
             Msg::Battery(b) => { let changed = self.ctx.battery != Some(b); self.ctx.battery = Some(b); if changed { vec![Effect::Redraw(None)] } else { vec![] } }
             Msg::SettingsLoaded(layer, values) => {
                 self.ctx.settings.set_layer(layer, values);
                 let dev = self.ctx.settings.get(crate::settings::builtin::DEVELOPER_DETAILS, &Layer::Global).is_some_and(|(v, _)| v == &true);
                 self.ctx.visibility = if dev { Visibility::Developer } else { Visibility::User };
-                vec![Effect::Redraw(None)]
+                // Settings the device carries out take effect as soon as they are known.
+                let mut effects = vec![Effect::Redraw(None)];
+                for key in crate::settings::builtin::APPLIED {
+                    if let Some((v, _)) = self.ctx.settings.get(key, &Layer::Global) { effects.push(Effect::Apply { key, value: v.clone() }); }
+                }
+                effects
             }
         }
     }

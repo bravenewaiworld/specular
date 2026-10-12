@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/specular-core", "crates/specular-linux", "devices/brick"]
+members = ["crates/specular-core", "crates/specular-linux", "crates/specular-ui", "devices/brick", "devices/desktop"]
 
 [workspace.package]
 edition = "2024"

@@ -25,6 +25,33 @@ pub fn step(rows: &[Row], focus: usize, delta: isize, repeat: bool) -> usize {
 /// The first focusable row.
 pub fn first(rows: &[Row]) -> Option<usize> { rows.iter().position(|r| r.kind.focusable()) }
 
+/// Heights of rows in a list, in the UI's base unit (1 u = one Brick panel pixel).
+pub const ROW_HEIGHT: f32 = 92.0;
+pub const HEADER_HEIGHT: f32 = 76.0;
+
+/// Where each row of a list sits, and how far the list is scrolled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListLayout {
+    /// Each row's top, from the top of the list (u).
+    pub tops: Vec<f32>,
+    pub heights: Vec<f32>,
+    /// How far the list is scrolled up (u).
+    pub scroll: f32,
+}
+
+/// Lays out `rows` in a view `view_height` u tall so the focused row sits about 40 % of the way
+/// down, without scrolling past either end.
+pub fn layout(rows: &[Row], focus: usize, view_height: f32) -> ListLayout {
+    let heights: Vec<f32> = rows.iter().map(|r| if r.kind.focusable() { ROW_HEIGHT } else { HEADER_HEIGHT }).collect();
+    let tops: Vec<f32> = heights.iter().scan(0.0, |y, h| { let top = *y; *y += h; Some(top) }).collect();
+    let total: f32 = heights.iter().sum();
+    let scroll = match (tops.get(focus), heights.get(focus)) {
+        (Some(top), Some(h)) => (top + h / 2.0 - view_height * 0.4).clamp(0.0, (total - view_height).max(0.0)),
+        _ => 0.0,
+    };
+    ListLayout { tops, heights, scroll }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +91,17 @@ mod tests {
         assert_eq!(step(&rows(), 0, 1, false), 1);
         assert_eq!(first(&rows()), Some(1));
         assert_eq!(step(&[], 0, 1, false), 0);
+    }
+
+    #[test]
+    fn layout_keeps_the_focus_in_view_and_clamps() {
+        let r: Vec<Row> = (0..20).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
+        let l = layout(&r, 0, 500.0);
+        assert_eq!((l.tops[1], l.scroll), (92.0, 0.0));
+        let l = layout(&r, 10, 500.0);
+        assert_eq!(l.scroll, 10.0 * 92.0 + 46.0 - 200.0);
+        let l = layout(&r, 19, 500.0);
+        assert_eq!(l.scroll, 20.0 * 92.0 - 500.0);
+        assert_eq!(layout(&r[..3], 2, 500.0).scroll, 0.0); // short lists don't scroll
     }
 }

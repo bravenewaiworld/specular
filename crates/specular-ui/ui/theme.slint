@@ -1,0 +1,46 @@
+// The Light Bar look (see specular/design/README.md). Every size is in u, the device-relative
+// unit: 1 u is one Brick panel pixel, and `u` is the device's ppi / 400, so text keeps the same
+// physical size on every screen. Colours, sizes and timings are defined here and nowhere else.
+
+import "../../../assets/fonts/Geist.ttf";
+import "../../../assets/fonts/GeistMono.ttf";
+
+export global Theme {
+    in property <float> u: 1;
+    // The user's accent, and the light bar's tint (the accent, or the current system's colour).
+    in property <color> accent: #2ec4b6;
+    in property <color> tint: #2ec4b6;
+
+    out property <color> bg: #08090a;
+    out property <color> surface: #141518;
+    out property <color> raised: #202226;
+    out property <color> fg: #f2f2f2;
+    out property <color> dim: #8a8f96;
+    out property <color> faint: #3a3d42;
+    // The 2 u highlight along a raised surface's top edge, like light on a machined chamfer.
+    out property <color> edge: #ffffff21;
+
+    out property <string> sans: "Geist";
+    out property <string> mono: "Geist Mono";
+
+    out property <length> title: 64px * u;
+    out property <length> body: 42px * u;
+    out property <length> secondary: 33px * u;
+    out property <length> caption: 27px * u;
+    out property <length> gutter: 48px * u;
+    out property <length> line: 2px * u;
+    out property <length> radius: 12px * u;
+    out property <length> status-bar: 72px * u;
+    out property <length> hint-bar: 76px * u;
+    out property <length> title-area: 108px * u;
+}
+
+export global Motion {
+    // Focus moves with a slight overshoot; scrolling and screen changes decelerate.
+    out property <duration> focus: 220ms;
+    out property <easing> focus-easing: cubic-bezier(0.3, 1.4, 0.5, 1);
+    out property <duration> scroll: 280ms;
+    out property <duration> screen: 260ms;
+    out property <easing> decelerate: cubic-bezier(0.2, 0, 0, 1);
+    out property <duration> fade: 160ms;
+}

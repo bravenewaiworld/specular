@@ -12,10 +12,8 @@ libc = "0.2"
 libloading = "0.8"
 specular-core = { path = "../../crates/specular-core" }
 specular-linux = { path = "../../crates/specular-linux" }
+specular-ui = { path = "../../crates/specular-ui" }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
-# Slint's text layout (fontique) uses fontconfig for system fonts; load it at runtime, if present,
-# instead of linking it, since Specular ships its own fonts. Must match the fontique Slint uses.
-fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
 
 [dev-dependencies]
 glow = "0.18"

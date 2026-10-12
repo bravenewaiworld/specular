@@ -8,6 +8,10 @@ use super::{Layer, SettingDecl, SettingKind, Visibility};
 /// Shows the settings and details meant for developers.
 pub const DEVELOPER_DETAILS: &str = "ui.developer_details";
 
+/// Settings the device carries out (the rest only change what Specular does), applied as soon as
+/// the settings are loaded and whenever they change.
+pub const APPLIED: [&str; 2] = ["display.brightness", "lights.brightness"];
+
 /// Any game may override these (its deepest layer).
 fn game() -> Layer { Layer::Game { system: String::new(), game: String::new() } }
 

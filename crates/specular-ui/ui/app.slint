@@ -1,0 +1,201 @@
+// Specular's window: status bar, the current screen as a list of rows, and the hint bar. The
+// core decides what rows there are and where they sit; this file only draws and animates them.
+
+import { Theme, Motion } from "theme.slint";
+export { Theme }
+
+// One row, ready to draw. `kind`: 0 header, 1 text, 2 image, 3 toggle, 4 choice, 5 number,
+// 6 action.
+export struct RowData {
+    kind: int,
+    label: string,
+    // Right-aligned text: a count, the choice or number shown, an action's value.
+    value: string,
+    on: bool,
+    // A number's position in its range, 0–1, for its gauge.
+    fraction: float,
+    enabled: bool,
+    overridden: bool,
+    // From the core's list layout, in u.
+    top: float,
+    height: float,
+}
+
+export struct Hint { button: string, label: string }
+
+// The focus plate: sharp top corners, rounded bottom ones (like the device's case), a chamfer
+// highlight along the top and the accent along its left edge.
+component FocusPlate inherits Rectangle {
+    background: Theme.raised;
+    border-bottom-left-radius: Theme.radius;
+    border-bottom-right-radius: Theme.radius;
+    Rectangle { y: 0; height: Theme.line; background: Theme.edge; }
+    Rectangle {
+        x: 0; y: 18px * Theme.u; width: 4px * Theme.u; height: parent.height - 36px * Theme.u;
+        background: Theme.accent;
+        drop-shadow-blur: 12px * Theme.u;
+        drop-shadow-color: Theme.accent.with-alpha(0.7);
+    }
+}
+
+component Toggle inherits Rectangle {
+    in property <bool> on;
+    width: 80px * Theme.u; height: 42px * Theme.u;
+    border-radius: self.height / 2;
+    background: on ? Theme.accent.mix(Theme.raised, 0.38) : Theme.faint;
+    animate background { duration: Motion.fade; }
+    Rectangle {
+        width: 32px * Theme.u; height: self.width; y: 5px * Theme.u;
+        x: on ? parent.width - self.width - 5px * Theme.u : 5px * Theme.u;
+        animate x { duration: Motion.focus; easing: Motion.focus-easing; }
+        border-radius: self.width / 2;
+        background: on ? Theme.fg : Theme.dim;
+    }
+}
+
+component Gauge inherits Rectangle {
+    in property <float> fraction;
+    in property <bool> focused;
+    width: 200px * Theme.u; height: 8px * Theme.u;
+    background: Theme.faint;
+    border-bottom-left-radius: 4px * Theme.u; border-bottom-right-radius: 4px * Theme.u;
+    clip: true;
+    Rectangle {
+        x: 0; height: parent.height; width: parent.width * fraction;
+        animate width { duration: Motion.focus; easing: Motion.focus-easing; }
+        background: focused ? Theme.accent : Theme.fg;
+    }
+}
+
+component RowView inherits Rectangle {
+    in property <RowData> data;
+    in property <bool> focused;
+    y: data.top * 1px * Theme.u;
+    height: data.height * 1px * Theme.u;
+    opacity: data.enabled ? 1 : 0.4;
+
+    if data.kind == 0 : Text {
+        x: Theme.gutter; y: parent.height - self.height - 12px * Theme.u;
+        text: data.label; font-size: Theme.caption; font-weight: 500; color: Theme.dim;
+    }
+    if data.kind != 0 : HorizontalLayout {
+        padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 20px * Theme.u;
+        Text {
+            text: data.label; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+            font-size: Theme.body; font-weight: focused ? 500 : 400;
+            color: focused ? Theme.fg : Theme.dim;
+            animate color { duration: Motion.fade; }
+        }
+        if data.overridden : Rectangle {
+            width: 10px * Theme.u; height: self.width; border-radius: self.width / 2; y: (parent.height - self.height) / 2;
+            background: Theme.accent;
+        }
+        if data.kind == 5 : Gauge { fraction: data.fraction; focused: focused; y: (parent.height - self.height) / 2; }
+        if data.kind == 3 : Toggle { on: data.on; y: (parent.height - self.height) / 2; }
+        if data.kind != 3 && data.value != "" : Text {
+            text: (data.kind == 4 && focused ? "‹  " : "") + data.value + (data.kind == 4 && focused ? "  ›" : "");
+            vertical-alignment: center; font-family: Theme.mono; font-size: Theme.secondary;
+            color: focused ? Theme.fg : Theme.dim;
+        }
+        if data.kind == 6 : Text { text: "›"; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.secondary; color: Theme.dim; }
+    }
+}
+
+component StatusBar inherits Rectangle {
+    in property <string> crumb;
+    in property <string> clock;
+    in property <string> battery;
+    height: Theme.status-bar;
+    HorizontalLayout {
+        padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 22px * Theme.u;
+        Text { text: crumb; vertical-alignment: center; horizontal-stretch: 1; font-size: Theme.caption; font-weight: 500; color: Theme.dim; overflow: elide; }
+        Text { text: battery; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.caption; color: Theme.dim; }
+        Text { text: clock; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.caption; color: Theme.dim; }
+    }
+}
+
+component HintBar inherits Rectangle {
+    in property <[Hint]> hints;
+    height: Theme.hint-bar;
+    HorizontalLayout {
+        alignment: end; padding-right: Theme.gutter; spacing: 34px * Theme.u;
+        for h in hints : HorizontalLayout {
+            spacing: 12px * Theme.u;
+            Rectangle {
+                width: max(40px * Theme.u, label.preferred-width + 16px * Theme.u); height: 40px * Theme.u;
+                y: (parent.height - self.height) / 2;
+                border-radius: self.height / 2; background: Theme.raised;
+                label := Text { text: h.button; font-size: 22px * Theme.u; font-weight: 600; color: Theme.fg; }
+            }
+            Text { text: h.label; vertical-alignment: center; font-size: Theme.caption; font-weight: 500; color: Theme.dim; }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    in property <string> screen-title;
+    in property <string> crumb;
+    in property <[RowData]> rows;
+    in property <int> focused-row;
+    // The focus plate and scroll offset, in u (from the core's list layout).
+    in property <float> plate-top;
+    in property <float> plate-height: 92;
+    in property <float> scroll;
+    in property <[Hint]> hints;
+    in property <string> clock;
+    in property <string> battery;
+    // A screen change: the new screen slides in from `shift` (u) as `fade` goes to 1. Rust sets
+    // these with `animating` false (an instant jump), then again with it true.
+    in property <float> shift;
+    in property <float> fade: 1;
+    in property <bool> animating;
+    // Desktop: a key pressed or released (its text, as Slint reports it).
+    callback key(string, bool) -> bool;
+
+    background: Theme.bg;
+    default-font-family: Theme.sans;
+    forward-focus: keys;
+
+    keys := FocusScope {
+        key-pressed(event) => { root.key(event.text, true) ? accept : reject }
+        key-released(event) => { root.key(event.text, false) ? accept : reject }
+    }
+
+    // The light bar along the top edge, glowing in the current tint.
+    Rectangle {
+        y: 0; height: 3px * Theme.u; background: Theme.tint;
+        animate background { duration: 350ms; }
+        drop-shadow-blur: 18px * Theme.u; drop-shadow-color: Theme.tint.with-alpha(0.45);
+    }
+    StatusBar { y: 0; width: root.width; crumb: root.crumb; clock: root.clock; battery: root.battery; }
+
+    content := Rectangle {
+        y: Theme.status-bar; height: root.height - Theme.status-bar - Theme.hint-bar;
+        x: root.shift * 1px * Theme.u;
+        opacity: root.fade;
+        animate x, opacity { duration: root.animating ? Motion.screen : 0ms; easing: Motion.decelerate; }
+        Text {
+            x: Theme.gutter; y: 18px * Theme.u; width: parent.width - 2 * Theme.gutter;
+            text: root.screen-title; font-size: Theme.title; font-weight: 600; letter-spacing: -0.02 * Theme.title; color: Theme.fg; overflow: elide;
+        }
+        list := Rectangle {
+            y: Theme.title-area; height: parent.height - Theme.title-area;
+            clip: true;
+            track := Rectangle {
+                y: -root.scroll * 1px * Theme.u;
+                animate y { duration: Motion.scroll; easing: Motion.decelerate; }
+                FocusPlate {
+                    x: Theme.gutter - 20px * Theme.u; width: root.width - 2 * (Theme.gutter - 20px * Theme.u);
+                    y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
+                    animate y, height { duration: Motion.focus; easing: Motion.focus-easing; }
+                }
+                for row[i] in root.rows : RowView { data: row; focused: i == root.focused-row; width: root.width; }
+            }
+            // Soft edges where rows scroll under the title and the hint bar.
+            Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+            Rectangle { y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+        }
+    }
+
+    HintBar { y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
+}
