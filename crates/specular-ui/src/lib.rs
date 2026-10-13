@@ -99,6 +99,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         picture_timer: slint::Timer::default(),
         toast_timer: slint::Timer::default(),
         volume_timer: slint::Timer::default(),
+        stats_timer: slint::Timer::default(),
         art_worker,
         art_loader,
         on_screen: RefCell::default(),
@@ -235,6 +236,8 @@ struct Runner {
     picture_timer: slint::Timer,
     toast_timer: slint::Timer,
     volume_timer: slint::Timer,
+    /// Updates the frame statistics each second while they are on.
+    stats_timer: slint::Timer,
     art_worker: mpsc::Sender<art::ArtCmd>,
     art_loader: mpsc::Sender<Vec<PathBuf>>,
     /// What the art worker and loader were last told (less the pictures loaded since), so
@@ -259,6 +262,7 @@ impl Runner {
         // While a game is played, its buttons go straight to it.
         if let Msg::Button(e) = &msg && game::for_game(e.button) && self.app.borrow().input_target() == InputTarget::Game {
             if let Some(p) = self.playing.borrow().as_ref() { p.button(e); }
+            self.app.borrow_mut().note_input(e.time);
             return;
         }
         match &msg {
@@ -324,6 +328,25 @@ impl Runner {
             Ok(done) => self.toast(done),
             Err(e) => { eprintln!("game: {e}"); self.toast(&format!("That didn't work: {e}")); }
         }
+    }
+
+    /// Starts or stops the frame statistics shown over games.
+    fn show_frame_stats(&self, on: bool) {
+        let Some(w) = self.window.upgrade() else { return };
+        w.set_stats(Default::default());
+        if !on { self.stats_timer.stop(); return; }
+        let mut last = 0;
+        self.stats_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
+            let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+            let Some(w) = r.window.upgrade() else { return };
+            let text = r.playing.borrow().as_ref().map(|p| {
+                let s = p.session.stats();
+                let fps = s.frames.saturating_sub(last);
+                last = s.frames;
+                format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3)
+            });
+            w.set_stats(text.unwrap_or_default().into());
+        });
     }
 
     /// Shows `text` for a moment.
@@ -394,6 +417,7 @@ impl Runner {
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
             builtin::VOLUME => HwCmd::Volume(level as u8),
+            builtin::FRAME_STATS => { self.show_frame_stats(value.as_bool().unwrap_or(false)); return; }
             builtin::SCALING => {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
                 return;
@@ -571,7 +595,9 @@ impl Runner {
     }
 
     /// Shows the time, and wakes again at the start of the next minute (not every second).
+    /// Also tells the app the time each minute (for "Sleep after").
     fn tick_clock(self: &Rc<Self>) {
+        self.handle(Msg::Tick(now()));
         let mut next = Duration::from_secs(60);
         if let (Some(w), Some((h, m, s))) = (self.window.upgrade(), local_time()) {
             w.set_clock(format!("{h:02}:{m:02}").into());

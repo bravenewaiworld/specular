@@ -280,6 +280,8 @@ export component AppWindow inherits Window {
     // volume keys change it.
     in property <float> volume;
     in property <string> volume-text;
+    // Developer frame statistics, shown over a game while not empty.
+    in property <string> stats;
     in property <bool> volume-shown;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
     // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
@@ -315,6 +317,10 @@ export component AppWindow inherits Window {
             x: root.game-x; y: root.game-y; width: root.game-w; height: root.game-h;
             opacity: root.game-shown ? 1 : 0;
             animate opacity { duration: Motion.fade; }
+        }
+        if root.stats != "" : Text {
+            x: 16px * Theme.u; y: 12px * Theme.u;
+            text: root.stats; font-family: Theme.mono; font-size: Theme.caption; color: Theme.accent;
         }
         // Paused: the game dims behind its menu, which sits on a panel down the left.
         if root.game-menu : Rectangle { background: #00000080; }

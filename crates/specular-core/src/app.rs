@@ -22,7 +22,9 @@ use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
 #[derive(Debug)]
 pub enum Msg {
     Button(ButtonEvent),
-    /// The current time, on the clock button times use; due button repeats are generated.
+    /// The current time, on the clock button times use: due button repeats are generated, and
+    /// the device sleeps if it has been left alone for the "Sleep after" time. Sent when a repeat
+    /// is due (`App::next_deadline`) and at least once a minute.
     Tick(Duration),
     /// A library scan finished.
     Library(Vec<Game>),
@@ -75,6 +77,8 @@ pub enum InputTarget {
 pub struct Ctx {
     pub systems: Vec<SystemDecl>,
     pub games: Vec<Game>,
+    /// Whether the library has been scanned yet (until then `games` is empty).
+    pub scanned: bool,
     pub settings: Settings,
     pub battery: Option<Battery>,
 }
@@ -133,6 +137,8 @@ pub struct App {
     screens: HashMap<ScreenId, Box<dyn Screen>>,
     nav: NavStack,
     repeater: Repeater,
+    /// When the buttons were last used (or the clock first seen since waking), for "Sleep after".
+    idle_since: Option<Duration>,
     /// The game being played (whether or not its menu is open).
     playing: Option<Game>,
     /// How many columns a grid has on this display (from the UI; see `list::grid_columns`).
@@ -152,10 +158,11 @@ impl App {
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
         Self {
-            ctx: Ctx { systems, games: Vec::new(), settings: Settings::new(settings), battery: None },
+            ctx: Ctx { systems, games: Vec::new(), scanned: false, settings: Settings::new(settings), battery: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
+            idle_since: None,
             grid_columns: 1,
             playing: None,
             cache: RefCell::default(),
@@ -185,6 +192,22 @@ impl App {
     /// When the next button repeat is due, so the caller can wake up for it.
     pub fn next_deadline(&self) -> Option<Duration> { self.repeater.next_deadline() }
 
+    /// A button was used outside the app (in a game): the device isn't idle.
+    pub fn note_input(&mut self, time: Duration) { self.idle_since = Some(time); }
+
+    /// Sleeps if nothing has been pressed for the "Sleep after" time.
+    fn sleep_if_idle(&mut self, now: Duration) -> Vec<Effect> {
+        let since = *self.idle_since.get_or_insert(now);
+        let after = self.ctx.settings.get(builtin::SLEEP_AFTER, &Layer::Global).and_then(|(v, _)| v.as_str()?.parse::<u64>().ok());
+        match after {
+            Some(minutes) if now.saturating_sub(since) >= Duration::from_secs(minutes * 60) => {
+                self.idle_since = None;
+                vec![Effect::Sleep]
+            }
+            _ => vec![],
+        }
+    }
+
     /// The current screen (built once, then shared until it changes).
     pub fn view(&self) -> Rc<ScreenView> { self.built().0 }
 
@@ -211,12 +234,20 @@ impl App {
     /// Feeds one message; returns the effects the caller must carry out, in order.
     pub fn handle(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
-            Msg::Button(e) => self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default(),
-            Msg::Tick(now) => self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default(),
-            Msg::Library(games) => { self.ctx.games = games; self.changed(); vec![Effect::Redraw(None)] }
+            Msg::Button(e) => {
+                self.idle_since = Some(e.time);
+                self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default()
+            }
+            Msg::Tick(now) => {
+                let mut e = self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default();
+                e.extend(self.sleep_if_idle(now));
+                e
+            }
+            Msg::Library(games) => { self.ctx.games = games; self.ctx.scanned = true; self.changed(); vec![Effect::Redraw(None)] }
             // A game slept through stays paused, with its menu open.
             Msg::Woke => {
                 self.repeater.reset();
+                self.idle_since = None;
                 if self.input_target() == InputTarget::Game { self.open_game_menu() } else { vec![] }
             }
             Msg::GameEnded(why) => {
@@ -340,6 +371,15 @@ impl Screen for Home {
         for s in &ctx.systems {
             let n = ctx.games.iter().filter(|g| g.system == s.id).count();
             if n > 0 { rows.push(Row::new(format!("system:{}", s.id), s.name, RowKind::Text { detail: Some(n.to_string()) })); }
+        }
+        if ctx.games.is_empty() {
+            let note = |id: &str, text: &str| Row { enabled: false, ..Row::new(id, text, RowKind::Text { detail: None }) };
+            if ctx.scanned {
+                rows.push(note("note:none", "No games found"));
+                rows.push(note("note:where", "Put them in roms/ on the SD card"));
+            } else {
+                rows.push(note("note:scanning", "Looking for games…"));
+            }
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));
         rows.push(Row::new("settings", "Settings", RowKind::Action { value: None }));

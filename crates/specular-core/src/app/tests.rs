@@ -172,3 +172,28 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
     for t in 0..30 { tap(&mut a, Button::VolDown, 40 + t); }
     assert_eq!(level(&tap(&mut a, Button::VolDown, 100)), Some(0));
 }
+
+#[test]
+fn sleeps_after_minutes_without_a_press() {
+    let mut a = app(); // the default is 5 minutes
+    let min = |m: u64| Duration::from_secs(m * 60);
+    tap(&mut a, Button::Down, 0);
+    assert_eq!(a.handle(Msg::Tick(min(4))), vec![]);
+    a.note_input(min(4)); // a game's button
+    assert_eq!(a.handle(Msg::Tick(min(8))), vec![]);
+    assert_eq!(a.handle(Msg::Tick(min(9))), vec![Effect::Sleep]);
+    a.handle(Msg::Woke);
+    assert_eq!(a.handle(Msg::Tick(min(10))), vec![]); // counting starts again
+    assert_eq!(a.handle(Msg::Tick(min(15))), vec![Effect::Sleep]);
+}
+
+#[test]
+fn home_says_where_games_go_when_there_are_none() {
+    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let labels = |a: &App| a.view().rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
+    assert!(labels(&a).contains(&"Looking for games…".to_string()));
+    a.handle(Msg::Library(vec![]));
+    assert!(labels(&a).contains(&"No games found".to_string()));
+    assert_eq!(a.view().rows[a.focus()].label, "No games found");
+    assert_eq!(tap(&mut a, Button::A, 0), vec![]); // a note does nothing
+}
