@@ -67,3 +67,23 @@ fn a_missing_core_or_rom_is_an_error() {
     assert!(Session::start(spec(dir.path().join("none.so")), out()).is_err());
     if let Some(core) = mgba() { assert!(Session::start(spec(core), out()).err().unwrap().contains("none.gba")); }
 }
+
+struct Instant0;
+impl Vsync for Instant0 { fn wait(&mut self) -> io::Result<()> { Ok(()) } }
+
+#[test]
+fn the_frame_delay_leaves_room_for_the_slowest_runs_and_the_ui() {
+    let ms = |m: f64| Duration::from_secs_f64(m / 1000.0);
+    let delay_after = |run: f64| {
+        let mut p = Pacer::new(Some(Box::new(Instant0)), 60.0);
+        for _ in 0..60 { p.ran(ms(run)); }
+        p.delay.as_secs_f64() * 1000.0
+    };
+    assert!((delay_after(3.0) - (16.667 - 3.0 - 6.0)).abs() < 0.01);
+    assert_eq!(delay_after(20.0), 0.0); // a slow core starts at once
+    assert!((delay_after(0.1) - 8.333).abs() < 0.01); // never more than half a refresh
+    // Without a vsync there is no delay to set.
+    let mut p = Pacer::new(None, 60.0);
+    for _ in 0..60 { p.ran(ms(1.0)); }
+    assert_eq!(p.delay, Duration::ZERO);
+}
