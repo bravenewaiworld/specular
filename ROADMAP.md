@@ -209,7 +209,7 @@ Long lists (2026-10-12): the core's list layout gives the rows within a screen o
 1. Done: the libretro runtime, in Rust (`specular-runtime`): sound resampled to 48 kHz with the game's speed matched to the display and dynamic rate control, battery saves, save states. The headless player (`play` example) reports a core's time per frame.
 2. Done, to be measured on the Brick: frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Uses `FBIO_WAITFORVSYNC` (in the Brick's kernel since the spike). A camera check of press-to-photon latency is deferred (it needs a camera of at least 240 fps).
 3. 3D-capable cores with a shared GL context.
-4. Per-system cores and defaults: mGBA for GB, GBC and GBA (`tools/build-cores.sh`); NES, SNES, Mega Drive and PS1 have none yet.
+4. Per-system cores and defaults: mGBA for GB, GBC and GBA (`tools/build-cores.sh`). The MVP plays these three (decided 2026-10-13); systems with no core are left out of the library. NES, SNES, Mega Drive and PS1 come after it, each with a licence and speed check: the usual cores are non-commercial (snes9x, Genesis Plus GX, PicoDrive) or possibly GPLv2-only (FCEUmm, PCSX ReARMed); bsnes, BlastEm, QuickNES or Nestopia, and SwanStation are the GPLv3-compatible candidates.
 5. Done: pausing on sleep, writing the battery save first; waking reopens the in-game menu.
 6. Done: battery saves written every 10 s when changed, on quit, on sleep and on a stop signal.
 7. Done: a watchdog: a game that makes no frame for 6 s while not paused makes Specular exit, and the service manager restarts it.

@@ -72,7 +72,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
     window.window().set_size(slint::PhysicalSize::new(profile.width, profile.height));
 
     let (io, io_thread) = io_thread(data.clone());
-    let systems = specular_core::library::builtin_systems();
+    let systems = playable_systems();
     let art_worker = art::worker(data.roms(), data.cache(), systems.clone(), vec![Box::new(art::LibretroThumbnails::new())],
         |rom| on_ui(move |r| r.art_stored(rom)));
     let art_loader = art::loader(data.roms(), data.cache(),
@@ -131,6 +131,12 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
     drop(runner);
     let _ = io_thread.join();
     Ok(())
+}
+
+/// The systems Specular can play: those with a core. Others are left out altogether (their
+/// games aren't listed), so nothing shown fails to start (decided 2026-10-13; see ROADMAP.md).
+fn playable_systems() -> Vec<specular_core::library::SystemDecl> {
+    specular_core::library::builtin_systems().into_iter().filter(|s| s.core.is_some()).collect()
 }
 
 /// Makes SIGTERM (a service manager stopping Specular) and SIGINT (Ctrl-C) end the event loop
@@ -218,7 +224,7 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         let roms = data.roms();
         let saves = data.saves();
         std::thread::spawn(move || {
-            let games = specular_core::library::scan(&roms, &specular_core::library::builtin_systems());
+            let games = specular_core::library::scan(&roms, &playable_systems());
             for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
                 eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
             }
