@@ -74,9 +74,6 @@ pub struct ScreenView {
     pub title: String,
     pub layout: Layout,
     pub rows: Vec<Row>,
-    /// The focused row's index; always a focusable row while there is one. Screens leave it 0
-    /// and the app fills it in.
-    pub focus: usize,
     /// Button hints for the bottom bar. The UI shows only buttons the device has.
     pub hints: Vec<(Button, String)>,
 }

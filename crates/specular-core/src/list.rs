@@ -29,7 +29,8 @@ pub fn first(rows: &[Row]) -> Option<usize> { rows.iter().position(|r| r.kind.fo
 pub const ROW_HEIGHT: f32 = 92.0;
 pub const HEADER_HEIGHT: f32 = 76.0;
 
-/// Where each row of a list sits, and how far the list is scrolled.
+/// Where each row of a list sits, how far the list is scrolled, and which rows are near enough
+/// to the view to be drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListLayout {
     /// Each row's top, from the top of the list (u).
@@ -37,7 +38,14 @@ pub struct ListLayout {
     pub heights: Vec<f32>,
     /// How far the list is scrolled up (u).
     pub scroll: f32,
+    /// The rows within one view height above or below the view: those the UI must have ready
+    /// (the margin covers the scroll animation between two positions).
+    pub visible: std::ops::Range<usize>,
 }
+
+/// How many rows can ever be in `ListLayout::visible` for a view `view_height` u tall: a UI can
+/// keep this many row elements and reuse them.
+pub fn max_visible(view_height: f32) -> usize { (view_height * 3.0 / HEADER_HEIGHT).ceil() as usize + 2 }
 
 /// Lays out `rows` in a view `view_height` u tall so the focused row sits about 40 % of the way
 /// down, without scrolling past either end.
@@ -49,7 +57,10 @@ pub fn layout(rows: &[Row], focus: usize, view_height: f32) -> ListLayout {
         (Some(top), Some(h)) => (top + h / 2.0 - view_height * 0.4).clamp(0.0, (total - view_height).max(0.0)),
         _ => 0.0,
     };
-    ListLayout { tops, heights, scroll }
+    let (from, to) = (scroll - view_height, scroll + 2.0 * view_height);
+    let first = tops.iter().zip(&heights).position(|(t, h)| t + h > from).unwrap_or(rows.len());
+    let end = tops[first..].iter().position(|&t| t >= to).map_or(rows.len(), |n| first + n);
+    ListLayout { tops, heights, scroll, visible: first..end }
 }
 
 #[cfg(test)]
@@ -103,5 +114,17 @@ mod tests {
         let l = layout(&r, 19, 500.0);
         assert_eq!(l.scroll, 20.0 * 92.0 - 500.0);
         assert_eq!(layout(&r[..3], 2, 500.0).scroll, 0.0); // short lists don't scroll
+    }
+
+    #[test]
+    fn visible_rows_cover_the_view_and_a_margin() {
+        let r: Vec<Row> = (0..3000).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
+        let l = layout(&r, 1500, 500.0);
+        let (top, bottom) = (l.scroll, l.scroll + 500.0);
+        let v = l.visible.clone();
+        assert!(l.tops[v.start] <= top - 500.0 + 92.0 && l.tops[v.end - 1] + 92.0 >= bottom + 500.0);
+        assert!(v.len() <= max_visible(500.0));
+        assert_eq!(layout(&r, 0, 500.0).visible.start, 0);
+        assert_eq!(layout(&r, 2999, 500.0).visible.end, 3000);
     }
 }

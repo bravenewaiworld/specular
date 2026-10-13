@@ -185,9 +185,7 @@ Found along the way:
 7. The app with desktop and Brick builds, and a screen for when there's no SD card.
 8. `make specular`; the test card's frontend service switches from `status` to Specular.
 
-Open from the skeleton review:
-- **Long lists:** every row is created as a Slint element, so a system with thousands of games would be slow to open and use too much memory. The core's list layout should also give the range of rows in view, so the UI holds only those (needed before the box-art grid).
-- **Screen building:** each focus move builds the current screen's rows twice (once to move the focus, once to draw). That's fine at today's sizes, but it should be cached once lists get long.
+Long lists (2026-10-12): the core's list layout gives the rows within a screen of the view, and the UI draws them from a fixed set of about 30 reusable row slots (each row keeps its slot while in view), so a list's cost doesn't grow with its length. The app builds a screen's rows once and keeps them until its content changes; a focus move takes about 15 µs (desktop) with 3,000 games. On the Brick, 3,000 games use 22 MB resident (21 MB with none); scrolling continuously at 20 moves a second uses about 47 % of one core at the governor's low clock, mostly drawing.
 
 ### 4. Library and box art
 

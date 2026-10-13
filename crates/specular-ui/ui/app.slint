@@ -7,8 +7,12 @@ export { Theme }
 // What a row is (the core's row kinds; rows with pictures are drawn as text for now).
 export enum Kind { header, text, toggle, choice, number, action }
 
-// One row, ready to draw.
+// One row, ready to draw, in one of the window's row slots (see Runner::refresh).
 export struct RowData {
+    // False for an empty slot.
+    shown: bool,
+    // The row's index in its screen, matched against `focused-row`.
+    index: int,
     kind: Kind,
     label: string,
     // Right-aligned text: a count, the choice or number shown, an action's value.
@@ -72,6 +76,7 @@ component Gauge inherits Rectangle {
 component RowView inherits Rectangle {
     in property <RowData> data;
     in property <bool> focused;
+    visible: data.shown;
     y: data.top * 1px * Theme.u;
     height: data.height * 1px * Theme.u;
     opacity: data.enabled ? 1 : 0.4;
@@ -196,7 +201,7 @@ export component AppWindow inherits Window {
                     y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
                     animate y, height { duration: Motion.focus; easing: Motion.focus-easing; }
                 }
-                for row[i] in root.rows : RowView { data: row; focused: i == root.focused-row; width: root.width; }
+                for row in root.rows : RowView { data: row; focused: row.index == root.focused-row; width: root.width; }
             }
             // Soft edges where rows scroll under the title and the hint bar.
             Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }

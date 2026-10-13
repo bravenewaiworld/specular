@@ -238,34 +238,29 @@ impl Runner {
     fn refresh(&self, t: Option<Transition>) {
         let Some(w) = self.window.upgrade() else { return };
         let app = self.app.borrow();
-        let view = app.view();
-        let layout = list::layout(&view.rows, view.focus, w.get_list_height());
-        let rows: Vec<RowData> = view.rows.iter().zip(layout.tops.iter().zip(&layout.heights)).map(|(r, (&top, &height))| {
-            let (kind, value, on, fraction) = match &r.kind {
-                RowKind::Header => (Kind::Header, String::new(), false, 0.0),
-                RowKind::Text { detail } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
-                RowKind::Image { detail, .. } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
-                RowKind::Toggle { on } => (Kind::Toggle, String::new(), *on, 0.0),
-                RowKind::Choice { options, selected } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
-                RowKind::Number { value, min, max, unit, .. } => (Kind::Number, format!("{value}{unit}"), false, (value - min) as f32 / (max - min).max(1) as f32),
-                RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
-            };
-            RowData { kind, label: r.label.as_str().into(), value: value.into(), on, fraction, enabled: r.enabled, overridden: r.overridden, top, height }
-        }).collect();
-        // Within a screen, replace only rows that changed, so Slint redraws (and animates) only
-        // those. A new screen gets fresh rows, so the old screen's rows don't animate into it.
-        if t.is_none() && self.rows.row_count() == rows.len() {
-            for (i, r) in rows.into_iter().enumerate() { if self.rows.row_data(i).as_ref() != Some(&r) { self.rows.set_row_data(i, r); } }
+        let (view, focus) = (app.view(), app.focus());
+        let layout = list::layout(&view.rows, focus, w.get_list_height());
+        // Rows are drawn from a fixed set of slots, enough for every row near the view; a row
+        // always uses slot `index % slots`, so while the list scrolls a row keeps its slot and
+        // only the slots of rows coming into view change. A new screen gets fresh slots, so the
+        // old screen's rows don't animate into the new one.
+        let slots = list::max_visible(w.get_list_height());
+        let mut wanted = vec![RowData::default(); slots];
+        for i in layout.visible.clone() {
+            wanted[i % slots] = row_data(&view.rows[i], i, layout.tops[i], layout.heights[i]);
+        }
+        if t.is_none() && self.rows.row_count() == slots {
+            for (slot, r) in wanted.into_iter().enumerate() { if self.rows.row_data(slot).as_ref() != Some(&r) { self.rows.set_row_data(slot, r); } }
         } else {
-            self.rows.set_vec(rows);
+            self.rows.set_vec(wanted);
         }
         let hints = self.hints(&view);
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
         w.set_screen_title(view.title.as_str().into());
         w.set_crumb(app.parent_title().unwrap_or_default().into());
-        w.set_focused_row(view.focus as i32);
-        w.set_plate_top(layout.tops.get(view.focus).copied().unwrap_or(0.0));
-        w.set_plate_height(layout.heights.get(view.focus).copied().unwrap_or(list::ROW_HEIGHT));
+        w.set_focused_row(focus as i32);
+        w.set_plate_top(layout.tops.get(focus).copied().unwrap_or(0.0));
+        w.set_plate_height(layout.heights.get(focus).copied().unwrap_or(list::ROW_HEIGHT));
         w.set_scroll(layout.scroll);
         if let Some(b) = app.ctx.battery {
             let pct = b.percent.map_or("–".to_string(), |p| format!("{p}%"));
@@ -292,6 +287,22 @@ impl Runner {
         }
         let me = Rc::downgrade(self);
         self.clock.start(slint::TimerMode::SingleShot, next, move || { if let Some(r) = me.upgrade() { r.tick_clock(); } });
+    }
+}
+
+/// Row `index` of a screen, ready to draw at `top` (u).
+fn row_data(r: &specular_core::model::Row, index: usize, top: f32, height: f32) -> RowData {
+    let (kind, value, on, fraction) = match &r.kind {
+        RowKind::Header => (Kind::Header, String::new(), false, 0.0),
+        RowKind::Text { detail } | RowKind::Image { detail, .. } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
+        RowKind::Toggle { on } => (Kind::Toggle, String::new(), *on, 0.0),
+        RowKind::Choice { options, selected } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
+        RowKind::Number { value, min, max, unit, .. } => (Kind::Number, format!("{value}{unit}"), false, (value - min) as f32 / (max - min).max(1) as f32),
+        RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
+    };
+    RowData {
+        shown: true, index: index as i32, kind, label: r.label.as_str().into(), value: value.into(), on, fraction,
+        enabled: r.enabled, overridden: r.overridden, top, height,
     }
 }
 

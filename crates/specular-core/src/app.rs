@@ -4,7 +4,9 @@
 //! its behaviour is testable.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use crate::device::Battery;
@@ -75,7 +77,8 @@ pub enum Outcome {
 
 /// One kind of screen. Built-in screens implement it; plugins will register their own.
 pub trait Screen {
-    /// The screen's rows. `focus` is filled in by the app (leave it 0).
+    /// The screen's rows. The app caches the result until something may have changed it (a new
+    /// library or settings, or a press the screen handled), so this needn't be cheap.
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView;
     /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, Menu goes
     /// home, Power sleeps). `focused` is the focused row, if the screen has one that can take
@@ -100,6 +103,8 @@ pub struct App {
     screens: HashMap<ScreenId, Box<dyn Screen>>,
     nav: NavStack,
     repeater: Repeater,
+    /// The current screen as last built; None when it must be built again.
+    cache: RefCell<Option<Rc<ScreenView>>>,
 }
 
 impl App {
@@ -115,6 +120,7 @@ impl App {
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
+            cache: RefCell::default(),
         }
     }
 
@@ -130,22 +136,32 @@ impl App {
     /// When the next button repeat is due, so the caller can wake up for it.
     pub fn next_deadline(&self) -> Option<Duration> { self.repeater.next_deadline() }
 
-    /// The current screen, with the focus on a focusable row.
-    pub fn view(&self) -> ScreenView {
-        let state = self.nav.top();
-        let mut v = self.screens[&state.id].view(&self.ctx, state);
-        v.focus = state.focus.as_ref().and_then(|id| v.rows.iter().position(|r| &r.id == id))
-            .filter(|&i| v.rows[i].kind.focusable())
-            .or_else(|| list::first(&v.rows)).unwrap_or(0);
-        v
+    /// The current screen (built once, then shared until it changes).
+    pub fn view(&self) -> Rc<ScreenView> {
+        self.cache.borrow_mut().get_or_insert_with(|| {
+            let state = self.nav.top();
+            Rc::new(self.screens[&state.id].view(&self.ctx, state))
+        }).clone()
     }
+
+    /// The focused row of `view()`: the one the user left the focus on, if it is still there and
+    /// focusable, else the first focusable row (0 if none).
+    pub fn focus(&self) -> usize {
+        let v = self.view();
+        self.nav.top().focus.as_ref().and_then(|id| v.rows.iter().position(|r| &r.id == id))
+            .filter(|&i| v.rows[i].kind.focusable())
+            .or_else(|| list::first(&v.rows)).unwrap_or(0)
+    }
+
+    /// Forgets the built screen, after anything that may change what it shows.
+    fn changed(&self) { self.cache.borrow_mut().take(); }
 
     /// Feeds one message; returns the effects the caller must carry out, in order.
     pub fn handle(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
             Msg::Button(e) => self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default(),
             Msg::Tick(now) => self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default(),
-            Msg::Library(games) => { self.ctx.games = games; vec![Effect::Redraw(None)] }
+            Msg::Library(games) => { self.ctx.games = games; self.changed(); vec![Effect::Redraw(None)] }
             Msg::Woke => { self.repeater.reset(); vec![] }
             Msg::Battery(b) => {
                 let changed = self.ctx.battery != Some(b);
@@ -154,6 +170,7 @@ impl App {
             }
             Msg::SettingsLoaded(layer, values) => {
                 self.ctx.settings.set_layer(layer, values);
+                self.changed();
                 let s = &self.ctx.settings;
                 std::iter::once(Effect::Redraw(None))
                     .chain(s.decls().iter().filter_map(|d| s.get(d.key, &Layer::Global).map(|(v, _)| Effect::Apply { key: d.key, value: v.clone() })))
@@ -163,29 +180,39 @@ impl App {
     }
 
     fn press(&mut self, p: Press) -> Vec<Effect> {
-        let view = self.view();
+        let (view, focus) = (self.view(), self.focus());
         match p.button {
+            // Focus moves change nothing on the screen itself, so its cache stays.
             Button::Up | Button::Down | Button::L1 | Button::R1 => {
                 let delta = match p.button { Button::Up => -1, Button::Down => 1, Button::L1 => -6, _ => 6 };
-                let to = list::step(&view.rows, view.focus, delta, p.repeat);
-                if to == view.focus { return vec![]; }
+                let to = list::step(&view.rows, focus, delta, p.repeat);
+                if to == focus { return vec![]; }
                 self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
                 return vec![Effect::Redraw(None)];
             }
             // (A, B, Menu and Power never repeat.)
-            Button::Menu => return self.nav.home().map(|t| { self.repeater.reset(); vec![Effect::Redraw(Some(t))] }).unwrap_or_default(),
+            Button::Menu => return self.go(|nav| nav.home()),
             Button::Power => return vec![Effect::Sleep],
             _ => {}
         }
-        let focused = view.rows.get(view.focus).filter(|r| r.kind.focusable() && r.enabled);
+        let focused = view.rows.get(focus).filter(|r| r.kind.focusable() && r.enabled);
         let id = self.nav.top().id.clone();
-        match self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p) {
+        let outcome = self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p);
+        match outcome {
             Outcome::None => vec![],
-            Outcome::Changed => vec![Effect::Redraw(None)],
-            Outcome::Push(s) => { self.repeater.reset(); vec![Effect::Redraw(Some(self.nav.push(s)))] }
-            Outcome::Back => self.nav.pop().map(|t| { self.repeater.reset(); vec![Effect::Redraw(Some(t))] }).unwrap_or_default(),
-            Outcome::Effects(e) => e,
+            Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
+            Outcome::Push(s) => self.go(|nav| Some(nav.push(s))),
+            Outcome::Back => self.go(|nav| nav.pop()),
+            Outcome::Effects(e) => { self.changed(); e }
         }
+    }
+
+    /// Changes screen (if `f` does), with a redraw that animates the change.
+    fn go(&mut self, f: impl FnOnce(&mut NavStack) -> Option<Transition>) -> Vec<Effect> {
+        let Some(t) = f(&mut self.nav) else { return vec![] };
+        self.repeater.reset();
+        self.changed();
+        vec![Effect::Redraw(Some(t))]
     }
 }
 
@@ -201,7 +228,7 @@ impl Screen for Home {
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));
         rows.push(Row::new("settings", "Settings", RowKind::Action { value: None }));
-        ScreenView { title: "Library".into(), layout: Layout::List, rows, focus: 0, hints: vec![(Button::A, "Open".into())] }
+        ScreenView { title: "Library".into(), layout: Layout::List, rows, hints: vec![(Button::A, "Open".into())] }
     }
 
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
@@ -223,7 +250,7 @@ impl Screen for Games {
         let title = ctx.systems.iter().find(|s| s.id == system).map_or(system, |s| s.name).to_string();
         let rows = ctx.games.iter().filter(|g| g.system == system)
             .map(|g| Row::new(g.path.to_string_lossy(), &g.title, RowKind::Text { detail: None })).collect();
-        ScreenView { title, layout: Layout::List, rows, focus: 0, hints: vec![(Button::B, "Back".into()), (Button::A, "Play".into())] }
+        ScreenView { title, layout: Layout::List, rows, hints: vec![(Button::B, "Back".into()), (Button::A, "Play".into())] }
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
@@ -242,7 +269,7 @@ struct SettingsScreen;
 impl Screen for SettingsScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         ScreenView {
-            title: "Settings".into(), layout: Layout::List, rows: ctx.settings.rows(&Layer::Global, ctx.visibility()), focus: 0,
+            title: "Settings".into(), layout: Layout::List, rows: ctx.settings.rows(&Layer::Global, ctx.visibility()),
             hints: vec![(Button::B, "Back".into())],
         }
     }

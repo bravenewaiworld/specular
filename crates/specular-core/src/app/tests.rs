@@ -23,14 +23,14 @@ fn tap(app: &mut App, button: Button, t: u64) -> Vec<Effect> {
     e
 }
 
-fn focused(app: &App) -> String { let v = app.view(); v.rows[v.focus].label.clone() }
+fn focused(app: &App) -> String { app.view().rows[app.focus()].label.clone() }
 
 #[test]
 fn home_lists_systems_with_games() {
     let v = app().view();
     let labels: Vec<&str> = v.rows.iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, ["Systems", "Game Boy Advance", "Super Nintendo", "Device", "Settings"]);
-    assert_eq!(v.focus, 1); // the header is skipped
+    assert_eq!(app().focus(), 1); // the header is skipped
 }
 
 #[test]
@@ -95,4 +95,20 @@ fn menu_goes_home_and_power_sleeps() {
     assert_eq!(tap(&mut a, Button::Menu, 10), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(a.view().title, "Library");
     assert_eq!(tap(&mut a, Button::Power, 20), vec![Effect::Sleep]);
+}
+
+/// Not a test: how long a focus move takes with 3,000 games (run with --ignored --nocapture).
+#[test]
+#[ignore]
+fn time_focus_moves_in_a_long_list() {
+    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    a.handle(Msg::Library((0..3000).map(|i| game("snes", &format!("Game {i:04}"))).collect()));
+    tap(&mut a, Button::A, 0);
+    let t = std::time::Instant::now();
+    for i in 0..1000 {
+        tap(&mut a, Button::Down, 10 + i);
+        let (v, f) = (a.view(), a.focus());
+        std::hint::black_box(crate::list::layout(&v.rows, f, 512.0));
+    }
+    println!("per move (press + view + focus + layout): {:?}", t.elapsed() / 1000);
 }
