@@ -231,6 +231,7 @@ Minor or unproven savings, left until profiling shows they matter.
 
 | Where | Observation | Idea |
 |---|---|---|
+| A GBA game's memory | mGBA keeps two copies of a 32 MB ROM while a Pokémon game runs: its own copy of the contents Specular passes, plus a copy-on-write copy once the game writes to the cartridge area (the clock chip). 68 MB for the core and game on desktop (2026-10-13); Specular's own copy is freed after loading | Pass mGBA only the file's path (it can read files itself), so its first copy is a file mapping the kernel can drop: about 32 MB less. Depends on the core's internals, so as a per-core option |
 | Scrolling | Continuous scrolling at 20 moves a second uses about 47 % of one core on the Brick at the governor's low clock, mostly drawing (2026-10-12) | Profile FemtoVG's per-frame cost: text layout cache hits, how many row slots redraw per move, whether off-screen slots still draw |
 
 ## Open questions

@@ -332,8 +332,10 @@ struct Game {
     /// The save file exists but couldn't be loaded yet, because the core had no save memory
     /// then: it must not be overwritten until it is.
     save_pending: bool,
-    /// Kept for the core: it may read the game from here for as long as it runs.
-    _rom: Vec<u8>,
+    /// Kept for the core, which may hold on to the path. (The ROM's contents are freed once the
+    /// core has loaded them: libretro only keeps them valid that long, unless a core asks for
+    /// longer with SET_CONTENT_INFO_OVERRIDE, which Specular refuses; so cores copy what they
+    /// need, and keeping our copy would only double the game's memory.)
     _rom_path: CString,
 }
 
@@ -346,9 +348,10 @@ impl Game {
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
         // A core that reads the file itself gets only its path; others get its contents.
-        let rom = if info.need_fullpath { Vec::new() } else {
-            std::fs::read(&spec.rom).map_err(|e| format!("reading {}: {e}", spec.rom.display()))?
+        let rom = if info.need_fullpath { None } else {
+            Some(MappedFile::open(&spec.rom).map_err(|e| format!("reading {}: {e}", spec.rom.display()))?)
         };
+        let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());
         frontend::install(Some(Frontend {
             buttons, frames, on_frame,
             pixel_format: core::PIXEL_0RGB1555, // libretro's default
@@ -359,8 +362,8 @@ impl Game {
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
-        let game = core::GameInfo { path: rom_path.as_ptr(), data: if rom.is_empty() { std::ptr::null() } else { rom.as_ptr().cast() },
-            size: rom.len(), meta: std::ptr::null() };
+        let game = core::GameInfo { path: rom_path.as_ptr(), data: if rom_data.is_empty() { std::ptr::null() } else { rom_data.as_ptr().cast() },
+            size: rom_data.len(), meta: std::ptr::null() };
         if !unsafe { (core.load_game)(&game) } {
             unsafe { (core.deinit)() };
             frontend::install(None);
@@ -368,7 +371,8 @@ impl Game {
         }
         let mut av = core::AvInfo::default();
         unsafe { (core.get_system_av_info)(&mut av) };
-        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false, _rom: rom, _rom_path: rom_path };
+        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false, _rom_path: rom_path };
+        drop(rom);
         g.read_save();
         Ok(g)
     }
@@ -423,6 +427,31 @@ impl Drop for Game {
         }
         frontend::install(None);
     }
+}
+
+/// A file mapped into memory, read-only: the ROM handed to a core. Unlike a buffer read into
+/// the heap, unmapping it gives the memory straight back (the heap keeps freed large blocks).
+struct MappedFile { ptr: *mut libc::c_void, len: usize }
+
+impl MappedFile {
+    fn open(path: &Path) -> io::Result<Self> {
+        use std::os::fd::AsRawFd;
+        let f = std::fs::File::open(path)?;
+        let len = f.metadata()?.len() as usize;
+        if len == 0 { return Ok(Self { ptr: std::ptr::null_mut(), len: 0 }); }
+        let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_PRIVATE, f.as_raw_fd(), 0) };
+        if ptr == libc::MAP_FAILED { return Err(io::Error::last_os_error()); }
+        Ok(Self { ptr, len })
+    }
+
+    fn bytes(&self) -> &[u8] {
+        if self.len == 0 { return &[]; }
+        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+    }
+}
+
+impl Drop for MappedFile {
+    fn drop(&mut self) { if self.len > 0 { unsafe { libc::munmap(self.ptr, self.len); } } }
 }
 
 /// Writes `data` to `path` so a power cut leaves either the old file or the new one (FAT has no
