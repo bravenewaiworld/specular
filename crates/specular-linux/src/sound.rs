@@ -18,7 +18,6 @@ const SND_PCM_ACCESS_RW_INTERLEAVED: c_int = 3;
 
 /// The libasound functions used, looked up once per output.
 struct Lib {
-    handle: *mut c_void,
     open: unsafe extern "C" fn(*mut *mut c_void, *const c_char, c_int, c_int) -> c_int,
     set_params: unsafe extern "C" fn(*mut c_void, c_int, c_int, c_uint, c_uint, c_int, c_uint) -> c_int,
     get_params: unsafe extern "C" fn(*mut c_void, *mut c_ulong, *mut c_ulong) -> c_int,
@@ -27,21 +26,34 @@ struct Lib {
     recover: unsafe extern "C" fn(*mut c_void, c_int, c_int) -> c_int,
     close: unsafe extern "C" fn(*mut c_void) -> c_int,
     strerror: unsafe extern "C" fn(c_int) -> *const c_char,
+    sw_params_malloc: unsafe extern "C" fn(*mut *mut c_void) -> c_int,
+    sw_params_current: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
+    sw_params_set_start_threshold: unsafe extern "C" fn(*mut c_void, *mut c_void, c_ulong) -> c_int,
+    sw_params: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
+    sw_params_free: unsafe extern "C" fn(*mut c_void),
+    _lib: Library,
+}
+
+/// A library opened with `dlopen`, closed when dropped (so after `Alsa::drop` closes its stream).
+struct Library(*mut c_void);
+
+impl Drop for Library {
+    fn drop(&mut self) { unsafe { libc::dlclose(self.0); } }
 }
 
 impl Lib {
     fn load() -> io::Result<Self> {
         let handle = unsafe { libc::dlopen(c"libasound.so.2".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         if handle.is_null() { return Err(io::Error::other("libasound.so.2 not found")); }
+        let handle = Library(handle);
         let sym = |name: &CStr| {
-            let p = unsafe { libc::dlsym(handle, name.as_ptr()) };
+            let p = unsafe { libc::dlsym(handle.0, name.as_ptr()) };
             if p.is_null() { Err(io::Error::other(format!("libasound has no {name:?}"))) } else { Ok(p) }
         };
         // SAFETY: each symbol is the libasound function of that name, whose C signature matches
         // the field's type.
         unsafe {
             Ok(Self {
-                handle,
                 open: std::mem::transmute(sym(c"snd_pcm_open")?),
                 set_params: std::mem::transmute(sym(c"snd_pcm_set_params")?),
                 get_params: std::mem::transmute(sym(c"snd_pcm_get_params")?),
@@ -50,6 +62,12 @@ impl Lib {
                 recover: std::mem::transmute(sym(c"snd_pcm_recover")?),
                 close: std::mem::transmute(sym(c"snd_pcm_close")?),
                 strerror: std::mem::transmute(sym(c"snd_strerror")?),
+                sw_params_malloc: std::mem::transmute(sym(c"snd_pcm_sw_params_malloc")?),
+                sw_params_current: std::mem::transmute(sym(c"snd_pcm_sw_params_current")?),
+                sw_params_set_start_threshold: std::mem::transmute(sym(c"snd_pcm_sw_params_set_start_threshold")?),
+                sw_params: std::mem::transmute(sym(c"snd_pcm_sw_params")?),
+                sw_params_free: std::mem::transmute(sym(c"snd_pcm_sw_params_free")?),
+                _lib: handle,
             })
         }
     }
@@ -82,7 +100,25 @@ impl Alsa {
         let r = unsafe { (out.lib.get_params)(pcm, &mut buffer, &mut period) };
         if r < 0 { return Err(out.lib.error("get_params", r)); }
         out.capacity = buffer as usize;
+        out.start_at_once()?;
         Ok(out)
+    }
+
+    /// Makes playback start with the first write (by default ALSA waits until the queue is
+    /// full, which would add its whole length to the delay of everything played).
+    fn start_at_once(&mut self) -> io::Result<()> {
+        let lib = &self.lib;
+        let mut sw = std::ptr::null_mut();
+        let r = unsafe { (lib.sw_params_malloc)(&mut sw) };
+        if r < 0 { return Err(lib.error("sw_params_malloc", r)); }
+        let r = unsafe {
+            let mut r = (lib.sw_params_current)(self.pcm, sw);
+            if r >= 0 { r = (lib.sw_params_set_start_threshold)(self.pcm, sw, 1); }
+            if r >= 0 { r = (lib.sw_params)(self.pcm, sw); }
+            (lib.sw_params_free)(sw);
+            r
+        };
+        if r < 0 { Err(lib.error("sw_params", r)) } else { Ok(()) }
     }
 
     /// Recovers from an underrun or a resume after sleep; other errors are returned.
@@ -118,10 +154,5 @@ impl SoundOut for Alsa {
 }
 
 impl Drop for Alsa {
-    fn drop(&mut self) {
-        unsafe {
-            (self.lib.close)(self.pcm);
-            libc::dlclose(self.lib.handle);
-        }
-    }
+    fn drop(&mut self) { unsafe { (self.lib.close)(self.pcm); } }
 }

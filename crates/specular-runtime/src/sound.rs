@@ -29,7 +29,7 @@ impl Resampler {
         if input.is_empty() { return; }
         let step = 1.0 / ratio;
         let at = |i: isize| if i < 0 { self.last } else { input[i as usize] };
-        let mut p = self.position.max(-1.0);
+        let mut p = self.position;
         while p < (input.len() - 1) as f64 {
             let i = p.floor();
             let (a, b, f) = (at(i as isize), at(i as isize + 1), p - i);

@@ -24,13 +24,12 @@ fn cores_dir() -> PathBuf {
     exe.parent().unwrap_or(Path::new(".")).join("cores")
 }
 
-/// The save state slot (one for now).
-pub fn state_path(data: &DataRoot, game: &Game) -> PathBuf { game.save_path(&data.saves(), "state1") }
-
 /// A game being played.
 pub struct Playing {
     pub session: Session,
     pub frames: Arc<FrameSlot>,
+    /// The save state's file (one slot for now).
+    pub state: PathBuf,
     /// The buttons held, as libretro joypad bits.
     held: Cell<u16>,
 }
@@ -59,7 +58,7 @@ impl Playing {
             });
         });
         let out = Outputs { sound, vsync: device.open_vsync(), display_hz: device.profile().refresh_hz, frames: frames.clone(), on_frame };
-        Ok(Self { session: Session::start(spec, out)?, frames, held: Cell::new(0) })
+        Ok(Self { session: Session::start(spec, out)?, frames, state: game.save_path(&data.saves(), "state1"), held: Cell::new(0) })
     }
 
     /// A button for the game.
@@ -70,8 +69,11 @@ impl Playing {
         self.session.set_buttons(held);
     }
 
-    /// Releases every button (when the game's menu opens, so none stays held in the game).
-    pub fn release_all(&self) { self.held.set(0); self.session.set_buttons(0); }
+    /// Pauses or resumes the game. Pausing releases every button, so none stays held in the game.
+    pub fn pause(&self, paused: bool) {
+        if paused { self.held.set(0); self.session.set_buttons(0); }
+        self.session.pause(paused);
+    }
 }
 
 /// Whether `b` goes to the game while it is played (the app keeps Menu, Power and volume).
@@ -87,12 +89,15 @@ pub struct Screen {
 impl Screen {
     /// Before Slint draws: uploads the newest of the game's `frames`, if any, into the texture
     /// (making a new one, and showing it, when the size changes). With no game, frees the
-    /// texture (here, where the GL context is current).
+    /// texture (here, where the GL context is current) and stops showing it.
     pub fn before_render(&mut self, api: &slint::GraphicsAPI, frames: Option<&FrameSlot>, window: &AppWindow) {
         let slint::GraphicsAPI::NativeOpenGL { get_proc_address } = api else { return };
         let gl = self.gl.get_or_insert_with(|| unsafe { glow::Context::from_loader_function_cstr(|n| get_proc_address(n)) });
         let Some(frames) = frames else {
-            if let Some((t, _, _)) = self.texture.take() { unsafe { gl.delete_texture(t) }; }
+            if let Some((t, _, _)) = self.texture.take() {
+                window.set_game_frame(slint::Image::default());
+                unsafe { gl.delete_texture(t) };
+            }
             return;
         };
         let Some(frame) = frames.take() else { return };

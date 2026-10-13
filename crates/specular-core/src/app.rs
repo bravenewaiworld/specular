@@ -55,6 +55,8 @@ pub enum Effect {
     ResetGame,
     /// End the running game (its battery save is written).
     QuitGame,
+    /// Show this short message for a moment.
+    Notice(String),
     Sleep,
 }
 
@@ -63,7 +65,7 @@ pub enum Effect {
 pub enum InputTarget {
     /// The app's screens.
     App,
-    /// The running game: every button but Menu and Power goes to it (the app gets those two).
+    /// The running game: its joypad's buttons go to it; the app keeps Menu, Power and the rest.
     Game,
 }
 
@@ -215,11 +217,11 @@ impl App {
                 self.repeater.reset();
                 if self.input_target() == InputTarget::Game { self.open_game_menu() } else { vec![] }
             }
-            Msg::GameEnded(_) => {
+            Msg::GameEnded(why) => {
                 if self.playing.take().is_none() { return vec![]; }
                 if self.nav.top().id == screens::GAME_MENU { self.nav.pop(); }
                 self.changed();
-                vec![Effect::Redraw(None)]
+                why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
             }
             Msg::Battery(b) => {
                 let changed = self.ctx.battery != Some(b);
@@ -292,23 +294,16 @@ impl App {
     }
 
     /// A press in the in-game menu: B and Menu resume, A does the focused row's action. Every
-    /// action closes the menu.
+    /// action closes the menu, resuming the game unless it was quit.
     fn game_menu(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
-        let action = match (button, row) {
-            (Button::B | Button::Menu, _) | (Button::A, Some("resume")) => None,
-            (Button::A, Some("save")) => Some(Effect::SaveState),
-            (Button::A, Some("load")) => Some(Effect::LoadState),
-            (Button::A, Some("reset")) => Some(Effect::ResetGame),
-            (Button::A, Some("quit")) => {
-                self.playing = None;
-                let mut e = vec![Effect::QuitGame];
-                e.extend(self.go(|nav| nav.pop()));
-                return e;
-            }
+        let mut e = match (button, row) {
+            (Button::B | Button::Menu, _) | (Button::A, Some("resume")) => vec![Effect::PauseGame(false)],
+            (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
+            (Button::A, Some("load")) => vec![Effect::LoadState, Effect::PauseGame(false)],
+            (Button::A, Some("reset")) => vec![Effect::ResetGame, Effect::PauseGame(false)],
+            (Button::A, Some("quit")) => { self.playing = None; vec![Effect::QuitGame] }
             _ => return vec![],
         };
-        let mut e: Vec<Effect> = action.into_iter().collect();
-        e.push(Effect::PauseGame(false));
         e.extend(self.go(|nav| nav.pop()));
         e
     }

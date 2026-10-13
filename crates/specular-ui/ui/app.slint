@@ -235,6 +235,9 @@ export component AppWindow inherits Window {
     property <float> zoom: root.scaling == "integer" ? max(1, floor(root.fit)) : root.fit;
     // The app's screens show unless a game is being played with its menu closed.
     property <bool> screens-shown: !root.playing || root.game-menu;
+    // A short message, shown over everything while `toast-shown`.
+    in property <string> toast;
+    in property <bool> toast-shown;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
     // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
     // change and eases back to 0, sliding the screen in and fading it up.
@@ -325,6 +328,16 @@ export component AppWindow inherits Window {
             width: parent.width - self.x - Theme.gutter;
             CoverView { y: 0; width: min(parent.width, 400px * Theme.u); height: self.width; cover: root.picture; }
         }
+    }
+
+    Rectangle {
+        y: root.height - Theme.hint-bar - self.height - 24px * Theme.u;
+        width: toast-text.preferred-width + 2 * 32px * Theme.u; height: 64px * Theme.u;
+        border-radius: self.height / 2; background: Theme.raised;
+        opacity: root.toast-shown ? 1 : 0;
+        animate opacity { duration: Motion.fade; }
+        Rectangle { y: 0; height: Theme.line; width: parent.width - 2 * parent.border-radius; background: Theme.edge; }
+        toast-text := Text { text: root.toast; font-size: Theme.caption; font-weight: 500; color: Theme.fg; }
     }
 
     HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }

@@ -73,9 +73,16 @@ pub type AudioBatchFn = unsafe extern "C" fn(*const i16, usize) -> usize;
 pub type InputPollFn = unsafe extern "C" fn();
 pub type InputStateFn = unsafe extern "C" fn(c_uint, c_uint, c_uint, c_uint) -> i16;
 
+/// A library opened with `dlopen`, closed when dropped.
+struct Library(*mut c_void);
+
+impl Drop for Library {
+    fn drop(&mut self) { unsafe { libc::dlclose(self.0); } }
+}
+
 /// The functions every libretro core exports.
 pub struct Core {
-    handle: *mut c_void,
+    _lib: Library,
     pub api_version: unsafe extern "C" fn() -> c_uint,
     pub init: unsafe extern "C" fn(),
     pub deinit: unsafe extern "C" fn(),
@@ -107,8 +114,9 @@ impl Core {
             let why = unsafe { CStr::from_ptr(libc::dlerror()) }.to_string_lossy().into_owned();
             return Err(format!("loading {}: {why}", path.display()));
         }
+        let lib = Library(handle);
         let sym = |name: &CStr| {
-            let p = unsafe { libc::dlsym(handle, name.as_ptr()) };
+            let p = unsafe { libc::dlsym(lib.0, name.as_ptr()) };
             if p.is_null() { Err(format!("{} has no {name:?}", path.display())) } else { Ok(p) }
         };
         // SAFETY: each symbol is the libretro function of that name, whose C signature (from
@@ -116,7 +124,6 @@ impl Core {
         let core = unsafe {
             use std::mem::transmute as t;
             Core {
-                handle,
                 api_version: t(sym(c"retro_api_version")?),
                 init: t(sym(c"retro_init")?),
                 deinit: t(sym(c"retro_deinit")?),
@@ -137,6 +144,7 @@ impl Core {
                 unload_game: t(sym(c"retro_unload_game")?),
                 get_memory_data: t(sym(c"retro_get_memory_data")?),
                 get_memory_size: t(sym(c"retro_get_memory_size")?),
+                _lib: lib,
             }
         };
         let version = unsafe { (core.api_version)() };
@@ -150,8 +158,4 @@ impl Core {
         if data.is_null() || size == 0 { return &mut []; }
         unsafe { std::slice::from_raw_parts_mut(data.cast(), size) }
     }
-}
-
-impl Drop for Core {
-    fn drop(&mut self) { unsafe { libc::dlclose(self.handle); } }
 }

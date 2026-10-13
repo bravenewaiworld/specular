@@ -24,8 +24,6 @@ pub struct Frontend {
     pub overrides: HashMap<String, String>,
     pub system_dir: CString,
     pub save_dir: CString,
-    /// Set when the core changes its timing or picture size while running.
-    pub av: Option<AvInfo>,
 }
 
 thread_local! {
@@ -59,6 +57,8 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
 impl Frontend {
     /// Answers one environment call. Calls not listed are refused (false), which libretro cores
     /// must cope with; those accepted without doing anything only tell us things we don't use.
+    /// That includes a change of timing or picture size while running: frames carry their own
+    /// size, and the pacing and sound keep the timing the game started with.
     unsafe fn environment(&mut self, cmd: c_uint, data: *mut c_void) -> bool {
         unsafe {
             match cmd {
@@ -96,13 +96,6 @@ impl Frontend {
                     }
                 }
                 ENV_GET_VARIABLE_UPDATE => { *(data as *mut bool) = false; true }
-                ENV_SET_SYSTEM_AV_INFO => { self.av = Some(*(data as *const AvInfo)); true }
-                ENV_SET_GEOMETRY => {
-                    let mut av = self.av.unwrap_or_default();
-                    av.geometry = *(data as *const Geometry);
-                    self.av = Some(av);
-                    true
-                }
                 ENV_SET_MESSAGE => {
                     let m = &*(data as *const Message);
                     if !m.msg.is_null() { eprintln!("core: {}", CStr::from_ptr(m.msg).to_string_lossy()); }
@@ -110,7 +103,8 @@ impl Frontend {
                 }
                 ENV_GET_INPUT_BITMASKS | ENV_SET_INPUT_DESCRIPTORS | ENV_SET_CONTROLLER_INFO | ENV_SET_MEMORY_MAPS
                 | ENV_SET_SUPPORT_ACHIEVEMENTS | ENV_SET_SUPPORT_NO_GAME | ENV_SET_PERFORMANCE_LEVEL
-                | ENV_SET_CORE_OPTIONS_DISPLAY | ENV_SET_MINIMUM_AUDIO_LATENCY => true,
+                | ENV_SET_CORE_OPTIONS_DISPLAY | ENV_SET_MINIMUM_AUDIO_LATENCY | ENV_SET_SYSTEM_AV_INFO
+                | ENV_SET_GEOMETRY => true,
                 _ => false,
             }
         }
@@ -157,6 +151,7 @@ fn rgb16(p: u16, rgb565: bool) -> [u8; 4] {
 unsafe extern "C" fn audio_sample(left: i16, right: i16) { with(|f| f.samples.push([left, right])); }
 
 unsafe extern "C" fn audio_batch(data: *const i16, frames: usize) -> usize {
+    if data.is_null() { return 0; }
     with(|f| {
         let s = unsafe { std::slice::from_raw_parts(data as *const [i16; 2], frames) };
         f.samples.extend_from_slice(s);

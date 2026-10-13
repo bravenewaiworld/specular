@@ -97,6 +97,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         art: RefCell::default(),
         picture: RefCell::default(),
         picture_timer: slint::Timer::default(),
+        toast_timer: slint::Timer::default(),
         art_worker,
         art_loader,
         on_screen: RefCell::default(),
@@ -230,6 +231,7 @@ struct Runner {
     /// held only once the focus rests (`PICTURE_DELAY`), so held scrolling doesn't load each one.
     picture: RefCell<Option<PathBuf>>,
     picture_timer: slint::Timer,
+    toast_timer: slint::Timer,
     art_worker: mpsc::Sender<art::ArtCmd>,
     art_loader: mpsc::Sender<Vec<PathBuf>>,
     /// What the art worker and loader were last told (less the pictures loaded since), so
@@ -238,6 +240,8 @@ struct Runner {
     requested: RefCell<Vec<PathBuf>>,
 }
 
+/// How long a toast shows.
+const TOAST_TIME: Duration = Duration::from_millis(2500);
 /// While a direction is held, the picture beside the list changes only once the focus has
 /// rested this long.
 const PICTURE_DELAY: Duration = Duration::from_millis(120);
@@ -279,32 +283,42 @@ impl Runner {
             }
             Effect::Apply { key, value } => self.apply_setting(key, &value),
             Effect::Launch(game) => self.launch(&game),
-            Effect::PauseGame(paused) => self.with_game(|p| { if paused { p.release_all(); } p.session.pause(paused); Ok(()) }),
-            Effect::SaveState => {
-                let path = self.app.borrow().playing().map(|g| game::state_path(&self.data, g));
-                self.with_game(|p| path.map_or(Ok(()), |path| p.session.save_state(&path)));
-            }
-            Effect::LoadState => {
-                let path = self.app.borrow().playing().map(|g| game::state_path(&self.data, g)).filter(|p| p.exists());
-                self.with_game(|p| path.map_or(Ok(()), |path| p.session.load_state(&path)));
-            }
-            Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok(()) }),
+            Effect::PauseGame(paused) => self.with_game(|p| { p.pause(paused); Ok("") }),
+            Effect::SaveState => self.with_game(|p| p.session.save_state(&p.state).map(|()| "State saved")),
+            Effect::LoadState => self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") }),
+            Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok("") }),
+            Effect::Notice(text) => self.toast(&text),
             Effect::QuitGame => {
+                // (The game's texture is freed, and stops being shown, at the next draw.)
                 if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
-                if let Some(w) = self.window.upgrade() { w.set_game_frame(slint::Image::default()); }
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
             }
             Effect::Sleep => {
                 // A game's battery save is written first: power can fail while asleep.
-                self.with_game(|p| { p.release_all(); p.session.pause(true); p.session.flush() });
+                self.with_game(|p| { p.pause(true); p.session.flush().map(|()| "") });
                 let _ = self.hardware.send(HwCmd::Sleep);
             }
         }
     }
 
-    /// Runs `f` on the game being played, if any, reporting its error.
-    fn with_game(&self, f: impl FnOnce(&game::Playing) -> std::io::Result<()>) {
-        if let Some(p) = self.playing.borrow().as_ref() && let Err(e) = f(p) { eprintln!("game: {e}"); }
+    /// Runs `f` on the game being played, if any, and shows what it says (nothing for "") or
+    /// its error.
+    fn with_game(&self, f: impl FnOnce(&game::Playing) -> std::io::Result<&'static str>) {
+        let result = match self.playing.borrow().as_ref() { Some(p) => f(p), None => return };
+        match result {
+            Ok("") => {}
+            Ok(done) => self.toast(done),
+            Err(e) => { eprintln!("game: {e}"); self.toast(&format!("That didn't work: {e}")); }
+        }
+    }
+
+    /// Shows `text` for a moment.
+    fn toast(&self, text: &str) {
+        let Some(w) = self.window.upgrade() else { return };
+        w.set_toast(text.into());
+        w.set_toast_shown(true);
+        let weak = self.window.clone();
+        self.toast_timer.start(slint::TimerMode::SingleShot, TOAST_TIME, move || { if let Some(w) = weak.upgrade() { w.set_toast_shown(false); } });
     }
 
     /// Starts `game`. Art work stops while it runs, and loaded pictures are dropped, to leave the
@@ -321,7 +335,9 @@ impl Runner {
             Err(e) => {
                 eprintln!("game: {e}");
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
-                post(Msg::GameEnded(Some(e)));
+                // At once, not posted: the app already counts the game as playing, and its
+                // empty screen must not be drawn in between.
+                self.handle(Msg::GameEnded(Some(e)));
             }
         }
     }
@@ -408,9 +424,10 @@ impl Runner {
             w.set_shift(if t == Transition::Push { 64.0 } else { -64.0 });
             w.set_transitions(w.get_transitions() + 1);
         }
-        let held = self.repeating.get();
+        let (held, playing) = (self.repeating.get(), app.playing().is_some());
         drop(app);
-        self.update_art(&w, &view, focus, &layout.drawn, held);
+        // A game's screens are hidden or have no art: nothing is loaded for them (see `launch`).
+        if !playing { self.update_art(&w, &view, focus, &layout.drawn, held); }
     }
 
     /// Keeps the art service busy with what is on screen: the worker finds missing art for the

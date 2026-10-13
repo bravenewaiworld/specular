@@ -1,6 +1,7 @@
 //! Specular's game runtime: runs a libretro core on its own thread, paced by the display, with
-//! sound, battery saves and save states. One game runs at a time: libretro's callbacks carry no
-//! context, so a game's state is kept per thread (see `frontend`).
+//! sound, battery saves and save states. libretro's callbacks carry no context, so a game's state
+//! is kept per thread (see `frontend`). One game runs at a time: a core keeps its own state in
+//! globals, and loading its library again gives the same, already loaded, copy.
 //!
 //! Each display refresh, the game's thread waits for the refresh, then a frame delay (the time
 //! the core can be started later and still finish, plus the UI's draw, before the next refresh;
@@ -16,7 +17,7 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -103,6 +104,9 @@ pub fn joypad_bit(b: Button) -> Option<u16> {
     Some(1 << id)
 }
 
+/// Whether a game is running (see `Session::start`).
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
 enum Cmd {
     Pause(bool),
     Reset,
@@ -124,14 +128,20 @@ pub struct Session {
 
 impl Session {
     /// Loads the core and the game, on the game's own thread, and starts it running.
+    /// Fails if another game is running: cores keep their state in globals, so even two
+    /// different games can't share one.
     pub fn start(spec: LaunchSpec, out: Outputs) -> Result<Session, String> {
+        if RUNNING.swap(true, Relaxed) { return Err("another game is running".into()); }
         let (cmds, rx) = mpsc::channel();
-        let buttons = Arc::new(AtomicU16::new(0));
         let (started, ready) = mpsc::channel();
-        let (b, runs) = (buttons.clone(), Arc::new(Mutex::new(Runs::default())));
-        let r = runs.clone();
+        let (buttons, runs) = (Arc::new(AtomicU16::new(0)), Arc::new(Mutex::new(Runs::default())));
+        let (b, r) = (buttons.clone(), runs.clone());
         let thread = std::thread::Builder::new().name("game".into())
-            .spawn(move || game_thread(spec, out, b, r, rx, started)).map_err(|e| e.to_string())?;
+            .spawn(move || {
+                game_thread(spec, out, b, r, rx, started);
+                RUNNING.store(false, Relaxed);
+            })
+            .map_err(|e| { RUNNING.store(false, Relaxed); e.to_string() })?;
         match ready.recv() {
             Ok(Ok(info)) => Ok(Session { cmds, buttons, thread: Some(thread), info, runs }),
             Ok(Err(e)) => { let _ = thread.join(); Err(e) }
@@ -145,8 +155,8 @@ impl Session {
         let runs = self.runs.lock().unwrap();
         let mut sorted: Vec<Duration> = runs.recent.iter().copied().collect();
         sorted.sort();
-        let at = |q: usize| sorted.get(sorted.len() * q / 100).copied().unwrap_or_default();
-        Stats { frames: runs.count, median: at(50), p95: at(95), worst: sorted.last().copied().unwrap_or_default() }
+        let worst = sorted.last().copied().unwrap_or_default();
+        Stats { frames: runs.count, median: percentile(&sorted, 50), p95: percentile(&sorted, 95), worst }
     }
 
     /// The buttons held now, as `joypad_bit`s.
@@ -181,6 +191,9 @@ impl Drop for Session {
     }
 }
 
+/// The `q`th percentile of `sorted` (zero if it is empty).
+fn percentile(sorted: &[Duration], q: usize) -> Duration { sorted.get(sorted.len() * q / 100).copied().unwrap_or_default() }
+
 /// How often the battery save is checked for changes and written.
 const SAVE_INTERVAL: Duration = Duration::from_secs(10);
 /// The UI's time to draw and present a frame once it has it; the frame delay leaves this much.
@@ -193,12 +206,12 @@ struct Pacer {
     next: Instant,
     delay: Duration,
     /// How long the latest runs of the core took.
-    runs: VecDeque<Duration>,
+    runs: Vec<Duration>,
 }
 
 impl Pacer {
     fn new(vsync: Option<Box<dyn Vsync>>, hz: f64) -> Self {
-        Self { vsync, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: VecDeque::new() }
+        Self { vsync, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new() }
     }
 
     /// Waits until the core should run.
@@ -215,15 +228,15 @@ impl Pacer {
         self.next = (self.next + self.period).max(now);
     }
 
-    /// Records how long a run took, and every second sets the frame delay to what the slowest
-    /// runs (the 95th percentile) leave.
+    /// With a vsync, records how long a run took, and every second sets the frame delay to what
+    /// the slowest runs (the 95th percentile) leave.
     fn ran(&mut self, took: Duration) {
-        self.runs.push_back(took);
+        if self.vsync.is_none() { return; }
+        self.runs.push(took);
         if self.runs.len() < 60 { return; }
-        let mut sorted: Vec<Duration> = self.runs.drain(..).collect();
-        sorted.sort();
-        let slow = sorted[sorted.len() * 95 / 100];
-        if self.vsync.is_some() { self.delay = self.period.saturating_sub(slow + UI_TIME).min(self.period / 2); }
+        self.runs.sort();
+        self.delay = self.period.saturating_sub(percentile(&self.runs, 95) + UI_TIME).min(self.period / 2);
+        self.runs.clear();
     }
 }
 
@@ -245,7 +258,12 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
 
     let (mut paused, mut next_save) = (false, Instant::now() + SAVE_INTERVAL);
     loop {
-        let cmd = if paused { cmds.recv().ok() } else { cmds.try_recv().ok() };
+        let cmd = match if paused { cmds.recv().map_err(|_| mpsc::TryRecvError::Disconnected) } else { cmds.try_recv() } {
+            Ok(cmd) => Some(cmd),
+            Err(mpsc::TryRecvError::Empty) => None,
+            // The session is gone without saying quit: save, and end.
+            Err(mpsc::TryRecvError::Disconnected) => { let _ = game.write_save(); return; }
+        };
         if let Some(cmd) = cmd {
             match cmd {
                 Cmd::Pause(p) => paused = p,
@@ -268,9 +286,7 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
             r.recent.push_back(took);
             if r.recent.len() > STATS_FRAMES { r.recent.pop_front(); }
         }
-        let samples = frontend::with(|f| std::mem::take(&mut f.samples)).unwrap_or_default();
-        sound.play(&samples);
-        frontend::with(|f| f.samples = samples);
+        frontend::with(|f| { sound.play(&f.samples); f.samples.clear(); });
         if Instant::now() >= next_save {
             if let Err(e) = game.write_save() { eprintln!("game: battery save: {e}"); }
             next_save = Instant::now() + SAVE_INTERVAL;
@@ -285,6 +301,9 @@ struct Game {
     save: PathBuf,
     /// The battery save as last written (or read), to write only when it changes.
     saved: Vec<u8>,
+    /// The save file exists but couldn't be loaded yet, because the core had no save memory
+    /// then: it must not be overwritten until it is.
+    save_pending: bool,
     /// Kept for the core: it may read the game from here for as long as it runs.
     _rom: Vec<u8>,
     _rom_path: CString,
@@ -295,8 +314,8 @@ impl Game {
         let core = Core::load(&spec.core)?;
         let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string());
         let (system_dir, save_dir, rom_path) = (cstring(&spec.system_dir)?, cstring(spec.save.parent().unwrap_or(Path::new(".")))?, cstring(&spec.rom)?);
-        let mut info = core::SystemInfo { library_name: std::ptr::null(), library_version: std::ptr::null(),
-            valid_extensions: std::ptr::null(), need_fullpath: false, block_extract: false };
+        // SAFETY: null pointers and false are valid values for every field.
+        let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
         // A core that reads the file itself gets only its path; others get its contents.
         let rom = if info.need_fullpath { Vec::new() } else {
@@ -309,7 +328,6 @@ impl Game {
             variables: HashMap::new(),
             overrides: spec.options.iter().cloned().collect(),
             system_dir, save_dir,
-            av: None,
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
@@ -322,7 +340,7 @@ impl Game {
         }
         let mut av = core::AvInfo::default();
         unsafe { (core.get_system_av_info)(&mut av) };
-        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), _rom: rom, _rom_path: rom_path };
+        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false, _rom: rom, _rom_path: rom_path };
         g.read_save();
         Ok(g)
     }
@@ -331,6 +349,7 @@ impl Game {
     fn read_save(&mut self) {
         let Ok(data) = std::fs::read(&self.save) else { return };
         let ram = self.core.save_ram();
+        self.save_pending = ram.is_empty();
         let n = ram.len().min(data.len());
         ram[..n].copy_from_slice(&data[..n]);
         if data.len() != ram.len() { eprintln!("game: {} is {} bytes, the game's save memory {}", self.save.display(), data.len(), ram.len()); }
@@ -340,6 +359,8 @@ impl Game {
     /// Writes the battery save if it changed since last written. The size is read each time:
     /// some cores (mGBA) only know it once the game has used its save memory.
     fn write_save(&mut self) -> io::Result<()> {
+        // A core that only now has save memory gets the file first.
+        if self.save_pending { self.read_save(); return Ok(()); }
         let ram = self.core.save_ram();
         if ram.is_empty() || ram == self.saved.as_slice() { return Ok(()); }
         let data = ram.to_vec();
