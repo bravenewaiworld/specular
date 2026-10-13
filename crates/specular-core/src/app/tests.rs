@@ -73,7 +73,7 @@ fn settings_change_and_save() {
     // loading settings applies every global one
     let loaded = a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::new()));
     assert!(loaded.contains(&Effect::Apply { key: "lights.brightness", value: json!(3) }));
-    assert_eq!(a.ctx.settings.layer(&Layer::Global).get("display.brightness"), Some(&json!(7)));
+    assert_eq!(a.ctx().settings.layer(&Layer::Global).get("display.brightness"), Some(&json!(7)));
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn time_focus_moves_in_a_long_list() {
     for i in 0..1000 {
         tap(&mut a, Button::Down, 10 + i);
         let (v, f) = (a.view(), a.focus());
-        std::hint::black_box(crate::list::layout(&v.rows, f, 512.0));
+        std::hint::black_box((crate::list::layout(&v.rows, f, 512.0), a.parent_title()));
     }
-    println!("per move (press + view + focus + layout): {:?}", t.elapsed() / 1000);
+    println!("per move (press, view, focus, layout, breadcrumb; not the UI's drawing): {:?}", t.elapsed() / 1000);
 }

@@ -202,7 +202,7 @@ impl Runner {
         match e {
             Effect::Redraw(t) => self.refresh(t),
             Effect::SaveSettings(layer) => {
-                let values = self.app.borrow().ctx.settings.layer(&layer);
+                let values = self.app.borrow().ctx().settings.layer(&layer);
                 let _ = self.io.send(Save(layer.path(&self.configs), values));
             }
             Effect::Apply { key, value } => self.apply_setting(key, &value),
@@ -245,8 +245,10 @@ impl Runner {
         // only the slots of rows coming into view change. A new screen gets fresh slots, so the
         // old screen's rows don't animate into the new one.
         let slots = list::max_visible(w.get_list_height());
-        let mut wanted = vec![RowData::default(); slots];
-        for i in layout.visible.clone() {
+        debug_assert!(layout.drawn.len() <= slots, "two drawn rows would share a slot");
+        let empty = RowData { index: -1, ..Default::default() };
+        let mut wanted = vec![empty; slots];
+        for i in layout.drawn.clone() {
             wanted[i % slots] = row_data(&view.rows[i], i, layout.tops[i], layout.heights[i]);
         }
         if t.is_none() && self.rows.row_count() == slots {
@@ -261,8 +263,11 @@ impl Runner {
         w.set_focused_row(focus as i32);
         w.set_plate_top(layout.tops.get(focus).copied().unwrap_or(0.0));
         w.set_plate_height(layout.heights.get(focus).copied().unwrap_or(list::ROW_HEIGHT));
+        // Scrolls of more than a view (paging, wrapping from the last row to the first) jump:
+        // animating them would pass rows that aren't drawn.
+        w.set_scroll_jumps((layout.scroll - w.get_scroll()).abs() > w.get_list_height());
         w.set_scroll(layout.scroll);
-        if let Some(b) = app.ctx.battery {
+        if let Some(b) = app.ctx().battery {
             let pct = b.percent.map_or("–".to_string(), |p| format!("{p}%"));
             w.set_battery(if b.charging { format!("{pct} charging") } else { pct }.into());
         }

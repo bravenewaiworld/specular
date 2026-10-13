@@ -38,13 +38,13 @@ pub struct ListLayout {
     pub heights: Vec<f32>,
     /// How far the list is scrolled up (u).
     pub scroll: f32,
-    /// The rows within one view height above or below the view: those the UI must have ready
-    /// (the margin covers the scroll animation between two positions).
-    pub visible: std::ops::Range<usize>,
+    /// The rows to draw: those on screen and within one view height above or below, so a scroll
+    /// animation of up to a view height never shows gaps (the UI jumps for longer scrolls).
+    pub drawn: std::ops::Range<usize>,
 }
 
-/// How many rows can ever be in `ListLayout::visible` for a view `view_height` u tall: a UI can
-/// keep this many row elements and reuse them.
+/// How many rows can ever be in `ListLayout::drawn` for a view `view_height` u tall, so a UI can
+/// keep this many row elements and reuse them. Assumes no row is shorter than `HEADER_HEIGHT`.
 pub fn max_visible(view_height: f32) -> usize { (view_height * 3.0 / HEADER_HEIGHT).ceil() as usize + 2 }
 
 /// Lays out `rows` in a view `view_height` u tall so the focused row sits about 40 % of the way
@@ -60,7 +60,7 @@ pub fn layout(rows: &[Row], focus: usize, view_height: f32) -> ListLayout {
     let (from, to) = (scroll - view_height, scroll + 2.0 * view_height);
     let first = tops.iter().zip(&heights).position(|(t, h)| t + h > from).unwrap_or(rows.len());
     let end = tops[first..].iter().position(|&t| t >= to).map_or(rows.len(), |n| first + n);
-    ListLayout { tops, heights, scroll, visible: first..end }
+    ListLayout { tops, heights, scroll, drawn: first..end }
 }
 
 #[cfg(test)]
@@ -121,10 +121,10 @@ mod tests {
         let r: Vec<Row> = (0..3000).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
         let l = layout(&r, 1500, 500.0);
         let (top, bottom) = (l.scroll, l.scroll + 500.0);
-        let v = l.visible.clone();
+        let v = l.drawn.clone();
         assert!(l.tops[v.start] <= top - 500.0 + 92.0 && l.tops[v.end - 1] + 92.0 >= bottom + 500.0);
         assert!(v.len() <= max_visible(500.0));
-        assert_eq!(layout(&r, 0, 500.0).visible.start, 0);
-        assert_eq!(layout(&r, 2999, 500.0).visible.end, 3000);
+        assert_eq!(layout(&r, 0, 500.0).drawn.start, 0);
+        assert_eq!(layout(&r, 2999, 500.0).drawn.end, 3000);
     }
 }

@@ -9,7 +9,7 @@ export enum Kind { header, text, toggle, choice, number, action }
 
 // One row, ready to draw, in one of the window's row slots (see Runner::refresh).
 export struct RowData {
-    // False for an empty slot.
+    // False for an empty slot (whose index is -1).
     shown: bool,
     // The row's index in its screen, matched against `focused-row`.
     index: int,
@@ -148,6 +148,8 @@ export component AppWindow inherits Window {
     in property <float> plate-top;
     in property <float> plate-height;
     in property <float> scroll;
+    // Set with each new `scroll`: true makes that change a jump instead of an animation.
+    in property <bool> scroll-jumps;
     in property <[Hint]> hints;
     in property <string> clock;
     in property <string> battery;
@@ -195,7 +197,7 @@ export component AppWindow inherits Window {
             clip: true;
             track := Rectangle {
                 y: -root.scroll * 1px * Theme.u;
-                animate y { duration: Motion.scroll; easing: Motion.decelerate; }
+                animate y { duration: root.scroll-jumps ? 0ms : Motion.scroll; easing: Motion.decelerate; }
                 FocusPlate {
                     x: Theme.gutter - 20px * Theme.u; width: root.width - 2 * (Theme.gutter - 20px * Theme.u);
                     y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;

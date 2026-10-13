@@ -65,7 +65,7 @@ impl Ctx {
 
 /// What a press on a screen leads to.
 pub enum Outcome {
-    /// Nothing changed.
+    /// Nothing on the screen changed (the built screen is kept).
     None,
     /// The screen's content changed; draw it again.
     Changed,
@@ -77,8 +77,10 @@ pub enum Outcome {
 
 /// One kind of screen. Built-in screens implement it; plugins will register their own.
 pub trait Screen {
-    /// The screen's rows. The app caches the result until something may have changed it (a new
-    /// library or settings, or a press the screen handled), so this needn't be cheap.
+    /// The screen's rows. The app builds this once and keeps it until the library, the settings
+    /// or the screen shown change, or a press returns `Changed` or `Effects`; so it needn't be
+    /// cheap, but it may depend only on `ctx.systems`, `ctx.games`, `ctx.settings` and
+    /// `state.params` (not on the battery or the focus).
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView;
     /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, Menu goes
     /// home, Power sleeps). `focused` is the focused row, if the screen has one that can take
@@ -99,12 +101,13 @@ pub fn screen_id(name: impl Into<Cow<'static, str>>) -> ScreenId { ScreenId(name
 
 /// The app's state: the screens, where the user is, and what the screens show.
 pub struct App {
-    pub ctx: Ctx,
+    ctx: Ctx,
     screens: HashMap<ScreenId, Box<dyn Screen>>,
     nav: NavStack,
     repeater: Repeater,
-    /// The current screen as last built; None when it must be built again.
-    cache: RefCell<Option<Rc<ScreenView>>>,
+    /// The current screen as last built, and its parent's title; None when they must be built
+    /// again.
+    cache: RefCell<Option<(Rc<ScreenView>, Option<String>)>>,
 }
 
 impl App {
@@ -125,22 +128,25 @@ impl App {
     }
 
     /// Adds a screen (or replaces a built-in one).
-    pub fn register(&mut self, id: ScreenId, screen: Box<dyn Screen>) { self.screens.insert(id, screen); }
+    pub fn register(&mut self, id: ScreenId, screen: Box<dyn Screen>) { self.screens.insert(id, screen); self.changed(); }
+
+    /// What the screens see (read-only: changes go through messages, so the cache stays right).
+    pub fn ctx(&self) -> &Ctx { &self.ctx }
 
     /// The title of the screen below the current one (for a breadcrumb), if any.
-    pub fn parent_title(&self) -> Option<String> {
-        let parent = self.nav.parent()?;
-        Some(self.screens[&parent.id].view(&self.ctx, parent).title)
-    }
+    pub fn parent_title(&self) -> Option<String> { self.built().1 }
 
     /// When the next button repeat is due, so the caller can wake up for it.
     pub fn next_deadline(&self) -> Option<Duration> { self.repeater.next_deadline() }
 
     /// The current screen (built once, then shared until it changes).
-    pub fn view(&self) -> Rc<ScreenView> {
+    pub fn view(&self) -> Rc<ScreenView> { self.built().0 }
+
+    fn built(&self) -> (Rc<ScreenView>, Option<String>) {
         self.cache.borrow_mut().get_or_insert_with(|| {
             let state = self.nav.top();
-            Rc::new(self.screens[&state.id].view(&self.ctx, state))
+            let parent = self.nav.parent().map(|p| self.screens[&p.id].view(&self.ctx, p).title);
+            (Rc::new(self.screens[&state.id].view(&self.ctx, state)), parent)
         }).clone()
     }
 
