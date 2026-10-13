@@ -1,6 +1,6 @@
-//! Settings files on the SD card: plain JSON objects, written so a power cut can't destroy them.
-//! FAT32 has no journal, so a file is never rewritten in place: the new content goes to
-//! `<file>.tmp`, is flushed, and replaces the file with a rename.
+//! JSON files on the SD card (settings, and indexes in `cache/`), written so a power cut can't
+//! destroy them. FAT32 has no journal, so a file is never rewritten in place: the new content
+//! goes to `<file>.tmp`, is flushed, and replaces the file with a rename.
 
 use std::fs::{self, File};
 use std::io::{self, Write};

@@ -1,6 +1,9 @@
 //! Specular's UI: draws the core's screens with Slint and carries out the app's effects. All
 //! slow work happens off the UI thread: files on an I/O thread (and the library scan on its
-//! own), hardware on a hardware thread; their results come back as messages to the app.
+//! own), hardware on a hardware thread, box art on the art service's threads (`art`); their
+//! results come back as messages to the app, or as calls on the UI thread.
+
+mod art;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -14,7 +17,8 @@ use specular_core::app::{App, Effect, Msg};
 use specular_core::device::{Device, DeviceProfile, Hardware, Rgb};
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::list;
-use specular_core::model::{RowKind, ScreenView};
+use specular_core::list::Rect;
+use specular_core::model::{ImageRef, Layout, Row, RowKind, ScreenView};
 use specular_core::nav::Transition;
 use specular_core::settings::{Layer, builtin, store};
 
@@ -43,6 +47,7 @@ pub struct DataRoot(pub PathBuf);
 impl DataRoot {
     pub fn roms(&self) -> PathBuf { self.0.join("roms") }
     pub fn configs(&self) -> PathBuf { self.0.join("configs") }
+    pub fn cache(&self) -> PathBuf { self.0.join("cache") }
 }
 
 /// Runs Specular on `device` until the event loop ends. `install` sets up the device's platform;
@@ -62,8 +67,13 @@ pub fn run(device: &dyn Device, data: DataRoot, install: Option<InstallPlatform>
     window.window().set_size(slint::PhysicalSize::new(profile.width, profile.height));
 
     let (io, io_thread) = io_thread(data.clone());
+    let systems = specular_core::library::builtin_systems();
+    let art_worker = art::worker(data.roms(), data.cache(), systems.clone(), vec![Box::new(art::LibretroThumbnails::new())],
+        |rom| on_ui(move |r| r.art_stored(rom)));
+    let art_loader = art::loader(data.roms(), data.cache(),
+        |rom, picture| on_ui(move |r| r.art_loaded(rom, picture.map(slint::Image::from_rgba8))));
     let runner = Rc::new(Runner {
-        app: RefCell::new(App::new(specular_core::library::builtin_systems(), builtin::settings())),
+        app: RefCell::new(App::new(systems, builtin::settings())),
         window: window.as_weak(),
         rows: Rc::new(VecModel::default()),
         hints: Rc::new(VecModel::default()),
@@ -74,6 +84,15 @@ pub fn run(device: &dyn Device, data: DataRoot, install: Option<InstallPlatform>
         repeat: slint::Timer::default(),
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
+        shown_layout: Cell::new(None),
+        repeating: Cell::new(false),
+        art: RefCell::default(),
+        picture: RefCell::default(),
+        picture_timer: slint::Timer::default(),
+        art_worker,
+        art_loader,
+        on_screen: RefCell::default(),
+        requested: RefCell::default(),
     });
     window.set_rows(runner.rows.clone().into());
     window.set_hints(runner.hints.clone().into());
@@ -100,12 +119,15 @@ thread_local! {
     static RUNNER: RefCell<Option<Rc<Runner>>> = RefCell::default();
 }
 
-/// Delivers a message to the app on the UI thread, from any thread.
-fn post(msg: Msg) {
+/// Runs `f` with the running UI on the UI thread, from any thread.
+fn on_ui(f: impl FnOnce(&Rc<Runner>) + Send + 'static) {
     let _ = slint::invoke_from_event_loop(move || {
-        if let Some(r) = RUNNER.with(|r| r.borrow().clone()) { r.handle(msg); }
+        if let Some(r) = RUNNER.with(|r| r.borrow().clone()) { f(&r); }
     });
 }
+
+/// Delivers a message to the app on the UI thread, from any thread.
+fn post(msg: Msg) { on_ui(move |r| r.handle(msg)); }
 
 enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Sleep }
 
@@ -181,7 +203,31 @@ struct Runner {
     repeat: slint::Timer,
     clock: slint::Timer,
     ignore_power_until: Cell<Duration>,
+    /// The layout last drawn: a new one gets fresh row slots.
+    shown_layout: Cell<Option<Layout>>,
+    /// Pictures loaded so far, by ROM path: an image, or None if the game has none yet. A game
+    /// not in it hasn't been loaded (or was dropped, see `MAX_PICTURES`).
+    art: RefCell<HashMap<PathBuf, Option<slint::Image>>>,
+    /// Whether the message being handled is a held button's repeat.
+    repeating: Cell<bool>,
+    /// The game whose picture is beside the list. It follows the focus, but while a direction is
+    /// held only once the focus rests (`PICTURE_DELAY`), so held scrolling doesn't load each one.
+    picture: RefCell<Option<PathBuf>>,
+    picture_timer: slint::Timer,
+    art_worker: mpsc::Sender<art::ArtCmd>,
+    art_loader: mpsc::Sender<Vec<PathBuf>>,
+    /// What the art worker and loader were last told (less the pictures loaded since), so
+    /// unchanged lists aren't sent again.
+    on_screen: RefCell<Vec<PathBuf>>,
+    requested: RefCell<Vec<PathBuf>>,
 }
+
+/// While a direction is held, the picture beside the list changes only once the focus has
+/// rested this long.
+const PICTURE_DELAY: Duration = Duration::from_millis(120);
+/// When more than this many pictures are loaded, all but those on screen and the one beside the
+/// list are dropped.
+const MAX_PICTURES: usize = 64;
 
 impl Runner {
     fn handle(self: &Rc<Self>, msg: Msg) {
@@ -191,8 +237,13 @@ impl Runner {
                 self.ignore_power_until.set(now() + WAKE_GRACE);
                 self.tick_clock(); // timers stood still while asleep
             }
+            Msg::Library(games) => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
             _ => {}
         }
+        // The window can be resized (on a desktop), changing how many columns a grid has.
+        if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
+        // Ticks only drive held-button repeats, so a tick's presses are repeats.
+        self.repeating.set(matches!(msg, Msg::Tick(_)));
         let effects = self.app.borrow_mut().handle(msg);
         for e in effects { self.apply(e); }
         self.schedule_repeat();
@@ -239,33 +290,38 @@ impl Runner {
         let Some(w) = self.window.upgrade() else { return };
         let app = self.app.borrow();
         let (view, focus) = (app.view(), app.focus());
-        let layout = list::layout(&view.rows, focus, w.get_list_height());
+        let grid = view.layout == Layout::Grid;
+        w.set_layout(match view.layout { Layout::List => ScreenLayout::List, Layout::ListWithPicture => ScreenLayout::ListWithPicture, Layout::Grid => ScreenLayout::Grid });
+        let (width, height) = (if grid { w.get_grid_width() } else { w.get_list_width() }, w.get_list_height());
+        let layout = list::layout(&view.rows, focus, width, height, grid);
         // Rows are drawn from a fixed set of slots, enough for every row near the view; a row
         // always uses slot `index % slots`, so while the list scrolls a row keeps its slot and
-        // only the slots of rows coming into view change. A new screen gets fresh slots, so the
-        // old screen's rows don't animate into the new one.
-        let slots = list::max_visible(w.get_list_height());
+        // only the slots of rows coming into view change. A new screen or layout gets fresh
+        // slots, so the old one's rows don't animate into the new one.
+        let slots = list::max_drawn(width, height, grid);
         debug_assert!(layout.drawn.len() <= slots, "two drawn rows would share a slot");
         let empty = RowData { index: -1, ..Default::default() };
         let mut wanted = vec![empty; slots];
         for i in layout.drawn.clone() {
-            wanted[i % slots] = row_data(&view.rows[i], i, layout.tops[i], layout.heights[i]);
+            wanted[i % slots] = self.row_data(&view.rows[i], i, layout.rects[i]);
         }
-        if t.is_none() && self.rows.row_count() == slots {
+        if t.is_none() && self.shown_layout.get() == Some(view.layout) && self.rows.row_count() == slots {
             for (slot, r) in wanted.into_iter().enumerate() { if self.rows.row_data(slot).as_ref() != Some(&r) { self.rows.set_row_data(slot, r); } }
         } else {
             self.rows.set_vec(wanted);
         }
+        self.shown_layout.set(Some(view.layout));
         let hints = self.hints(&view);
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
         w.set_screen_title(view.title.as_str().into());
         w.set_crumb(app.parent_title().unwrap_or_default().into());
         w.set_focused_row(focus as i32);
-        w.set_plate_top(layout.tops.get(focus).copied().unwrap_or(0.0));
-        w.set_plate_height(layout.heights.get(focus).copied().unwrap_or(list::ROW_HEIGHT));
+        let plate = layout.rects.get(focus).copied().unwrap_or_default();
+        w.set_plate_top(plate.y);
+        w.set_plate_height(plate.height);
         // Scrolls of more than a view (paging, wrapping from the last row to the first) jump:
         // animating them would pass rows that aren't drawn.
-        w.set_scroll_jumps((layout.scroll - w.get_scroll()).abs() > w.get_list_height());
+        w.set_scroll_jumps((layout.scroll - w.get_scroll()).abs() > height);
         w.set_scroll(layout.scroll);
         if let Some(b) = app.ctx().battery {
             let pct = b.percent.map_or("–".to_string(), |p| format!("{p}%"));
@@ -274,6 +330,101 @@ impl Runner {
         if let Some(t) = t {
             w.set_shift(if t == Transition::Push { 64.0 } else { -64.0 });
             w.set_transitions(w.get_transitions() + 1);
+        }
+        let held = self.repeating.get();
+        drop(app);
+        self.update_art(&w, &view, focus, &layout.drawn, held);
+    }
+
+    /// Keeps the art service busy with what is on screen: the worker finds missing art for the
+    /// rows drawn, and the loader loads the pictures shown (a grid's, nearest the focus first, or
+    /// the one beside the list, which waits for the focus to rest while `held`; see `picture`).
+    fn update_art(&self, w: &AppWindow, view: &ScreenView, focus: usize, drawn: &std::ops::Range<usize>, held: bool) {
+        let rom = |i: usize| view.rows.get(i).and_then(art_of).map(|(_, rom)| rom.clone());
+        let on_screen: Vec<PathBuf> = drawn.clone().filter_map(rom).collect();
+        if *self.on_screen.borrow() != on_screen {
+            let _ = self.art_worker.send(art::ArtCmd::OnScreen(on_screen.clone()));
+            *self.on_screen.borrow_mut() = on_screen;
+        }
+        let wanted: Vec<PathBuf> = match view.layout {
+            Layout::Grid => {
+                let mut near: Vec<usize> = drawn.clone().collect();
+                near.sort_by_key(|&i| i.abs_diff(focus));
+                near.into_iter().filter_map(rom).collect()
+            }
+            Layout::ListWithPicture => {
+                let focused = rom(focus);
+                if focused != *self.picture.borrow() {
+                    if held {
+                        self.picture_timer.start(slint::TimerMode::SingleShot, PICTURE_DELAY, move || {
+                            let focused = focused.clone();
+                            on_ui(move |r| { *r.picture.borrow_mut() = focused; r.refresh(None); });
+                        });
+                    } else {
+                        self.picture_timer.stop();
+                        *self.picture.borrow_mut() = focused;
+                    }
+                }
+                let picture = self.picture.borrow().clone();
+                let row = picture.as_ref().and_then(|p| view.rows.iter().find(|r| art_of(r).is_some_and(|(_, rom)| rom == p)));
+                // A picture still loading leaves the last one up, rather than blinking to nothing.
+                if let Some(cover) = row.map(|r| self.cover(r)) && cover.known { w.set_picture(cover); }
+                picture.into_iter().collect()
+            }
+            Layout::List => vec![],
+        };
+        let art = self.art.borrow();
+        let wanted: Vec<PathBuf> = wanted.into_iter().filter(|p| !art.contains_key(p)).collect();
+        if !wanted.is_empty() && *self.requested.borrow() != wanted {
+            let _ = self.art_loader.send(wanted.clone());
+            *self.requested.borrow_mut() = wanted;
+        }
+    }
+
+    /// A picture arrived from the loader.
+    fn art_loaded(&self, rom: PathBuf, picture: Option<slint::Image>) {
+        self.requested.borrow_mut().retain(|p| p != &rom);
+        let mut art = self.art.borrow_mut();
+        art.insert(rom, picture);
+        if art.len() > MAX_PICTURES {
+            let (on_screen, picture) = (self.on_screen.borrow(), self.picture.borrow());
+            art.retain(|p, _| on_screen.contains(p) || picture.as_ref() == Some(p));
+        }
+        drop(art);
+        self.refresh(None);
+    }
+
+    /// The art worker stored a new picture: load it if it is shown.
+    fn art_stored(&self, rom: PathBuf) {
+        self.art.borrow_mut().remove(&rom);
+        self.refresh(None);
+    }
+
+    /// The cover for a row with a picture: the picture if loaded, else a generated one.
+    fn cover(&self, r: &Row) -> Cover {
+        let Some((system, rom)) = art_of(r) else { return Cover::default() };
+        let known = self.art.borrow().get(rom).cloned();
+        let (top, bottom) = cover_colours(&r.label);
+        Cover {
+            known: known.is_some(), has_art: matches!(known, Some(Some(_))), art: known.flatten().unwrap_or_default(),
+            top, bottom, title: r.label.as_str().into(), system: system.to_uppercase().into(),
+        }
+    }
+
+    /// Row `index` of a screen, ready to draw at `rect` (u).
+    fn row_data(&self, r: &Row, index: usize, rect: Rect) -> RowData {
+        let (kind, value, on, fraction) = match &r.kind {
+            RowKind::Header => (Kind::Header, String::new(), false, 0.0),
+            RowKind::Text { detail } | RowKind::Image { detail, .. } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
+            RowKind::Toggle { on } => (Kind::Toggle, String::new(), *on, 0.0),
+            RowKind::Choice { options, selected } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
+            RowKind::Number { value, min, max, unit, .. } => (Kind::Number, format!("{value}{unit}"), false, (value - min) as f32 / (max - min).max(1) as f32),
+            RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
+        };
+        RowData {
+            shown: true, index: index as i32, kind, label: r.label.as_str().into(), value: value.into(), on, fraction,
+            enabled: r.enabled, overridden: r.overridden, x: rect.x, top: rect.y, width: rect.width, height: rect.height,
+            cover: self.cover(r),
         }
     }
 
@@ -295,20 +446,17 @@ impl Runner {
     }
 }
 
-/// Row `index` of a screen, ready to draw at `top` (u).
-fn row_data(r: &specular_core::model::Row, index: usize, top: f32, height: f32) -> RowData {
-    let (kind, value, on, fraction) = match &r.kind {
-        RowKind::Header => (Kind::Header, String::new(), false, 0.0),
-        RowKind::Text { detail } | RowKind::Image { detail, .. } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
-        RowKind::Toggle { on } => (Kind::Toggle, String::new(), *on, 0.0),
-        RowKind::Choice { options, selected } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
-        RowKind::Number { value, min, max, unit, .. } => (Kind::Number, format!("{value}{unit}"), false, (value - min) as f32 / (max - min).max(1) as f32),
-        RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
-    };
-    RowData {
-        shown: true, index: index as i32, kind, label: r.label.as_str().into(), value: value.into(), on, fraction,
-        enabled: r.enabled, overridden: r.overridden, top, height,
-    }
+/// The system and ROM of a row that shows a game's box art.
+fn art_of(r: &Row) -> Option<(&'static str, &PathBuf)> {
+    match &r.kind { RowKind::Image { image: ImageRef::Art { system, rom }, .. } => Some((system, rom)), _ => None }
+}
+
+/// A generated cover's gradient (top, bottom), from the title, so each game keeps its own.
+fn cover_colours(title: &str) -> (slint::Color, slint::Color) {
+    // FNV-1a: any stable hash will do.
+    let hash = title.bytes().fold(0x811c9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x01000193));
+    let hue = (hash % 360) as f32;
+    (slint::Color::from_hsva(hue, 0.62, 0.493, 1.0), slint::Color::from_hsva(hue + 40.0, 2.0 / 3.0, 0.21, 1.0))
 }
 
 /// The local time (hours, minutes, seconds), or None while the clock is clearly unset (before

@@ -6,7 +6,7 @@
 //! Symbolic links are not followed.
 
 mod names;
-mod zip;
+pub(crate) mod zip;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,19 +23,35 @@ pub struct SystemDecl {
     pub extensions: &'static [&'static str],
     /// Its name in the libretro databases and thumbnail server (e.g. "Nintendo - Game Boy Advance").
     pub libretro_name: &'static str,
+    /// Its games' checksums and names (see `art::GameDb`); empty if there is no table.
+    pub game_db: &'static str,
+    /// Where its ROM header holds a game code that the table lists as a serial: (offset, length).
+    /// Identifies ROMs no checksum matches, such as hacks, which keep their base game's code.
+    pub header_code: Option<(u64, usize)>,
+    /// The size of a header some dumps put before the ROM (such as the 512 bytes that old SNES
+    /// copier devices added), which the table's checksums leave out: skipped when hashing a file
+    /// whose size is that much over a multiple of 1 KiB.
+    pub dump_header: u64,
 }
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,
 /// .chd, .pbp or .m3u; a .bin is only a track of a .cue.
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
-        SystemDecl { id: "gb", name: "Game Boy", extensions: &["gb"], libretro_name: "Nintendo - Game Boy" },
-        SystemDecl { id: "gbc", name: "Game Boy Color", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color" },
-        SystemDecl { id: "gba", name: "Game Boy Advance", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance" },
-        SystemDecl { id: "nes", name: "NES", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System" },
-        SystemDecl { id: "snes", name: "Super Nintendo", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System" },
-        SystemDecl { id: "md", name: "Mega Drive", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis" },
-        SystemDecl { id: "ps1", name: "PlayStation", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation" },
+        SystemDecl { id: "gb", name: "Game Boy", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
+            game_db: include_str!("../../../../data/db/gb.tsv"), header_code: None, dump_header: 0 },
+        SystemDecl { id: "gbc", name: "Game Boy Color", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
+            game_db: include_str!("../../../../data/db/gbc.tsv"), header_code: None, dump_header: 0 },
+        SystemDecl { id: "gba", name: "Game Boy Advance", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
+            game_db: include_str!("../../../../data/db/gba.tsv"), header_code: Some((0xac, 4)), dump_header: 0 },
+        SystemDecl { id: "nes", name: "NES", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
+            game_db: include_str!("../../../../data/db/nes.tsv"), header_code: None, dump_header: 0 },
+        SystemDecl { id: "snes", name: "Super Nintendo", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
+            game_db: include_str!("../../../../data/db/snes.tsv"), header_code: None, dump_header: 512 },
+        SystemDecl { id: "md", name: "Mega Drive", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
+            game_db: include_str!("../../../../data/db/md.tsv"), header_code: None, dump_header: 0 },
+        SystemDecl { id: "ps1", name: "PlayStation", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
+            game_db: "", header_code: None, dump_header: 0 },
     ]
 }
 
@@ -108,7 +124,7 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn extension(p: &Path) -> Option<String> { p.extension()?.to_str().map(str::to_ascii_lowercase) }
+pub(crate) fn extension(p: &Path) -> Option<String> { p.extension()?.to_str().map(str::to_ascii_lowercase) }
 
 /// The system a file belongs to: by its extension, or for a zip, by the first file inside it
 /// with a known extension.
@@ -116,7 +132,7 @@ fn system_of(path: &Path, systems: &[SystemDecl]) -> Option<&'static str> {
     let by_ext = |ext: &str| systems.iter().find(|s| s.extensions.contains(&ext)).map(|s| s.id);
     let ext = extension(path)?;
     if ext == "zip" {
-        return zip::file_names(path).ok()?.iter().find_map(|n| by_ext(&extension(Path::new(n))?));
+        return zip::entries(path).ok()?.iter().find_map(|e| by_ext(&extension(Path::new(&e.name))?));
     }
     by_ext(&ext)
 }
@@ -148,4 +164,4 @@ fn parts_of_other_games(roms: &Path, files: &[PathBuf]) -> HashSet<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

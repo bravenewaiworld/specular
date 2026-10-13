@@ -15,10 +15,13 @@ pub struct ScreenId(pub Cow<'static, str>);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RowId(pub String);
 
-/// A picture for a row (e.g. a game's cached box art), loaded by the UI off its thread. Not drawn
-/// yet: it comes with box art.
+/// A picture for a row, loaded by the UI off its thread.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ImageRef { File(PathBuf) }
+pub enum ImageRef {
+    /// A game's box art, by its system and its ROM's path under `roms/`. The UI's art service
+    /// finds it; while there is none, the UI draws a generated cover.
+    Art { system: &'static str, rom: PathBuf },
+}
 
 /// What a row is, and the value it shows.
 #[derive(Clone, Debug, PartialEq)]
@@ -63,10 +66,15 @@ impl Row {
     }
 }
 
-/// How a screen's rows are arranged. Only lists exist so far; a grid of box art comes with box
-/// art.
+/// How a screen's rows are arranged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Layout { List }
+pub enum Layout {
+    List,
+    /// A list beside the focused row's picture (for rows with one).
+    ListWithPicture,
+    /// Pictures in a grid, each with its label underneath; see `list::grid_columns`.
+    Grid,
+}
 
 /// Everything the UI needs to draw one screen.
 #[derive(Clone, Debug, PartialEq)]

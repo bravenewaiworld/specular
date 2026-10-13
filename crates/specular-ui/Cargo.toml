@@ -10,9 +10,11 @@ publish = false
 # instead of linking it, since Specular ships its own fonts. Must match the fontique Slint uses.
 fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
 libc = "0.2"
+png = "0.18.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 specular-core = { path = "../specular-core" }
+ureq = { version = "3.4.2", default-features = false }
 
 [build-dependencies]
 slint-build = "=1.18.1"

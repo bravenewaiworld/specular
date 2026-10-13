@@ -9,6 +9,8 @@ pub const BRIGHTNESS: &str = "display.brightness";
 pub const LIGHT_BAR: &str = "lights.brightness";
 /// The light bar's brightness steps (0 = off).
 pub const LIGHT_BAR_MAX: i64 = 5;
+/// How a system's games are shown: "list" (beside the focused game's box art) or "grid".
+pub const LIBRARY_VIEW: &str = "library.view";
 /// Shows the settings and details meant for developers.
 pub const DEVELOPER_DETAILS: &str = "ui.developer_details";
 
@@ -22,6 +24,9 @@ pub fn settings() -> Vec<SettingDecl> {
             visibility: Visibility::User, deepest: Scope::Game },
         SettingDecl { key: LIGHT_BAR, section: "Lights", label: "Light bar",
             kind: SettingKind::Int { min: 0, max: LIGHT_BAR_MAX, step: 1, unit: "" }, default: json!(3),
+            visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: LIBRARY_VIEW, section: "Library", label: "Games shown as",
+            kind: SettingKind::Choice(&[("list", "List"), ("grid", "Grid")]), default: json!("list"),
             visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: "power.sleep_after", section: "Power", label: "Sleep after",
             kind: SettingKind::Choice(&[("never", "Never"), ("1", "1 min"), ("3", "3 min"), ("5", "5 min"), ("10", "10 min")]), default: json!("5"),

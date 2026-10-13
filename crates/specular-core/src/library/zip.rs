@@ -1,5 +1,5 @@
 //! Lists the files in a zip without unpacking it, from the directory at the end of the file
-//! (only names are needed, so this is a few kilobytes of reading).
+//! (names and checksums are all that is needed, so this is a few kilobytes of reading).
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -10,8 +10,11 @@ fn u32_at(b: &[u8], i: usize) -> u64 { u32::from_le_bytes([b[i], b[i + 1], b[i +
 
 fn bad() -> io::Error { io::Error::new(io::ErrorKind::InvalidData, "not a zip") }
 
-/// The names of the files in the zip at `path`.
-pub fn file_names(path: &Path) -> io::Result<Vec<String>> {
+/// A file in a zip, and the CRC32 of its uncompressed contents as the directory records it.
+pub struct Entry { pub name: String, pub crc32: u32 }
+
+/// The files in the zip at `path`.
+pub fn entries(path: &Path) -> io::Result<Vec<Entry>> {
     let mut f = File::open(path)?;
     let len = f.seek(SeekFrom::End(0))?;
     // The end-of-directory record: 22 bytes, plus a comment of up to 64 KiB.
@@ -26,13 +29,13 @@ pub fn file_names(path: &Path) -> io::Result<Vec<String>> {
     let mut dir = vec![0; dir_size as usize];
     f.read_exact(&mut dir)?;
     // Central directory entries: 46 fixed bytes, then the name, extra field and comment.
-    let mut names = Vec::with_capacity(count);
+    let mut entries = Vec::with_capacity(count);
     let mut i = 0;
-    while names.len() < count && i + 46 <= dir.len() && dir[i..i + 4] == *b"PK\x01\x02" {
+    while entries.len() < count && i + 46 <= dir.len() && dir[i..i + 4] == *b"PK\x01\x02" {
         let (name_len, extra_len, comment_len) = (u16_at(&dir, i + 28), u16_at(&dir, i + 30), u16_at(&dir, i + 32));
         let name = dir.get(i + 46..i + 46 + name_len).ok_or_else(bad)?;
-        names.push(String::from_utf8_lossy(name).into_owned());
+        entries.push(Entry { name: String::from_utf8_lossy(name).into_owned(), crc32: u32_at(&dir, i + 16) as u32 });
         i += 46 + name_len + extra_len + comment_len;
     }
-    Ok(names)
+    Ok(entries)
 }

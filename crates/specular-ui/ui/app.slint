@@ -1,11 +1,27 @@
-// Specular's window: status bar, the current screen as a list of rows, and the hint bar. The
-// core decides what rows there are and where they sit; this file only draws and animates them.
+// Specular's window: status bar, the current screen as a list or grid of rows, and the hint bar.
+// The core decides what rows there are and where they sit; this file only draws and animates them.
 
 import { Theme, Motion } from "theme.slint";
 export { Theme }
 
-// What a row is (the core's row kinds; rows with pictures are drawn as text for now).
+// What a row is (the core's row kinds; a row with a picture is drawn as text in a list).
 export enum Kind { header, text, toggle, choice, number, action }
+
+// How the screen's rows are arranged (the core's layouts).
+export enum ScreenLayout { list, list-with-picture, grid }
+
+// A game's box art, or what stands in for it.
+export struct Cover {
+    // False until the loader has looked for the picture: a plain square is drawn meanwhile.
+    known: bool,
+    has-art: bool,
+    art: image,
+    // Without art: a generated cover, a gradient between these, with the title and system on it.
+    top: color,
+    bottom: color,
+    title: string,
+    system: string,
+}
 
 // One row, ready to draw, in one of the window's row slots (see Runner::refresh).
 export struct RowData {
@@ -23,8 +39,11 @@ export struct RowData {
     enabled: bool,
     overridden: bool,
     // From the core's list layout, in u.
+    x: float,
     top: float,
+    width: float,
     height: float,
+    cover: Cover,
 }
 
 export struct Hint { button: string, label: string }
@@ -73,10 +92,60 @@ component Gauge inherits Rectangle {
     }
 }
 
+// Box art, fitted into a square with sharp top and rounded bottom corners (the Brick's case;
+// see design/README.md). Without art, a generated cover, with the top-edge highlight of a
+// raised surface.
+component CoverView inherits Rectangle {
+    in property <Cover> cover;
+    border-bottom-left-radius: Theme.radius;
+    border-bottom-right-radius: Theme.radius;
+    clip: true;
+    background: !cover.known ? Theme.surface : cover.has-art ? transparent : @linear-gradient(160deg, cover.top 0%, cover.bottom 100%);
+    if cover.has-art : Image { width: parent.width; height: parent.height; source: cover.art; image-fit: contain; }
+    if cover.known && !cover.has-art : Rectangle {
+        Text {
+            x: parent.width * 0.08; y: parent.width * 0.08;
+            text: cover.system; font-family: Theme.mono; font-size: max(16px * Theme.u, parent.width * 0.05); color: #ffffffb3; letter-spacing: 0.1 * self.font-size;
+        }
+        Text {
+            x: parent.width * 0.08; width: parent.width * 0.84; y: parent.height * 0.92 - self.height;
+            text: cover.title; wrap: word-wrap; font-size: max(22px * Theme.u, parent.width * 0.075); font-weight: 600; color: #ffffffeb;
+        }
+    }
+    if !cover.has-art : Rectangle { y: 0; height: Theme.line; background: #ffffff2e; }
+}
+
+// One cell of a grid: the cover, and the title underneath. The focused cell lifts and gets an
+// accent outline.
+component GridCell inherits Rectangle {
+    in property <RowData> data;
+    in property <bool> focused;
+    visible: data.shown;
+    x: data.x * 1px * Theme.u;
+    y: data.top * 1px * Theme.u - (focused ? 8px * Theme.u : 0);
+    animate y { duration: Motion.focus; easing: Motion.focus-easing; }
+    width: data.width * 1px * Theme.u;
+    height: data.height * 1px * Theme.u;
+    opacity: focused ? 1 : 0.55;
+    animate opacity { duration: Motion.fade; }
+    if focused : Rectangle {
+        width: parent.width + 2 * Theme.line; height: parent.width + 2 * Theme.line; x: -Theme.line; y: -Theme.line;
+        border-bottom-left-radius: Theme.radius + Theme.line; border-bottom-right-radius: Theme.radius + Theme.line;
+        border-width: Theme.line; border-color: Theme.accent;
+    }
+    CoverView { y: 0; width: parent.width; height: parent.width; cover: data.cover; }
+    Text {
+        y: parent.width + 10px * Theme.u; width: parent.width;
+        text: data.label; overflow: elide; font-size: Theme.caption; color: focused ? Theme.fg : Theme.dim;
+    }
+}
+
 component RowView inherits Rectangle {
     in property <RowData> data;
     in property <bool> focused;
     visible: data.shown;
+    x: data.x * 1px * Theme.u;
+    width: data.width * 1px * Theme.u;
     y: data.top * 1px * Theme.u;
     height: data.height * 1px * Theme.u;
     opacity: data.enabled ? 1 : 0.4;
@@ -142,8 +211,11 @@ component HintBar inherits Rectangle {
 export component AppWindow inherits Window {
     in property <string> screen-title;
     in property <string> crumb;
+    in property <ScreenLayout> layout;
     in property <[RowData]> rows;
     in property <int> focused-row;
+    // Beside a list with pictures: the focused row's picture.
+    in property <Cover> picture;
     // The focus plate and scroll offset, in u (from the core's list layout).
     in property <float> plate-top;
     in property <float> plate-height;
@@ -161,8 +233,11 @@ export component AppWindow inherits Window {
     property <float> phase: root.transitions;
     animate phase { duration: Motion.screen; easing: Motion.decelerate; }
     property <float> arriving: min(1, root.transitions - root.phase);
-    // The list's height in u, for the core's list layout.
+    // The area the core lays rows out in, in u: the list's height and width, and a grid's width
+    // (between the gutters).
     out property <float> list-height: list.height / 1px / Theme.u;
+    out property <float> list-width: list.width / 1px / Theme.u;
+    out property <float> grid-width: (root.width - 2 * Theme.gutter) / 1px / Theme.u;
     // Desktop: a key pressed or released (its text, as Slint reports it); returns whether the
     // key was a button.
     callback key(string, bool) -> bool;
@@ -189,25 +264,37 @@ export component AppWindow inherits Window {
         x: root.shift * root.arriving * 1px * Theme.u;
         opacity: 1 - root.arriving;
         Text {
-            x: Theme.gutter; y: 18px * Theme.u; width: parent.width - 2 * Theme.gutter;
+            x: Theme.gutter; y: 18px * Theme.u; width: list.width - 2 * Theme.gutter;
             text: root.screen-title; font-size: Theme.title; font-weight: 600; letter-spacing: -0.02 * Theme.title; color: Theme.fg; overflow: elide;
         }
         list := Rectangle {
-            y: Theme.title-area; height: parent.height - Theme.title-area;
+            x: 0; y: Theme.title-area; height: parent.height - Theme.title-area;
+            width: root.layout == ScreenLayout.list-with-picture ? parent.width * 0.58 : parent.width;
             clip: true;
             track := Rectangle {
+                x: root.layout == ScreenLayout.grid ? Theme.gutter : 0;
                 y: -root.scroll * 1px * Theme.u;
                 animate y { duration: root.scroll-jumps ? 0ms : Motion.scroll; easing: Motion.decelerate; }
-                FocusPlate {
-                    x: Theme.gutter - 20px * Theme.u; width: root.width - 2 * (Theme.gutter - 20px * Theme.u);
-                    y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
-                    animate y, height { duration: Motion.focus; easing: Motion.focus-easing; }
+                if root.layout != ScreenLayout.grid : Rectangle {
+                    FocusPlate {
+                        x: Theme.gutter - 20px * Theme.u; width: list.width - 2 * (Theme.gutter - 20px * Theme.u);
+                        y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
+                        animate y, height { duration: Motion.focus; easing: Motion.focus-easing; }
+                    }
+                    for row in root.rows : RowView { data: row; focused: row.index == root.focused-row; }
                 }
-                for row in root.rows : RowView { data: row; focused: row.index == root.focused-row; width: root.width; }
+                if root.layout == ScreenLayout.grid : Rectangle {
+                    for row in root.rows : GridCell { data: row; focused: row.index == root.focused-row; }
+                }
             }
-            // Soft edges where rows scroll under the title and the hint bar.
-            Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
-            Rectangle { y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+            // Soft edges where list rows scroll under the title and the hint bar.
+            if root.layout != ScreenLayout.grid : Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+            if root.layout != ScreenLayout.grid : Rectangle { y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+        }
+        if root.layout == ScreenLayout.list-with-picture : Rectangle {
+            x: list.width + 16px * Theme.u; y: 24px * Theme.u;
+            width: parent.width - self.x - Theme.gutter;
+            CoverView { y: 0; width: min(parent.width, 400px * Theme.u); height: self.width; cover: root.picture; }
         }
     }
 

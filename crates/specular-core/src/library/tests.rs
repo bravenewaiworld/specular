@@ -9,13 +9,13 @@ fn touch(root: &Path, rel: &str, content: &[u8]) {
     std::fs::write(p, content).unwrap();
 }
 
-/// A minimal stored (uncompressed) zip holding files with these names.
-fn zip_of(names: &[&str]) -> Vec<u8> {
+/// A minimal zip holding files with these names, without contents; file i's checksum is 0x1000 + i.
+pub(crate) fn zip_of(names: &[&str]) -> Vec<u8> {
     let (mut out, mut dir) = (Vec::new(), Vec::new());
-    for n in names {
+    for (i, n) in names.iter().enumerate() {
         let offset = out.len() as u32;
         out.extend(b"PK\x03\x04"); out.extend([0u8; 22]); out.extend((n.len() as u16).to_le_bytes()); out.extend([0u8; 2]); out.extend(n.as_bytes());
-        dir.extend(b"PK\x01\x02"); dir.extend([0u8; 24]); dir.extend((n.len() as u16).to_le_bytes()); dir.extend([0u8; 12]);
+        dir.extend(b"PK\x01\x02"); dir.extend([0u8; 12]); dir.extend((0x1000 + i as u32).to_le_bytes()); dir.extend([0u8; 8]); dir.extend((n.len() as u16).to_le_bytes()); dir.extend([0u8; 12]);
         dir.extend(offset.to_le_bytes()); dir.extend(n.as_bytes());
     }
     let start = out.len() as u32;
@@ -80,5 +80,6 @@ fn reads_zip_directories() {
     let dir = tmp.path();
     let p = dir.join("a.zip");
     std::fs::File::create(&p).unwrap().write_all(&zip_of(&["a.gb", "b.txt"])).unwrap();
-    assert_eq!(zip::file_names(&p).unwrap(), ["a.gb", "b.txt"]);
+    let entries: Vec<(String, u32)> = zip::entries(&p).unwrap().into_iter().map(|e| (e.name, e.crc32)).collect();
+    assert_eq!(entries, [("a.gb".into(), 0x1000), ("b.txt".into(), 0x1001)]);
 }

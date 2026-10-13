@@ -108,7 +108,29 @@ fn time_focus_moves_in_a_long_list() {
     for i in 0..1000 {
         tap(&mut a, Button::Down, 10 + i);
         let (v, f) = (a.view(), a.focus());
-        std::hint::black_box((crate::list::layout(&v.rows, f, 512.0), a.parent_title()));
+        std::hint::black_box((crate::list::layout(&v.rows, f, 1024.0, 512.0, false), a.parent_title()));
     }
     println!("per move (press, view, focus, layout, breadcrumb; not the UI's drawing): {:?}", t.elapsed() / 1000);
+}
+
+#[test]
+fn y_switches_games_to_a_grid_where_left_and_right_move() {
+    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    a.handle(Msg::Library((0..7).map(|i| game("gba", &format!("Game {i}"))).collect()));
+    a.set_grid_columns(3);
+    tap(&mut a, Button::A, 0);
+    assert_eq!(a.view().layout, Layout::ListWithPicture);
+    assert_eq!(tap(&mut a, Button::Y, 10), vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global)]);
+    assert_eq!(a.view().layout, Layout::Grid);
+    tap(&mut a, Button::Right, 20);
+    assert_eq!(focused(&a), "Game 1");
+    tap(&mut a, Button::Down, 30);
+    assert_eq!(focused(&a), "Game 4");
+    tap(&mut a, Button::Down, 40); // a row down from 4 is past the end: stops at the last game
+    assert_eq!(focused(&a), "Game 6");
+    tap(&mut a, Button::Right, 50); // one cell past the end wraps
+    assert_eq!(focused(&a), "Game 0");
+    tap(&mut a, Button::Y, 60);
+    assert_eq!(a.view().layout, Layout::ListWithPicture);
+    assert_eq!(focused(&a), "Game 0");
 }

@@ -13,7 +13,7 @@ use crate::device::Battery;
 use crate::input::{Button, ButtonEvent, Press};
 use crate::library::{Game, SystemDecl};
 use crate::list;
-use crate::model::{Layout, Row, RowKind, ScreenId, ScreenView};
+use crate::model::{ImageRef, Layout, Row, RowKind, ScreenId, ScreenView};
 use crate::nav::{NavStack, ScreenState, Transition};
 use crate::repeat::Repeater;
 use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
@@ -82,9 +82,9 @@ pub trait Screen {
     /// cheap, but it may depend only on `ctx.systems`, `ctx.games`, `ctx.settings` and
     /// `state.params` (not on the battery or the focus).
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView;
-    /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, Menu goes
-    /// home, Power sleeps). `focused` is the focused row, if the screen has one that can take
-    /// presses (never a header or a disabled row).
+    /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, and in a
+    /// grid so do left and right; Menu goes home, Power sleeps). `focused` is the focused row, if
+    /// the screen has one that can take presses (never a header or a disabled row).
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome;
 }
 
@@ -105,6 +105,8 @@ pub struct App {
     screens: HashMap<ScreenId, Box<dyn Screen>>,
     nav: NavStack,
     repeater: Repeater,
+    /// How many columns a grid has on this display (from the UI; see `list::grid_columns`).
+    grid_columns: usize,
     /// The current screen as last built, and its parent's title; None when they must be built
     /// again.
     cache: RefCell<Option<(Rc<ScreenView>, Option<String>)>>,
@@ -123,12 +125,16 @@ impl App {
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
+            grid_columns: 1,
             cache: RefCell::default(),
         }
     }
 
     /// Adds a screen (or replaces a built-in one).
     pub fn register(&mut self, id: ScreenId, screen: Box<dyn Screen>) { self.screens.insert(id, screen); self.changed(); }
+
+    /// Tells the app how many columns the UI's grids have, so up and down move by a whole row.
+    pub fn set_grid_columns(&mut self, n: usize) { self.grid_columns = n.max(1); }
 
     /// What the screens see (read-only: changes go through messages, so the cache stays right).
     pub fn ctx(&self) -> &Ctx { &self.ctx }
@@ -187,15 +193,23 @@ impl App {
 
     fn press(&mut self, p: Press) -> Vec<Effect> {
         let (view, focus) = (self.view(), self.focus());
+        // Focus moves change nothing on the screen itself, so its cache stays. In a grid, left and
+        // right move one cell, up and down a row of cells and the shoulder buttons two rows; in a
+        // list, up and down move one row and the shoulder buttons six.
+        let grid = view.layout == Layout::Grid;
+        let (row, page) = if grid { (self.grid_columns as isize, 2 * self.grid_columns as isize) } else { (1, 6) };
+        let delta = match p.button {
+            Button::Up => Some(-row), Button::Down => Some(row), Button::L1 => Some(-page), Button::R1 => Some(page),
+            Button::Left if grid => Some(-1), Button::Right if grid => Some(1),
+            _ => None,
+        };
+        if let Some(delta) = delta {
+            let to = list::step(&view.rows, focus, delta, p.repeat);
+            if to == focus { return vec![]; }
+            self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
+            return vec![Effect::Redraw(None)];
+        }
         match p.button {
-            // Focus moves change nothing on the screen itself, so its cache stays.
-            Button::Up | Button::Down | Button::L1 | Button::R1 => {
-                let delta = match p.button { Button::Up => -1, Button::Down => 1, Button::L1 => -6, _ => 6 };
-                let to = list::step(&view.rows, focus, delta, p.repeat);
-                if to == focus { return vec![]; }
-                self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
-                return vec![Effect::Redraw(None)];
-            }
             // (A, B, Menu and Power never repeat.)
             Button::Menu => return self.go(|nav| nav.home()),
             Button::Power => return vec![Effect::Sleep],
@@ -247,21 +261,37 @@ impl Screen for Home {
     }
 }
 
-/// One system's games. A game's row id is its path under `roms/`.
+/// One system's games, as a list beside the focused game's box art or as a grid of box art
+/// (Y switches). A game's row id is its path under `roms/`.
 struct Games;
+
+impl Games {
+    fn grid(ctx: &Ctx) -> bool { ctx.settings.get(builtin::LIBRARY_VIEW, &Layer::Global).is_some_and(|(v, _)| v == "grid") }
+}
 
 impl Screen for Games {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let system = state.params.as_deref().unwrap_or_default();
         let title = ctx.systems.iter().find(|s| s.id == system).map_or(system, |s| s.name).to_string();
-        let rows = ctx.games.iter().filter(|g| g.system == system)
-            .map(|g| Row::new(g.path.to_string_lossy(), &g.title, RowKind::Text { detail: None })).collect();
-        ScreenView { title, layout: Layout::List, rows, hints: vec![(Button::B, "Back".into()), (Button::A, "Play".into())] }
+        let rows = ctx.games.iter().filter(|g| g.system == system).map(|g| {
+            let image = ImageRef::Art { system: g.system, rom: g.path.clone() };
+            Row::new(g.path.to_string_lossy(), &g.title, RowKind::Image { image, detail: None })
+        }).collect();
+        let grid = Self::grid(ctx);
+        ScreenView {
+            title, layout: if grid { Layout::Grid } else { Layout::ListWithPicture }, rows,
+            hints: vec![(Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::B, "Back".into()), (Button::A, "Play".into())],
+        }
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         match (p.button, focused) {
             (Button::B, _) => Outcome::Back,
+            (Button::Y, _) if !p.repeat => {
+                let value = if Self::grid(ctx) { "list" } else { "grid" };
+                let _ = ctx.settings.set(builtin::LIBRARY_VIEW, &Layer::Global, value.into());
+                Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global)])
+            }
             (Button::A, Some(row)) => ctx.games.iter().find(|g| g.path.as_os_str() == row.id.0.as_str())
                 .map_or(Outcome::None, |g| Outcome::Effects(vec![Effect::Launch(g.clone())])),
             _ => Outcome::None,

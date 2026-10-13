@@ -3,6 +3,7 @@
 //! components in the UI crate; devices deliver `input::ButtonEvent`s.
 
 pub mod app;
+pub mod art;
 pub mod device;
 pub mod input;
 pub mod library;

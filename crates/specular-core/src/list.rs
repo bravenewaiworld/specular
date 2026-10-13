@@ -1,4 +1,5 @@
-//! Moving the focus through a screen's rows: the same rules on every list and grid.
+//! Moving the focus through a screen's rows, and laying them out: the same rules on every list
+//! and grid.
 
 use crate::model::Row;
 
@@ -29,13 +30,24 @@ pub fn first(rows: &[Row]) -> Option<usize> { rows.iter().position(|r| r.kind.fo
 pub const ROW_HEIGHT: f32 = 92.0;
 pub const HEADER_HEIGHT: f32 = 76.0;
 
-/// Where each row of a list sits, how far the list is scrolled, and which rows are near enough
-/// to the view to be drawn.
+/// Grid cells: square pictures at least this wide, this far apart, with a label underneath (u).
+pub const CELL_MIN_WIDTH: f32 = 210.0;
+pub const CELL_GAP: f32 = 28.0;
+pub const CELL_LABEL_HEIGHT: f32 = 52.0;
+
+/// How many grid columns fit in `width` u.
+pub fn grid_columns(width: f32) -> usize { (((width + CELL_GAP) / (CELL_MIN_WIDTH + CELL_GAP)) as usize).max(1) }
+
+/// Where a row or cell sits, in u from the top left of the unscrolled list.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
+
+/// Where each row of a list (or cell of a grid) sits, how far it is scrolled, and which rows are
+/// near enough to the view to be drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListLayout {
-    /// Each row's top, from the top of the list (u).
-    pub tops: Vec<f32>,
-    pub heights: Vec<f32>,
+    /// Each row's place, by row index.
+    pub rects: Vec<Rect>,
     /// How far the list is scrolled up (u).
     pub scroll: f32,
     /// The rows to draw: those on screen and within one view height above or below, so a scroll
@@ -43,24 +55,45 @@ pub struct ListLayout {
     pub drawn: std::ops::Range<usize>,
 }
 
-/// How many rows can ever be in `ListLayout::drawn` for a view `view_height` u tall, so a UI can
-/// keep this many row elements and reuse them. Assumes no row is shorter than `HEADER_HEIGHT`.
-pub fn max_visible(view_height: f32) -> usize { (view_height * 3.0 / HEADER_HEIGHT).ceil() as usize + 2 }
+/// How many rows can ever be in `ListLayout::drawn` for a view `width` × `height` u, so a UI can
+/// keep this many row elements and reuse them.
+pub fn max_drawn(width: f32, height: f32, grid: bool) -> usize {
+    if grid {
+        let cols = grid_columns(width);
+        let cell = (width - (cols - 1) as f32 * CELL_GAP) / cols as f32;
+        cols * ((height * 3.0 / (cell + CELL_LABEL_HEIGHT + CELL_GAP)).ceil() as usize + 2)
+    } else {
+        // Assumes no row is shorter than a header.
+        (height * 3.0 / HEADER_HEIGHT).ceil() as usize + 2
+    }
+}
 
-/// Lays out `rows` in a view `view_height` u tall so the focused row sits about 40 % of the way
-/// down, without scrolling past either end.
-pub fn layout(rows: &[Row], focus: usize, view_height: f32) -> ListLayout {
-    let heights: Vec<f32> = rows.iter().map(|r| if r.kind.focusable() { ROW_HEIGHT } else { HEADER_HEIGHT }).collect();
-    let tops: Vec<f32> = heights.iter().scan(0.0, |y, h| { let top = *y; *y += h; Some(top) }).collect();
-    let total: f32 = heights.iter().sum();
-    let scroll = match (tops.get(focus), heights.get(focus)) {
-        (Some(top), Some(h)) => (top + h / 2.0 - view_height * 0.4).clamp(0.0, (total - view_height).max(0.0)),
-        _ => 0.0,
+/// Lays out `rows` in a view `width` × `height` u, as a list or as a grid of `grid_columns(width)`
+/// columns, so the focused row sits about 40 % of the way down, without scrolling past either
+/// end. In a grid every row is a cell, headers included (grid screens have none).
+pub fn layout(rows: &[Row], focus: usize, width: f32, height: f32, grid: bool) -> ListLayout {
+    let rects: Vec<Rect> = if grid {
+        let cols = grid_columns(width);
+        let cell = (width - (cols - 1) as f32 * CELL_GAP) / cols as f32;
+        let pitch = cell + CELL_LABEL_HEIGHT + CELL_GAP;
+        (0..rows.len()).map(|i| Rect {
+            x: (i % cols) as f32 * (cell + CELL_GAP), y: CELL_GAP + (i / cols) as f32 * pitch, width: cell, height: cell + CELL_LABEL_HEIGHT,
+        }).collect()
+    } else {
+        rows.iter().scan(0.0, |y, r| {
+            let h = if r.kind.focusable() { ROW_HEIGHT } else { HEADER_HEIGHT };
+            let rect = Rect { x: 0.0, y: *y, width, height: h };
+            *y += h;
+            Some(rect)
+        }).collect()
     };
-    let (from, to) = (scroll - view_height, scroll + 2.0 * view_height);
-    let first = tops.iter().zip(&heights).position(|(t, h)| t + h > from).unwrap_or(rows.len());
-    let end = tops[first..].iter().position(|&t| t >= to).map_or(rows.len(), |n| first + n);
-    ListLayout { tops, heights, scroll, drawn: first..end }
+    // A grid has a gap above and below its cells, room for the focused cell to lift into.
+    let total = rects.last().map_or(0.0, |r| r.y + r.height) + if grid { CELL_GAP } else { 0.0 };
+    let scroll = rects.get(focus).map_or(0.0, |r| (r.y + r.height / 2.0 - height * 0.4).clamp(0.0, (total - height).max(0.0)));
+    let (from, to) = (scroll - height, scroll + 2.0 * height);
+    let first = rects.iter().position(|r| r.y + r.height > from).unwrap_or(rects.len());
+    let end = rects[first..].iter().position(|r| r.y >= to).map_or(rects.len(), |n| first + n);
+    ListLayout { rects, scroll, drawn: first..end }
 }
 
 #[cfg(test)]
@@ -107,24 +140,39 @@ mod tests {
     #[test]
     fn layout_keeps_the_focus_in_view_and_clamps() {
         let r: Vec<Row> = (0..20).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
-        let l = layout(&r, 0, 500.0);
-        assert_eq!((l.tops[1], l.scroll), (92.0, 0.0));
-        let l = layout(&r, 10, 500.0);
+        let l = layout(&r, 0, 900.0, 500.0, false);
+        assert_eq!((l.rects[1].y, l.scroll), (92.0, 0.0));
+        let l = layout(&r, 10, 900.0, 500.0, false);
         assert_eq!(l.scroll, 10.0 * 92.0 + 46.0 - 200.0);
-        let l = layout(&r, 19, 500.0);
+        let l = layout(&r, 19, 900.0, 500.0, false);
         assert_eq!(l.scroll, 20.0 * 92.0 - 500.0);
-        assert_eq!(layout(&r[..3], 2, 500.0).scroll, 0.0); // short lists don't scroll
+        assert_eq!(layout(&r[..3], 2, 900.0, 500.0, false).scroll, 0.0); // short lists don't scroll
     }
 
     #[test]
     fn visible_rows_cover_the_view_and_a_margin() {
         let r: Vec<Row> = (0..3000).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
-        let l = layout(&r, 1500, 500.0);
-        let (top, bottom) = (l.scroll, l.scroll + 500.0);
-        let v = l.drawn.clone();
-        assert!(l.tops[v.start] <= top - 500.0 + 92.0 && l.tops[v.end - 1] + 92.0 >= bottom + 500.0);
-        assert!(v.len() <= max_visible(500.0));
-        assert_eq!(layout(&r, 0, 500.0).drawn.start, 0);
-        assert_eq!(layout(&r, 2999, 500.0).drawn.end, 3000);
+        for grid in [false, true] {
+            let l = layout(&r, 1500, 928.0, 500.0, grid);
+            let (top, bottom) = (l.scroll, l.scroll + 500.0);
+            let v = l.drawn.clone();
+            let (first, last) = (l.rects[v.start], l.rects[v.end - 1]);
+            assert!(first.y <= top - 500.0 + first.height && last.y + last.height >= bottom + 500.0);
+            assert!(v.len() <= max_drawn(928.0, 500.0, grid), "{grid}");
+            assert_eq!(layout(&r, 0, 928.0, 500.0, grid).drawn.start, 0);
+            assert_eq!(layout(&r, 2999, 928.0, 500.0, grid).drawn.end, 3000);
+        }
+    }
+
+    #[test]
+    fn grid_cells_fill_the_width() {
+        let r: Vec<Row> = (0..9).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
+        assert_eq!(grid_columns(928.0), 4); // the Brick: 1024 u less two 48 u gutters
+        let l = layout(&r, 0, 928.0, 500.0, true);
+        let cols = grid_columns(928.0);
+        let last_in_row = l.rects[cols - 1];
+        assert!((last_in_row.x + last_in_row.width - 928.0).abs() < 0.01);
+        assert_eq!(l.rects[cols].x, 0.0);
+        assert!(l.rects[cols].y > l.rects[0].y + l.rects[0].height);
     }
 }

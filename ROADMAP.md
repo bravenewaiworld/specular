@@ -46,6 +46,13 @@ Decided 2026-10-12:
 - **Source:** libretro-thumbnails, box art only to start with. Specular downloads an image from the device over Wi-Fi when the cache doesn't have it. There's no PC companion yet.
 - **Rules:** never bundle or mirror the art, because it is the publishers' copyright. RetroArch's on-demand download is the precedent we follow.
 
+Decided 2026-10-13:
+- **Plain HTTP**, no TLS: the server sends the same files either way, and a TLS stack would add about 1.5 MB, root certificates to keep current, and a dependence on the clock being set.
+- **The lookup tables are compiled in.** `tools/trim-db.py` trims libretro-database (pinned to one commit) to CRC, serial and name per system, in `data/db/` (CC-BY-SA, credited in `data/db/NOTICE`).
+- **The user's own art goes next to the ROM,** with the same name: `roms/gba/Golden Sun.png`. PNG only for now.
+- **The whole library is fetched,** games on screen first, then the rest in the background, one at a time, paused while a game runs.
+- **Header codes identify ROM hacks** as their base game (a GBA header's 4-letter game code is kept by hacks), which gives them the base game's art.
+
 Box art is found in two steps, each with a hook for every system:
 
 1. **Identify the ROM**, once per file. The result is cached, keyed by path, size and modification time. Methods, in order:
@@ -209,11 +216,20 @@ Long lists (2026-10-12): the core's list layout gives the rows within a screen o
 
 - Plugin loading through the existing registries.
 - ScreenScraper.
+- Box art: fuzzy name matching (sequels and region variants make it risky), refreshing stored art by ETag, JPEG user images, PS1 disc serials.
 - Title screens and screenshots as art.
 - Sounds.
 - A letter index for long lists.
 - Light bar reactions in-game, such as low battery or a save.
 - Fonts for non-Latin game names: CJK fonts cost 15 MB or more.
+
+## Deferred optimizations
+
+Minor or unproven savings, left until profiling shows they matter.
+
+| Where | Observation | Idea |
+|---|---|---|
+| Scrolling | Continuous scrolling at 20 moves a second uses about 47 % of one core on the Brick at the governor's low clock, mostly drawing (2026-10-12) | Profile FemtoVG's per-frame cost: text layout cache hits, how many row slots redraw per move, whether off-screen slots still draw |
 
 ## Open questions
 
