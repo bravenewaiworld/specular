@@ -216,7 +216,14 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         let values = store::load_layer(&Layer::Global.path(&data.configs())).unwrap_or_else(|e| { eprintln!("settings: {e:?}"); Default::default() });
         post(Msg::SettingsLoaded(Layer::Global, values));
         let roms = data.roms();
-        std::thread::spawn(move || post(Msg::Library(specular_core::library::scan(&roms, &specular_core::library::builtin_systems()))));
+        let saves = data.saves();
+        std::thread::spawn(move || {
+            let games = specular_core::library::scan(&roms, &specular_core::library::builtin_systems());
+            for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
+                eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
+            }
+            post(Msg::Library(games));
+        });
         while let Ok(first) = rx.recv() {
             let latest: HashMap<PathBuf, _> = std::iter::once(first).chain(rx.try_iter()).map(|Save(p, v)| (p, v)).collect();
             for (path, values) in latest {

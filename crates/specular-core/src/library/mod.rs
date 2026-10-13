@@ -6,6 +6,7 @@
 //! Symbolic links are not followed.
 
 mod names;
+pub mod saves;
 pub(crate) mod zip;
 
 use std::collections::HashSet;

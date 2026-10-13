@@ -196,23 +196,23 @@ Found along the way:
 
 Long lists (2026-10-12): the core's list layout gives the rows within a screen of the view, and the UI draws them from a fixed set of about 30 reusable row slots (each row keeps its slot while in view), so a list's cost doesn't grow with its length. The app builds a screen's rows once and keeps them until its content changes; a focus move takes about 15 µs (desktop) with 3,000 games. On the Brick, 3,000 games use 22 MB resident (21 MB with none); scrolling continuously at 20 moves a second uses about 47 % of one core at the governor's low clock, mostly drawing.
 
-### 4. Library and box art
+### 4. Library and box art: done (2026-10-13)
 
-1. Identification: CRC, disc serial, file names.
-2. The trimmed libretro-database.
-3. The art sources and the `cache/` layout.
-4. The download queue that runs when Wi-Fi is up.
-5. Saves in the mirrored `saves/` tree, including moving them when a ROM is renamed or moved.
+1. Identification: CRC (zips from their directory), the GBA header's game code, file names. Disc serials are for later.
+2. The trimmed libretro-database (`tools/trim-db.py`, `data/db/`), compiled in.
+3. The art sources and the `cache/` layout: the user's PNG next to the ROM, then `cache/art/` (mirroring `roms/`, 400 px), filled from libretro-thumbnails; what is known per ROM is in `cache/identify/`.
+4. The download queue: games on screen first, then the rest, one at a time; it waits a minute after a network error and pauses while a game runs.
+5. Saves in the mirrored `saves/` tree. Saves follow a renamed or moved ROM: `saves/.specular-saves.json` records the size and checksum of each ROM played, and after a scan the saves of a ROM that is gone move to the one game without saves with the same file.
 
 ### 5. Runtime
 
-1. The libretro runtime in C, behind `specular-runtime`: audio/video rate control and save states, borrowing from Pickles.
-2. Frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Uses `FBIO_WAITFORVSYNC` (in the Brick's kernel since the spike). A camera check of press-to-photon latency is deferred (it needs a camera of at least 240 fps).
+1. Done: the libretro runtime, in Rust (`specular-runtime`): sound resampled to 48 kHz with the game's speed matched to the display and dynamic rate control, battery saves, save states. The headless player (`play` example) reports a core's time per frame.
+2. Done, to be measured on the Brick: frame pacing driven by the display's vsync: the core runs once per vsync, started after a frame delay that adapts to how long the core takes, and the UI draws as soon as the frame is ready. Uses `FBIO_WAITFORVSYNC` (in the Brick's kernel since the spike). A camera check of press-to-photon latency is deferred (it needs a camera of at least 240 fps).
 3. 3D-capable cores with a shared GL context.
-4. Per-system cores and defaults.
-5. Pausing on sleep.
-6. Periodic saves of battery-backed game memory.
-7. A watchdog for a core that stops producing frames.
+4. Per-system cores and defaults: mGBA for GB, GBC and GBA (`tools/build-cores.sh`); NES, SNES, Mega Drive and PS1 have none yet.
+5. Done: pausing on sleep, writing the battery save first; waking reopens the in-game menu.
+6. Done: battery saves written every 10 s when changed, on quit, on sleep and on a stop signal.
+7. Done: a watchdog: a game that makes no frame for 6 s while not paused makes Specular exit, and the service manager restarts it.
 
 ### Later
 

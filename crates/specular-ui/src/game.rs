@@ -63,7 +63,12 @@ impl Playing {
         });
         let out = Outputs { sound, vsync: device.open_vsync(), display_hz: device.profile().refresh_hz, frames: frames.clone(), on_frame };
         let state = game.save_path(&data.saves(), "state1");
-        std::thread::spawn(move || started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0), paused: Cell::new(false) })));
+        let (roms, saves, played) = (data.roms(), data.saves(), game.clone());
+        std::thread::spawn(move || {
+            // So its saves can follow it if it is renamed (see `library::saves`).
+            if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
+            started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0), paused: Cell::new(false) }))
+        });
     }
 
     /// Whether any of the game's buttons is held down.
