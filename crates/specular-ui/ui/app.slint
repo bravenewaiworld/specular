@@ -216,7 +216,10 @@ export component AppWindow inherits Window {
     in property <int> focused-row;
     // Beside a list with pictures: the focused row's picture.
     in property <Cover> picture;
-    // The focus plate and scroll offset, in u (from the core's list layout).
+    // The focus plate (the focused row's or cell's place) and scroll offset, in u (from the
+    // core's list layout).
+    in property <float> plate-x;
+    in property <float> plate-width;
     in property <float> plate-top;
     in property <float> plate-height;
     in property <float> scroll;
@@ -231,10 +234,45 @@ export component AppWindow inherits Window {
     in property <bool> game-menu;
     in property <image> game-frame;
     in property <string> scaling: "integer";
-    property <float> fit: min(root.width / max(1px, root.game-frame.width * 1px), root.height / max(1px, root.game-frame.height * 1px));
+    // The game's picture size in pixels until its first frame arrives (its system's screen).
+    in property <int> game-width;
+    in property <int> game-height;
+    property <bool> has-frame: root.game-frame.width > 0;
+    property <length> frame-width: (root.has-frame ? root.game-frame.width : root.game-width) * 1px;
+    property <length> frame-height: (root.has-frame ? root.game-frame.height : root.game-height) * 1px;
+    property <float> fit: min(root.width / max(1px, root.frame-width), root.height / max(1px, root.frame-height));
     property <float> zoom: root.scaling == "integer" ? max(1, floor(root.fit)) : root.fit;
-    // The app's screens show unless a game is being played with its menu closed.
-    property <bool> screens-shown: !root.playing || root.game-menu;
+    // Where the game's picture is.
+    property <length> game-w: root.scaling == "stretch" ? root.width : root.frame-width * root.zoom;
+    property <length> game-h: root.scaling == "stretch" ? root.height : root.frame-height * root.zoom;
+    property <length> game-x: (root.width - root.game-w) / 2;
+    property <length> game-y: (root.height - root.game-h) / 2;
+
+    // The cover that flies between the list and the game: Rust adds 1 to `flights` for each
+    // flight, after setting `landing` (true: back from the game to the list) and `flyer`.
+    // `flight` follows from 0 to 1 along it (as `arriving` does for screens).
+    in property <Cover> flyer;
+    in property <int> flights;
+    in property <bool> landing;
+    property <float> flight-phase: root.flights;
+    animate flight-phase {
+        duration: root.landing ? 340ms : 420ms;
+        easing: root.landing ? cubic-bezier(0.3, 0, 0.1, 1) : cubic-bezier(0.05, 0.7, 0.1, 1);
+    }
+    property <float> flight: 1 - min(1, root.flights - root.flight-phase);
+    // Where the focused cover is on screen: the picture beside the list, or the grid's cell.
+    property <bool> in-grid: root.layout == ScreenLayout.grid;
+    property <length> cover-size: root.in-grid ? root.plate-width * 1px * Theme.u : min(root.width * 0.42 - 16px * Theme.u - Theme.gutter, 400px * Theme.u);
+    property <length> cover-x: root.in-grid ? Theme.gutter + root.plate-x * 1px * Theme.u : root.width * 0.58 + 16px * Theme.u;
+    property <length> cover-y: Theme.status-bar + (root.in-grid ? Theme.title-area + (root.plate-top - root.scroll) * 1px * Theme.u : 24px * Theme.u);
+    // How far the flyer is from the cover towards the game (0 at the cover, 1 at the game).
+    property <float> toward-game: root.landing ? 1 - root.flight : root.flight;
+    // The game shows once its cover has arrived and its first frame is in.
+    property <bool> game-shown: root.playing && root.flight >= 1 && root.has-frame;
+
+    // The app's screens show unless a game is being played with its menu closed, and stay up
+    // while a cover flies off them.
+    property <bool> screens-shown: !root.playing || root.game-menu || root.flight < 1;
     // A short message, shown over everything while `toast-shown`.
     in property <string> toast;
     in property <bool> toast-shown;
@@ -274,8 +312,9 @@ export component AppWindow inherits Window {
         Image {
             source: root.game-frame;
             image-rendering: pixelated;
-            width: root.scaling == "stretch" ? root.width : root.game-frame.width * 1px * root.zoom;
-            height: root.scaling == "stretch" ? root.height : root.game-frame.height * 1px * root.zoom;
+            x: root.game-x; y: root.game-y; width: root.game-w; height: root.game-h;
+            opacity: root.game-shown ? 1 : 0;
+            animate opacity { duration: Motion.fade; }
         }
         // Paused: the game dims behind its menu, which sits on a panel down the left.
         if root.game-menu : Rectangle { background: #00000080; }
@@ -366,6 +405,19 @@ export component AppWindow inherits Window {
             y: parent.height - 44px * Theme.u; height: 32px * Theme.u; width: parent.width; horizontal-alignment: center;
             text: root.volume-text; font-family: Theme.mono; font-size: Theme.caption; color: Theme.fg;
         }
+    }
+
+    // The flying cover, over everything but messages; it stays at the game's place while the game
+    // loads, and fades as the game appears.
+    CoverView {
+        cover: root.flyer;
+        visible: root.flight < 1 || (root.playing && !root.game-shown) || self.opacity > 0;
+        opacity: root.flight < 1 || (root.playing && !root.game-shown) ? 1 : 0;
+        animate opacity { duration: Motion.fade; }
+        x: root.cover-x + (root.game-x - root.cover-x) * root.toward-game;
+        y: root.cover-y + (root.game-y - root.cover-y) * root.toward-game;
+        width: root.cover-size + (root.game-w - root.cover-size) * root.toward-game;
+        height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
     }
 
     HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }

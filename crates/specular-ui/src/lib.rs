@@ -302,6 +302,7 @@ impl Runner {
                 self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
             }
             Effect::QuitGame => {
+                if let Some(w) = self.window.upgrade() { w.set_landing(true); w.set_flights(w.get_flights() + 1); }
                 // (The game's texture is freed, and stops being shown, at the next draw.)
                 if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
@@ -334,29 +335,48 @@ impl Runner {
         self.toast_timer.start(slint::TimerMode::SingleShot, TOAST_TIME, move || { if let Some(w) = weak.upgrade() { w.set_toast_shown(false); } });
     }
 
-    /// Starts `game`. Art work stops while it runs, and loaded pictures are dropped, to leave the
-    /// game the memory and the CPU.
+    /// Starts `game`: its cover flies to where the game will be while it loads. Art work stops
+    /// while it runs, and loaded pictures are dropped once it has started, to leave it the memory
+    /// and the CPU.
     fn launch(self: &Rc<Self>, game: &Game) {
         let _ = self.art_worker.send(art::ArtCmd::Paused(true));
-        self.art.borrow_mut().clear();
-        self.requested.borrow_mut().clear();
         let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
-        let started = system.ok_or_else(|| format!("unknown system {}", game.system))
-            .and_then(|s| game::Playing::start(game, &s, &self.data, self.device.as_ref(), self.window.clone()));
-        match started {
+        if let Some(w) = self.window.upgrade() {
+            // The cover flies from the list to where the game will be.
+            let cover = self.app.borrow().view().rows.iter().find(|r| r.id.0 == game.path.to_string_lossy()).map(|r| self.cover(r));
+            w.set_flyer(cover.unwrap_or_default());
+            let (gw, gh) = system.as_ref().map_or((0, 0), |s| s.screen);
+            w.set_game_width(gw as i32);
+            w.set_game_height(gh as i32);
+            w.set_landing(false);
+            w.set_flights(w.get_flights() + 1);
+        }
+        let Some(system) = system else { return self.started(Err(format!("unknown system {}", game.system))) };
+        game::Playing::start(game, &system, &self.data, self.device.as_ref(), self.window.clone(), |r| on_ui(move |me| me.started(r)));
+    }
+
+    /// The game launched by `launch` is running, or couldn't start.
+    fn started(&self, result: Result<game::Playing, String>) {
+        match result {
+            // Quit before it finished loading.
+            Ok(p) if self.app.borrow().playing().is_none() => { if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); } }
             Ok(p) => {
                 *self.playing.borrow_mut() = Some(p);
+                // (Kept until now: the list shows under the flying cover.)
+                self.art.borrow_mut().clear();
+                self.requested.borrow_mut().clear();
                 // Some devices can only set the volume once sound has been opened (ALSA's
                 // software volume appears with its first stream).
                 let level = self.app.borrow().ctx().settings.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
                 let _ = self.hardware.send(HwCmd::Volume(level as u8));
+                // The game may have been paused (its menu opened) while it loaded.
+                if self.app.borrow().input_target() == InputTarget::App { self.with_game(|p| { p.pause(true); Ok("") }); }
             }
             Err(e) => {
                 eprintln!("game: {e}");
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
-                // At once, not posted: the app already counts the game as playing, and its
-                // empty screen must not be drawn in between.
-                self.handle(Msg::GameEnded(Some(e)));
+                if let Some(w) = self.window.upgrade() { w.set_landing(true); w.set_flights(w.get_flights() + 1); }
+                post(Msg::GameEnded(Some(e)));
             }
         }
     }
@@ -430,6 +450,8 @@ impl Runner {
         w.set_crumb(app.parent_title().unwrap_or_default().into());
         w.set_focused_row(focus as i32);
         let plate = layout.rects.get(focus).copied().unwrap_or_default();
+        w.set_plate_x(plate.x);
+        w.set_plate_width(plate.width);
         w.set_plate_top(plate.y);
         w.set_plate_height(plate.height);
         // Scrolls of more than a view (paging, wrapping from the last row to the first) jump:

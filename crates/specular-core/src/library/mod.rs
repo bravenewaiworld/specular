@@ -23,6 +23,9 @@ pub struct SystemDecl {
     pub extensions: &'static [&'static str],
     /// Its name in the libretro databases and thumbnail server (e.g. "Nintendo - Game Boy Advance").
     pub libretro_name: &'static str,
+    /// Its native picture size in pixels (width, height): where a game's picture will be before
+    /// its first frame arrives.
+    pub screen: (u32, u32),
     /// Its games' checksums and names (see `art::GameDb`); empty if there is no table.
     pub game_db: &'static str,
     /// Where its ROM header holds a game code that the table lists as a serial: (offset, length).
@@ -47,19 +50,19 @@ const MGBA: &[(&str, &str)] = &[("mgba_idle_optimization", "Remove Known")];
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
         SystemDecl { id: "gb", name: "Game Boy", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
-            game_db: include_str!("../../../../data/db/gb.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: None, dump_header: 0 },
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: None, dump_header: 0 },
         SystemDecl { id: "gbc", name: "Game Boy Color", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
-            game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: None, dump_header: 0 },
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: None, dump_header: 0 },
         SystemDecl { id: "gba", name: "Game Boy Advance", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
-            game_db: include_str!("../../../../data/db/gba.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: Some((0xac, 4)), dump_header: 0 },
+            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: Some((0xac, 4)), dump_header: 0 },
         SystemDecl { id: "nes", name: "NES", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
-            game_db: include_str!("../../../../data/db/nes.tsv"), core: None, core_options: &[], header_code: None, dump_header: 0 },
+            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: None, core_options: &[], header_code: None, dump_header: 0 },
         SystemDecl { id: "snes", name: "Super Nintendo", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
-            game_db: include_str!("../../../../data/db/snes.tsv"), core: None, core_options: &[], header_code: None, dump_header: 512 },
+            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, core_options: &[], header_code: None, dump_header: 512 },
         SystemDecl { id: "md", name: "Mega Drive", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
-            game_db: include_str!("../../../../data/db/md.tsv"), core: None, core_options: &[], header_code: None, dump_header: 0 },
+            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, core_options: &[], header_code: None, dump_header: 0 },
         SystemDecl { id: "ps1", name: "PlayStation", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
-            game_db: "", core: None, core_options: &[], header_code: None, dump_header: 0 },
+            screen: (320, 240), game_db: "", core: None, core_options: &[], header_code: None, dump_header: 0 },
     ]
 }
 

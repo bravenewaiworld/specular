@@ -35,9 +35,12 @@ pub struct Playing {
 }
 
 impl Playing {
-    /// Starts `game` with its system's core. `window` is redrawn whenever a new frame arrives.
-    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &dyn Device, window: slint::Weak<AppWindow>) -> Result<Self, String> {
-        let core = system.core.ok_or_else(|| format!("No emulator for {} yet", system.name))?;
+    /// Starts `game` with its system's core, loading it on another thread (reading a large ROM
+    /// takes a while), then calls `started` there with the result. `window` is redrawn whenever
+    /// a new frame arrives.
+    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &dyn Device, window: slint::Weak<AppWindow>,
+                 started: impl FnOnce(Result<Self, String>) + Send + 'static) {
+        let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
         let spec = LaunchSpec {
             core: cores_dir().join(format!("{core}.so")),
             rom: data.roms().join(&game.path),
@@ -58,7 +61,8 @@ impl Playing {
             });
         });
         let out = Outputs { sound, vsync: device.open_vsync(), display_hz: device.profile().refresh_hz, frames: frames.clone(), on_frame };
-        Ok(Self { session: Session::start(spec, out)?, frames, state: game.save_path(&data.saves(), "state1"), held: Cell::new(0) })
+        let state = game.save_path(&data.saves(), "state1");
+        std::thread::spawn(move || started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0) })));
     }
 
     /// A button for the game.
