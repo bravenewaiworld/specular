@@ -102,6 +102,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         toast_timer: slint::Timer::default(),
         volume_timer: slint::Timer::default(),
         stats_timer: slint::Timer::default(),
+        watchdog: slint::Timer::default(),
         art_worker,
         art_loader,
         on_screen: RefCell::default(),
@@ -266,6 +267,7 @@ struct Runner {
     volume_timer: slint::Timer,
     /// Updates the frame statistics each second while they are on.
     stats_timer: slint::Timer,
+    watchdog: slint::Timer,
     art_worker: mpsc::Sender<art::ArtCmd>,
     art_loader: mpsc::Sender<Vec<PathBuf>>,
     /// What the art worker and loader were last told (less the pictures loaded since), so
@@ -274,6 +276,10 @@ struct Runner {
     requested: RefCell<Vec<PathBuf>>,
 }
 
+/// How often the running game is checked for new frames, and how long it may go without one
+/// (while not paused) before it counts as stuck.
+const WATCHDOG_CHECK: Duration = Duration::from_secs(2);
+const WATCHDOG_LIMIT: Duration = Duration::from_secs(6);
 /// How long a toast shows.
 const TOAST_TIME: Duration = Duration::from_millis(2500);
 /// How long the volume shows after the last change.
@@ -426,6 +432,7 @@ impl Runner {
                 if let Some(level) = level { self.apply_setting(builtin::VOLUME, &level); }
                 // The game may have been paused (its menu opened) while it loaded.
                 if self.app.borrow().input_target() == InputTarget::App { self.with_game(|p| { p.pause(true); Ok("") }); }
+                self.watch_game();
             }
             Err(e) => {
                 eprintln!("game: {e}");
@@ -433,6 +440,28 @@ impl Runner {
                 post(Msg::GameEnded(Some(e)));
             }
         }
+    }
+
+    /// Watches the running game for a core that has stopped making frames (stuck in a loop or a
+    /// deadlock inside the core). Its thread can't be stopped from outside, so Specular says so
+    /// and exits; the service manager starts it again. The battery save is as last written.
+    fn watch_game(&self) {
+        let mut last = (0, 0u32); // (frames made, checks without a new one)
+        self.watchdog.start(slint::TimerMode::Repeated, WATCHDOG_CHECK, move || {
+            let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+            let playing = r.playing.borrow();
+            let Some(p) = playing.as_ref() else { r.watchdog.stop(); return };
+            let frames = p.session.stats().frames;
+            // Paused (its menu open, or going to sleep) or making frames: fine.
+            if p.is_paused() || frames != last.0 { last = (frames, 0); return; }
+            last.1 += 1;
+            if last.1 * WATCHDOG_CHECK.as_secs() as u32 >= WATCHDOG_LIMIT.as_secs() as u32 {
+                eprintln!("game: no frame for {} s; the core has stopped responding, restarting", WATCHDOG_LIMIT.as_secs());
+                r.toast("The game stopped responding. Restarting…");
+                slint::Timer::single_shot(Duration::from_millis(1500), || std::process::exit(2));
+                r.watchdog.stop();
+            }
+        });
     }
 
     /// Before each frame is drawn: the game's newest frame goes into its texture.

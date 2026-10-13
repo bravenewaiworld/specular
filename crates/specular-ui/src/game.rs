@@ -32,6 +32,7 @@ pub struct Playing {
     pub state: PathBuf,
     /// The buttons held, as libretro joypad bits.
     held: Cell<u16>,
+    paused: Cell<bool>,
 }
 
 impl Playing {
@@ -62,7 +63,7 @@ impl Playing {
         });
         let out = Outputs { sound, vsync: device.open_vsync(), display_hz: device.profile().refresh_hz, frames: frames.clone(), on_frame };
         let state = game.save_path(&data.saves(), "state1");
-        std::thread::spawn(move || started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0) })));
+        std::thread::spawn(move || started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0), paused: Cell::new(false) })));
     }
 
     /// Whether any of the game's buttons is held down.
@@ -79,8 +80,11 @@ impl Playing {
     /// Pauses or resumes the game. Pausing releases every button, so none stays held in the game.
     pub fn pause(&self, paused: bool) {
         if paused { self.held.set(0); self.session.set_buttons(0); }
+        self.paused.set(paused);
         self.session.pause(paused);
     }
+
+    pub fn is_paused(&self) -> bool { self.paused.get() }
 }
 
 /// Whether `b` goes to the game while it is played (the app keeps Menu, Power and volume).
