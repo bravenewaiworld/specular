@@ -31,7 +31,8 @@ pub enum Msg {
     Battery(Battery),
     /// The device woke from sleep.
     Woke,
-    /// The running game ended by itself, or failed to start (with why).
+    /// The game launched couldn't start, and why. (None, a game that ended by itself, isn't sent
+    /// yet.)
     GameEnded(Option<String>),
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
@@ -69,7 +70,8 @@ pub enum Effect {
 pub enum InputTarget {
     /// The app's screens.
     App,
-    /// The running game: its joypad's buttons go to it; the app keeps Menu, Power and the rest.
+    /// The running game: its joypad's buttons go to it; the app keeps the others (Menu, Power,
+    /// the volume keys).
     Game,
 }
 
@@ -321,14 +323,15 @@ impl App {
         }
     }
 
-    /// The volume keys, on every screen and in games.
+    /// The volume keys, on every screen and in games. The level is shown even when it is already
+    /// at an end and doesn't change.
     fn step_volume(&mut self, delta: i64) -> Vec<Effect> {
         let s = &mut self.ctx.settings;
         let now = s.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
         let new = (now + delta).clamp(0, builtin::VOLUME_MAX);
-        if new != now { let _ = s.set(builtin::VOLUME, &Layer::Global, new.into()); }
-        // The settings screen shows the volume too.
-        self.changed();
+        if new == now { return vec![Effect::ShowVolume(new)]; }
+        let _ = s.set(builtin::VOLUME, &Layer::Global, new.into());
+        self.changed(); // the settings screen shows the volume too
         vec![Effect::Apply { key: builtin::VOLUME, value: new.into() }, Effect::SaveSettings(Layer::Global), Effect::ShowVolume(new), Effect::Redraw(None)]
     }
 

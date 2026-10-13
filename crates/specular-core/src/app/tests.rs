@@ -144,7 +144,7 @@ fn the_game_menu_pauses_and_quits() {
     tap(&mut a, Button::A, 0);
     tap(&mut a, Button::A, 10);
     assert_eq!(a.playing().map(|g| g.title.as_str()), Some("Golden Sun"));
-    assert_eq!(tap(&mut a, Button::Down, 20), vec![]); // the game's
+    assert_eq!(tap(&mut a, Button::Down, 20), vec![]); // goes to the game
     assert_eq!(tap(&mut a, Button::Menu, 30), vec![Effect::PauseGame(true), Effect::Redraw(Some(Transition::Push))]);
     assert_eq!((a.input_target(), a.view().title.as_str()), (InputTarget::App, "Paused"));
     assert_eq!(tap(&mut a, Button::B, 40), vec![Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
@@ -170,7 +170,7 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
     tap(&mut a, Button::A, 20); // playing
     assert_eq!(level(&tap(&mut a, Button::VolDown, 30)), Some(12));
     for t in 0..30 { tap(&mut a, Button::VolDown, 40 + t); }
-    assert_eq!(level(&tap(&mut a, Button::VolDown, 100)), Some(0));
+    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume(0)]); // nothing changed to save
 }
 
 #[test]

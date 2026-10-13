@@ -248,41 +248,40 @@ export component AppWindow inherits Window {
     property <length> game-x: (root.width - root.game-w) / 2;
     property <length> game-y: (root.height - root.game-h) / 2;
 
-    // The cover that flies between the list and the game: Rust adds 1 to `flights` for each
-    // flight, after setting `landing` (true: back from the game to the list) and `flyer`.
-    // `flight` follows from 0 to 1 along it (as `arriving` does for screens).
+    // The cover that flies from the list to the game's place when `playing` turns on, and back
+    // when it turns off (set before `playing`). A flight cut short, as by a game that fails to
+    // start, turns back from where it is.
     in property <Cover> flyer;
-    in property <int> flights;
-    in property <bool> landing;
-    property <float> flight-phase: root.flights;
-    animate flight-phase {
-        duration: root.landing ? 340ms : 420ms;
-        easing: root.landing ? cubic-bezier(0.3, 0, 0.1, 1) : cubic-bezier(0.05, 0.7, 0.1, 1);
+    // How far the flyer is from the focused cover towards the game (0 at the cover, 1 at the game).
+    property <float> toward-game: root.playing ? 1 : 0;
+    animate toward-game {
+        duration: root.playing ? 420ms : 340ms;
+        easing: root.playing ? cubic-bezier(0.05, 0.7, 0.1, 1) : cubic-bezier(0.3, 0, 0.1, 1);
     }
-    property <float> flight: 1 - min(1, root.flights - root.flight-phase);
-    // Where the focused cover is on screen: the picture beside the list, or the grid's cell.
+    property <bool> flying: root.toward-game != (root.playing ? 1 : 0);
+    // Where the focused cover is on screen: the picture beside the list, or the grid's cell
+    // (lifted 8px while focused, see GridCell).
     property <bool> in-grid: root.layout == ScreenLayout.grid;
     property <length> cover-size: root.in-grid ? root.plate-width * 1px * Theme.u : min(root.width * 0.42 - 16px * Theme.u - Theme.gutter, 400px * Theme.u);
     property <length> cover-x: root.in-grid ? Theme.gutter + root.plate-x * 1px * Theme.u : root.width * 0.58 + 16px * Theme.u;
-    property <length> cover-y: Theme.status-bar + (root.in-grid ? Theme.title-area + (root.plate-top - root.scroll) * 1px * Theme.u : 24px * Theme.u);
-    // How far the flyer is from the cover towards the game (0 at the cover, 1 at the game).
-    property <float> toward-game: root.landing ? 1 - root.flight : root.flight;
+    property <length> cover-y: Theme.status-bar + (root.in-grid ? Theme.title-area + (root.plate-top - root.scroll - 8) * 1px * Theme.u : 24px * Theme.u);
     // The game shows once its cover has arrived and its first frame is in.
-    property <bool> game-shown: root.playing && root.flight >= 1 && root.has-frame;
+    property <bool> game-shown: root.playing && !root.flying && root.has-frame;
+    // The flyer is up while it flies and while it stands in for a game that hasn't shown yet.
+    property <bool> flyer-up: root.flying || (root.playing && !root.game-shown);
 
     // The app's screens show unless a game is being played with its menu closed, and stay up
     // while a cover flies off them.
-    property <bool> screens-shown: !root.playing || root.game-menu || root.flight < 1;
-    // A short message, shown over everything while `toast-shown`.
+    property <bool> screens-shown: !root.playing || root.game-menu || root.flying;
+    // A short message, shown while `toast-shown`.
     in property <string> toast;
     in property <bool> toast-shown;
-    // The volume (0–1, and as the number shown), shown over everything for a moment after the
-    // volume keys change it.
+    // The volume (0–1, and as the number shown), shown over everything while `volume-shown`.
     in property <float> volume;
     in property <string> volume-text;
+    in property <bool> volume-shown;
     // Developer frame statistics, shown over a game while not empty.
     in property <string> stats;
-    in property <bool> volume-shown;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
     // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
     // change and eases back to 0, sliding the screen in and fading it up.
@@ -380,6 +379,22 @@ export component AppWindow inherits Window {
         }
     }
 
+    HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
+
+    // The flying cover, over everything but the toast and the volume. It stays at the game's
+    // place while the game loads, and fades as the game appears.
+    CoverView {
+        cover: root.flyer;
+        visible: root.flyer-up || self.opacity > 0;
+        opacity: root.flyer-up ? 1 : 0;
+        animate opacity { duration: Motion.fade; }
+        x: root.cover-x + (root.game-x - root.cover-x) * root.toward-game;
+        y: root.cover-y + (root.game-y - root.cover-y) * root.toward-game;
+        width: root.cover-size + (root.game-w - root.cover-size) * root.toward-game;
+        height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
+    }
+
+    // The toast: a short message above the hint bar.
     Rectangle {
         y: root.height - Theme.hint-bar - self.height - 24px * Theme.u;
         width: toast-text.preferred-width + 2 * 32px * Theme.u; height: 64px * Theme.u;
@@ -412,19 +427,4 @@ export component AppWindow inherits Window {
             text: root.volume-text; font-family: Theme.mono; font-size: Theme.caption; color: Theme.fg;
         }
     }
-
-    // The flying cover, over everything but messages; it stays at the game's place while the game
-    // loads, and fades as the game appears.
-    CoverView {
-        cover: root.flyer;
-        visible: root.flight < 1 || (root.playing && !root.game-shown) || self.opacity > 0;
-        opacity: root.flight < 1 || (root.playing && !root.game-shown) ? 1 : 0;
-        animate opacity { duration: Motion.fade; }
-        x: root.cover-x + (root.game-x - root.cover-x) * root.toward-game;
-        y: root.cover-y + (root.game-y - root.cover-y) * root.toward-game;
-        width: root.cover-size + (root.game-w - root.cover-size) * root.toward-game;
-        height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
-    }
-
-    HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
 }

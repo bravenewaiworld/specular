@@ -57,6 +57,7 @@ impl DataRoot {
 /// Runs Specular on `device` until the event loop ends. `install` sets up the device's platform;
 /// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`).
 pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatform>) -> Result<(), Error> {
+    quit_on_signals();
     let profile = device.profile();
     let keyboard = install.is_none();
     if let Some(install) = install {
@@ -90,6 +91,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         playing: RefCell::default(),
         game_screen: RefCell::default(),
         repeat: slint::Timer::default(),
+        launches: Cell::new(0),
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
         shown_layout: Cell::new(None),
@@ -121,11 +123,34 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
     runner.refresh(None);
     let _script = std::env::var("SPECULAR_SCRIPT").ok().map(|s| script(&window, &s));
     window.run()?;
+    // A game being played writes its battery save as it ends.
+    if let Some(p) = runner.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
     // Dropping the runner closes the I/O thread's queue; wait for its last saves.
     RUNNER.with(|r| r.borrow_mut().take());
     drop(runner);
     let _ = io_thread.join();
     Ok(())
+}
+
+/// Makes SIGTERM (a service manager stopping Specular) and SIGINT (Ctrl-C) end the event loop
+/// like a normal quit, so the game's battery save and the settings are written on the way out.
+/// The signals are blocked in every thread (this runs before any other thread starts, and threads
+/// inherit it) and taken by one thread that waits for them, where it is safe to do anything.
+fn quit_on_signals() {
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::sigaddset(&mut set, libc::SIGINT);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        std::thread::spawn(move || loop {
+            let mut sig = 0;
+            if libc::sigwait(&set, &mut sig) == 0 {
+                eprintln!("specular: signal {sig}, quitting");
+                let _ = slint::invoke_from_event_loop(|| { let _ = slint::quit_event_loop(); });
+            }
+        });
+    }
 }
 
 thread_local! {
@@ -221,6 +246,9 @@ struct Runner {
     game_screen: RefCell<game::Screen>,
     /// Fires when the next held-button repeat is due.
     repeat: slint::Timer,
+    /// How many games have been launched: a game that finishes loading after another launch is
+    /// stale (`started`).
+    launches: Cell<u32>,
     clock: slint::Timer,
     ignore_power_until: Cell<Duration>,
     /// The layout last drawn: a new one gets fresh row slots.
@@ -228,7 +256,7 @@ struct Runner {
     /// Pictures loaded so far, by ROM path: an image, or None if the game has none yet. A game
     /// not in it hasn't been loaded (or was dropped, see `MAX_PICTURES`).
     art: RefCell<HashMap<PathBuf, Option<slint::Image>>>,
-    /// Whether the message being handled is a held button's repeat.
+    /// Whether the last message was a tick while a button was held (the presses it makes repeat).
     repeating: Cell<bool>,
     /// The game whose picture is beside the list. It follows the focus, but while a direction is
     /// held only once the focus rests (`PICTURE_DELAY`), so held scrolling doesn't load each one.
@@ -267,19 +295,21 @@ impl Runner {
         }
         match &msg {
             Msg::Button(e) if e.button == Button::Power && e.time < self.ignore_power_until.get() => return,
-            Msg::Woke => {
-                self.ignore_power_until.set(now() + WAKE_GRACE);
-                self.tick_clock(); // timers stood still while asleep
-            }
+            Msg::Woke => self.ignore_power_until.set(now() + WAKE_GRACE),
             Msg::Library(games) => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
             _ => {}
         }
+        let woke = matches!(msg, Msg::Woke);
         // The window can be resized (on a desktop), changing how many columns a grid has.
         if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
-        // Ticks only drive held-button repeats, so a tick's presses are repeats.
-        self.repeating.set(matches!(msg, Msg::Tick(_)));
+        // A tick while a button is held makes its repeats. (The flag stays set until the next
+        // message, such as the button's release.)
+        self.repeating.set(matches!(msg, Msg::Tick(_)) && self.app.borrow().next_deadline().is_some());
         let effects = self.app.borrow_mut().handle(msg);
         for e in effects { self.apply(e); }
+        // Timers stood still while asleep: catch the clock up, now that the app has handled the
+        // wake (the tick this sends must see its idle time reset).
+        if woke { self.tick_clock(); }
         self.schedule_repeat();
     }
 
@@ -306,7 +336,6 @@ impl Runner {
                 self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
             }
             Effect::QuitGame => {
-                if let Some(w) = self.window.upgrade() { w.set_landing(true); w.set_flights(w.get_flights() + 1); }
                 // (The game's texture is freed, and stops being shown, at the next draw.)
                 if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
@@ -339,13 +368,11 @@ impl Runner {
         self.stats_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
             let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
             let Some(w) = r.window.upgrade() else { return };
-            let text = r.playing.borrow().as_ref().map(|p| {
-                let s = p.session.stats();
-                let fps = s.frames.saturating_sub(last);
-                last = s.frames;
-                format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3)
-            });
-            w.set_stats(text.unwrap_or_default().into());
+            // (A game's frame count starts at 0.)
+            let Some(s) = r.playing.borrow().as_ref().map(|p| p.session.stats()) else { last = 0; return w.set_stats("".into()) };
+            let fps = s.frames.saturating_sub(last);
+            last = s.frames;
+            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
         });
     }
 
@@ -358,31 +385,36 @@ impl Runner {
         self.toast_timer.start(slint::TimerMode::SingleShot, TOAST_TIME, move || { if let Some(w) = weak.upgrade() { w.set_toast_shown(false); } });
     }
 
-    /// Starts `game`: its cover flies to where the game will be while it loads. Art work stops
-    /// while it runs, and loaded pictures are dropped once it has started, to leave it the memory
-    /// and the CPU.
+    /// Starts `game`: its cover flies to where the game will be while it loads (once the redraw
+    /// that follows shows it playing). Art work stops while it runs, and loaded pictures are
+    /// dropped once it has started, to leave it the memory and the CPU.
     fn launch(self: &Rc<Self>, game: &Game) {
         let _ = self.art_worker.send(art::ArtCmd::Paused(true));
         let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
         if let Some(w) = self.window.upgrade() {
-            // The cover flies from the list to where the game will be.
             let cover = self.app.borrow().view().rows.iter().find(|r| r.id.0 == game.path.to_string_lossy()).map(|r| self.cover(r));
             w.set_flyer(cover.unwrap_or_default());
             let (gw, gh) = system.as_ref().map_or((0, 0), |s| s.screen);
             w.set_game_width(gw as i32);
             w.set_game_height(gh as i32);
-            w.set_landing(false);
-            w.set_flights(w.get_flights() + 1);
         }
-        let Some(system) = system else { return self.started(Err(format!("unknown system {}", game.system))) };
-        game::Playing::start(game, &system, &self.data, self.device.as_ref(), self.window.clone(), |r| on_ui(move |me| me.started(r)));
+        let launch = self.launches.get() + 1;
+        self.launches.set(launch);
+        let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
+        game::Playing::start(game, &system, &self.data, self.device.as_ref(), self.window.clone(), move |r| on_ui(move |me| me.started(launch, r)));
     }
 
-    /// The game launched by `launch` is running, or couldn't start.
-    fn started(&self, result: Result<game::Playing, String>) {
+    /// Launch number `launch` (see `launches`) is running, or couldn't start.
+    fn started(&self, launch: u32, result: Result<game::Playing, String>) {
+        // The game was quit while it loaded (and maybe another launched since).
+        if launch != self.launches.get() || self.app.borrow().playing().is_none() {
+            match result {
+                Ok(p) => if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); },
+                Err(e) => eprintln!("game: {e}"),
+            }
+            return;
+        }
         match result {
-            // Quit before it finished loading.
-            Ok(p) if self.app.borrow().playing().is_none() => { if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); } }
             Ok(p) => {
                 *self.playing.borrow_mut() = Some(p);
                 // (Kept until now: the list shows under the flying cover.)
@@ -390,15 +422,14 @@ impl Runner {
                 self.requested.borrow_mut().clear();
                 // Some devices can only set the volume once sound has been opened (ALSA's
                 // software volume appears with its first stream).
-                let level = self.app.borrow().ctx().settings.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
-                let _ = self.hardware.send(HwCmd::Volume(level as u8));
+                let level = self.app.borrow().ctx().settings.get(builtin::VOLUME, &Layer::Global).map(|(v, _)| v.clone());
+                if let Some(level) = level { self.apply_setting(builtin::VOLUME, &level); }
                 // The game may have been paused (its menu opened) while it loaded.
                 if self.app.borrow().input_target() == InputTarget::App { self.with_game(|p| { p.pause(true); Ok("") }); }
             }
             Err(e) => {
                 eprintln!("game: {e}");
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
-                if let Some(w) = self.window.upgrade() { w.set_landing(true); w.set_flights(w.get_flights() + 1); }
                 post(Msg::GameEnded(Some(e)));
             }
         }
@@ -492,7 +523,8 @@ impl Runner {
         }
         let (held, playing) = (self.repeating.get(), app.playing().is_some());
         drop(app);
-        // A game's screens are hidden or have no art: nothing is loaded for them (see `launch`).
+        // While a game is played the library is hidden and its menu has no art, so no art is
+        // loaded (see `launch`).
         if !playing { self.update_art(&w, &view, focus, &layout.drawn, held); }
     }
 
@@ -597,6 +629,9 @@ impl Runner {
     /// Shows the time, and wakes again at the start of the next minute (not every second).
     /// Also tells the app the time each minute (for "Sleep after").
     fn tick_clock(self: &Rc<Self>) {
+        // A button held down in a game counts as use: the app hears of game buttons only as they
+        // are pressed and released.
+        if self.playing.borrow().as_ref().is_some_and(|p| p.holding()) { self.app.borrow_mut().note_input(now()); }
         self.handle(Msg::Tick(now()));
         let mut next = Duration::from_secs(60);
         if let (Some(w), Some((h, m, s))) = (self.window.upgrade(), local_time()) {

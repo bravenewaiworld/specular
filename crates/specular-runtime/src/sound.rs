@@ -3,15 +3,15 @@
 //! - the game running at the display's rate rather than its own (Game Boy games run at 59.73 fps;
 //!   paced by a 60.2 Hz display they play 0.8 % fast, so they also make sound 0.8 % faster), and
 //! - the clocks of the core and the sound card not agreeing exactly: the ratio follows how full
-//!   the output's queue is, aiming at half full (the dynamic rate control of RetroArch, and of
-//!   muOS's runtime, "Pickles"), by at most `MAX_ADJUST` so the pitch change can't be heard.
+//!   the output's queue is, aiming at half full (what RetroArch calls dynamic rate control), by
+//!   at most `MAX_ADJUST` so the pitch change can't be heard.
 
 use specular_core::device::SoundOut;
 
 /// The most the ratio is changed by to keep the queue half full.
 const MAX_ADJUST: f64 = 0.005;
-/// A game this much faster or slower than the display is paced by a timer instead, in which case
-/// no speed correction applies (see `Sound::new`).
+/// A game this much faster or slower than the display is paced by a timer instead, at its own
+/// rate, with no speed correction (see `game_thread`).
 pub const MAX_SPEED_CHANGE: f64 = 0.05;
 
 /// Linear interpolation between consecutive stereo frames, keeping its position across calls.

@@ -44,7 +44,7 @@ impl Device for Brick {
 
     fn open_sound(&self) -> io::Result<Box<dyn SoundOut>> { Ok(Box::new(specular_linux::sound::Alsa::open("default")?)) }
 
-    /// Our kernel implements the wait on /dev/fb0 (TrimUI's returned at once).
+    /// The wait for the display's refresh on /dev/fb0 (our kernel's; TrimUI's returns at once).
     fn open_vsync(&self) -> Option<Box<dyn Vsync>> {
         match specular_linux::vsync::FbVsync::open(Path::new("/dev/fb0")) {
             Ok(v) => Some(Box::new(v)),
@@ -102,7 +102,6 @@ impl Lights for BrickLights {
     fn show(&self, colours: &[Rgb]) -> io::Result<()> { self.0.show(colours, LED_LIMIT) }
 }
 
-/// Volume isn't mapped onto the codec's controls yet (see ROADMAP.md, "Audio").
 /// The volume, as the software volume control in TrimUI's ALSA set-up ("Soft Volume Master" on
 /// the default output, /etc/asound.conf), with amixer. ALSA creates that control when something
 /// first plays after boot, so until then setting it fails (Specular sets it again when a game

@@ -3,11 +3,11 @@
 //! is kept per thread (see `frontend`). One game runs at a time: a core keeps its own state in
 //! globals, and loading its library again gives the same, already loaded, copy.
 //!
-//! Each display refresh, the game's thread waits for the refresh, then a frame delay (the time
-//! the core can be started later and still finish, plus the UI's draw, before the next refresh;
-//! starting late means buttons are read late, so a press reaches the screen sooner), then runs
-//! the core once and hands the frame to the UI. Without a vsync the core is run by a timer at its
-//! own frame rate.
+//! Each display refresh, the game's thread waits for the refresh, then a frame delay (how long
+//! the core's start can be put off and still leave time for its run and the UI's draw before the
+//! next refresh; starting late means buttons are read late, so a press reaches the screen
+//! sooner), then runs the core once and hands the frame to the UI. Without a vsync, or when the
+//! display's rate is far from the game's, the core is run by a timer at its own frame rate.
 
 mod core;
 mod frontend;
@@ -61,7 +61,8 @@ pub struct GameInfo {
     pub fps: f64,
 }
 
-/// How long the core took to make its recent frames (the last `STATS_FRAMES`).
+/// How long the core took to make its recent frames (the last `STATS_FRAMES`), and how many
+/// frames it has made since the game started.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats { pub frames: u64, pub median: Duration, pub p95: Duration, pub worst: Duration }
 
@@ -107,6 +108,14 @@ pub fn joypad_bit(b: Button) -> Option<u16> {
 /// Whether a game is running (see `Session::start`).
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// Clears `RUNNING` when dropped: when the game's thread ends (even by a panic), or if it
+/// couldn't be started.
+struct Running;
+
+impl Drop for Running {
+    fn drop(&mut self) { RUNNING.store(false, Relaxed); }
+}
+
 enum Cmd {
     Pause(bool),
     Reset,
@@ -128,20 +137,17 @@ pub struct Session {
 
 impl Session {
     /// Loads the core and the game, on the game's own thread, and starts it running.
-    /// Fails if another game is running: cores keep their state in globals, so even two
-    /// different games can't share one.
+    /// Fails if another game is running (see the module's documentation).
     pub fn start(spec: LaunchSpec, out: Outputs) -> Result<Session, String> {
         if RUNNING.swap(true, Relaxed) { return Err("another game is running".into()); }
+        let running = Running;
         let (cmds, rx) = mpsc::channel();
         let (started, ready) = mpsc::channel();
         let (buttons, runs) = (Arc::new(AtomicU16::new(0)), Arc::new(Mutex::new(Runs::default())));
         let (b, r) = (buttons.clone(), runs.clone());
         let thread = std::thread::Builder::new().name("game".into())
-            .spawn(move || {
-                game_thread(spec, out, b, r, rx, started);
-                RUNNING.store(false, Relaxed);
-            })
-            .map_err(|e| { RUNNING.store(false, Relaxed); e.to_string() })?;
+            .spawn(move || { let _running = running; game_thread(spec, out, b, r, rx, started) })
+            .map_err(|e| e.to_string())?;
         match ready.recv() {
             Ok(Ok(info)) => Ok(Session { cmds, buttons, thread: Some(thread), info, runs }),
             Ok(Err(e)) => { let _ = thread.join(); Err(e) }
@@ -228,7 +234,7 @@ impl Pacer {
         self.next = (self.next + self.period).max(now);
     }
 
-    /// With a vsync, records how long a run took, and every second sets the frame delay to what
+    /// With a vsync, records how long a run took, and every 60 runs sets the frame delay to what
     /// the slowest runs (the 95th percentile) leave.
     fn ran(&mut self, took: Duration) {
         if self.vsync.is_none() { return; }
@@ -248,7 +254,8 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
     };
     let av = game.av;
     let fps = av.timing.fps.max(1.0);
-    // Paced by the display, the game runs at its rate; much faster or slower, by a timer at its own.
+    // A display within MAX_SPEED_CHANGE of the game's rate paces it (so it runs at the display's
+    // rate, its sound sped up or slowed to match); otherwise a timer does, at the game's own.
     let speed = out.display_hz / fps;
     let by_display = out.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
     let mut pacer = Pacer::new(if by_display { out.vsync } else { None }, if by_display { out.display_hz } else { fps });

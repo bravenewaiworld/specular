@@ -9,8 +9,8 @@ fn mgba() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// Counts the frames written. Its queue holds nothing, so no silence is added before them and
-/// each game frame's sound is written as it is.
+/// Counts the frames written. Its queue has no room, so no silence is added (it is half the
+/// queue) and the rate is never adjusted: each game frame's sound is written as it is.
 struct Count(Arc<Mutex<usize>>);
 impl SoundOut for Count {
     fn rate(&self) -> u32 { 48_000 }
@@ -24,9 +24,9 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
     let dir = tempfile::tempdir().unwrap();
-    // A blank cartridge whose program is one endless loop (`b .`, which mGBA also checks for as
-    // the header's first instruction, with the fixed byte 0x96 at 0xb2): frames, sound and save
-    // memory all still work.
+    // A blank cartridge: mGBA takes a file as a GBA ROM if it starts with a branch instruction
+    // and has the fixed byte 0x96 at 0xb2. This one branches to itself (`b .`), an endless loop,
+    // which is enough for frames, sound and save memory to work.
     let rom = dir.path().join("blank.gba");
     let mut blank = vec![0u8; 1 << 16];
     blank[..4].copy_from_slice(&0xeaff_fffe_u32.to_le_bytes());

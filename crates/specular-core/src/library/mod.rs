@@ -23,8 +23,8 @@ pub struct SystemDecl {
     pub extensions: &'static [&'static str],
     /// Its name in the libretro databases and thumbnail server (e.g. "Nintendo - Game Boy Advance").
     pub libretro_name: &'static str,
-    /// Its native picture size in pixels (width, height): where a game's picture will be before
-    /// its first frame arrives.
+    /// Its native picture size in pixels (width, height), which sizes a game's place on screen
+    /// before its first frame arrives.
     pub screen: (u32, u32),
     /// Its games' checksums and names (see `art::GameDb`); empty if there is no table.
     pub game_db: &'static str,
@@ -32,7 +32,8 @@ pub struct SystemDecl {
     /// Identifies ROMs no checksum matches, such as hacks, which keep their base game's code.
     pub header_code: Option<(u64, usize)>,
     /// The libretro core that plays its games (its library's name without ".so", e.g.
-    /// "mgba_libretro"), and the core options it runs with; None until one is chosen.
+    /// "mgba_libretro"), and the core options it runs with; None while there is none (its games
+    /// can't be played yet).
     pub core: Option<&'static str>,
     pub core_options: &'static [(&'static str, &'static str)],
     /// The size of a header some dumps put before the ROM (such as the 512 bytes that old SNES

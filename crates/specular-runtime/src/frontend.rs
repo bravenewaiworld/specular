@@ -56,9 +56,10 @@ unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
 
 impl Frontend {
     /// Answers one environment call. Calls not listed are refused (false), which libretro cores
-    /// must cope with; those accepted without doing anything only tell us things we don't use.
-    /// That includes a change of timing or picture size while running: frames carry their own
-    /// size, and the pacing and sound keep the timing the game started with.
+    /// must cope with; those accepted without doing anything only tell us things we don't use
+    /// (but for input bitmasks, which `input_state` answers). That includes a change of timing or
+    /// picture size while running: frames carry their own size, and the pacing and sound keep the
+    /// timing the game started with.
     unsafe fn environment(&mut self, cmd: c_uint, data: *mut c_void) -> bool {
         unsafe {
             match cmd {

@@ -65,6 +65,9 @@ impl Playing {
         std::thread::spawn(move || started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0) })));
     }
 
+    /// Whether any of the game's buttons is held down.
+    pub fn holding(&self) -> bool { self.held.get() != 0 }
+
     /// A button for the game.
     pub fn button(&self, e: &ButtonEvent) {
         let Some(bit) = specular_runtime::joypad_bit(e.button) else { return };
