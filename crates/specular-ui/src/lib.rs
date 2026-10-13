@@ -630,9 +630,10 @@ fn key_button(text: &str) -> Option<Button> {
 }
 
 /// For development and visual checks: `SPECULAR_SCRIPT="down,down,a"` presses those buttons (by
-/// the names in `KEYS`) 400 ms apart (or `SPECULAR_SCRIPT_MS`), the first after two steps, then,
-/// one step after the last, saves the window as raw RGBA to `SPECULAR_SNAPSHOT` (default
-/// /tmp/specular.rgba) and quits.
+/// the names in `KEYS`) 400 ms apart (or `SPECULAR_SCRIPT_MS`), the first after two steps, each
+/// held for 50 ms (so a game sees it: games read buttons once a frame), then, one step after the
+/// last, saves the window as raw RGBA to `SPECULAR_SNAPSHOT` (default /tmp/specular.rgba) and
+/// quits.
 fn script(window: &AppWindow, names: &str) -> slint::Timer {
     let mut steps: Vec<Button> = names.split(',')
         .filter_map(|n| KEYS.iter().find(|(_, _, name)| *name == n.trim()).map(|&(_, b, _)| b)).collect();
@@ -643,8 +644,9 @@ fn script(window: &AppWindow, names: &str) -> slint::Timer {
     let step = std::env::var("SPECULAR_SCRIPT_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(step), move || {
         if !started { started = true; return; } // let the scan and the first frames finish
-        if let Some(b) = steps.pop() {
-            for pressed in [true, false] { post(Msg::Button(ButtonEvent { button: b, pressed, time: now() })); }
+        if let Some(button) = steps.pop() {
+            post(Msg::Button(ButtonEvent { button, pressed: true, time: now() }));
+            slint::Timer::single_shot(Duration::from_millis(50), move || post(Msg::Button(ButtonEvent { button, pressed: false, time: now() })));
             return;
         }
         let Some(w) = weak.upgrade() else { return };
