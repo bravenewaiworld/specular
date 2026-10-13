@@ -72,6 +72,24 @@ pub trait Audio: Send {
     fn set_volume(&self, level: u8) -> io::Result<()>;
 }
 
+/// Where a game's sound goes: a queue of 16-bit stereo frames, played at a fixed rate.
+pub trait SoundOut: Send {
+    /// Frames played per second.
+    fn rate(&self) -> u32;
+    /// Queues as many of `frames` (left, right) as fit without waiting; returns how many.
+    fn write(&mut self, frames: &[[i16; 2]]) -> io::Result<usize>;
+    /// Frames queued and not played yet.
+    fn queued(&mut self) -> usize;
+    /// How many frames the queue holds.
+    fn capacity(&self) -> usize;
+}
+
+/// The display's refresh, for pacing game frames.
+pub trait Vsync: Send {
+    /// Waits until the display next starts showing a new frame.
+    fn wait(&mut self) -> io::Result<()>;
+}
+
 /// A device's hardware services.
 pub struct Hardware {
     pub power: Box<dyn Power>,
@@ -85,6 +103,11 @@ pub trait Device {
     fn profile(&self) -> DeviceProfile;
     /// The hardware services. Called once; they then move to the UI crate's hardware thread.
     fn hardware(&self) -> Hardware;
+    /// Opens the sound output for a game (each game opens its own and closes it when it ends).
+    fn open_sound(&self) -> io::Result<Box<dyn SoundOut>>;
+    /// The display's refresh, if the device can wait for it; without, games are paced by a
+    /// timer at their own frame rate.
+    fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
 }
 
 /// Simulated hardware, for the desktop build: it prints what it is asked to do, and its battery

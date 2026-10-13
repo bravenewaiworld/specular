@@ -225,6 +225,16 @@ export component AppWindow inherits Window {
     in property <[Hint]> hints;
     in property <string> clock;
     in property <string> battery;
+    // A game being played: its newest frame, how it is scaled ("integer", "fit" or "stretch"),
+    // and whether its menu is open over it (paused).
+    in property <bool> playing;
+    in property <bool> game-menu;
+    in property <image> game-frame;
+    in property <string> scaling: "integer";
+    property <float> fit: min(root.width / max(1px, root.game-frame.width * 1px), root.height / max(1px, root.game-frame.height * 1px));
+    property <float> zoom: root.scaling == "integer" ? max(1, floor(root.fit)) : root.fit;
+    // The app's screens show unless a game is being played with its menu closed.
+    property <bool> screens-shown: !root.playing || root.game-menu;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
     // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
     // change and eases back to 0, sliding the screen in and fading it up.
@@ -251,15 +261,34 @@ export component AppWindow inherits Window {
         key-released(event) => { root.key(event.text, false) ? accept : reject }
     }
 
+    if root.playing : Rectangle {
+        background: black;
+        Image {
+            source: root.game-frame;
+            image-rendering: pixelated;
+            width: root.scaling == "stretch" ? root.width : root.game-frame.width * 1px * root.zoom;
+            height: root.scaling == "stretch" ? root.height : root.game-frame.height * 1px * root.zoom;
+        }
+        // Paused: the game dims behind its menu, which sits on a panel down the left.
+        if root.game-menu : Rectangle { background: #00000080; }
+        if root.game-menu : Rectangle {
+            x: 0; width: root.width * 0.46; background: Theme.bg.with-alpha(0.88);
+            Rectangle { x: parent.width - Theme.line; width: Theme.line; background: #ffffff14; }
+        }
+    }
+
     // The light bar along the top edge, glowing in the current tint.
     Rectangle {
+        visible: root.screens-shown;
         y: 0; height: 3px * Theme.u; background: Theme.tint;
         animate background { duration: Motion.tint; }
         drop-shadow-blur: 18px * Theme.u; drop-shadow-color: Theme.tint.with-alpha(0.45);
     }
-    StatusBar { y: 0; width: root.width; crumb: root.crumb; clock: root.clock; battery: root.battery; }
+    StatusBar { visible: root.screens-shown; y: 0; width: root.width; crumb: root.crumb; clock: root.clock; battery: root.battery; }
 
     content := Rectangle {
+        visible: root.screens-shown;
+        width: root.game-menu ? root.width * 0.46 : root.width;
         y: Theme.status-bar; height: root.height - Theme.status-bar - Theme.hint-bar;
         x: root.shift * root.arriving * 1px * Theme.u;
         opacity: 1 - root.arriving;
@@ -298,5 +327,5 @@ export component AppWindow inherits Window {
         }
     }
 
-    HintBar { y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
+    HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
 }

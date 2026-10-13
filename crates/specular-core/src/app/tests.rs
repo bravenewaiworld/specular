@@ -41,7 +41,10 @@ fn open_a_system_play_and_come_back() {
     assert_eq!(a.parent_title().as_deref(), Some("Library"));
     tap(&mut a, Button::Down, 10);
     assert_eq!(focused(&a), "Mother 3");
-    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3"))]);
+    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), Effect::Redraw(None)]);
+    assert_eq!(a.input_target(), InputTarget::Game);
+    a.handle(Msg::GameEnded(None));
+    assert_eq!(a.input_target(), InputTarget::App);
     assert_eq!(tap(&mut a, Button::B, 30), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(focused(&a), "Game Boy Advance"); // focus remembered
     assert_eq!(tap(&mut a, Button::B, 40), vec![]); // home stays
@@ -133,4 +136,27 @@ fn y_switches_games_to_a_grid_where_left_and_right_move() {
     tap(&mut a, Button::Y, 60);
     assert_eq!(a.view().layout, Layout::ListWithPicture);
     assert_eq!(focused(&a), "Game 0");
+}
+
+#[test]
+fn the_game_menu_pauses_and_quits() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10);
+    assert_eq!(a.playing().map(|g| g.title.as_str()), Some("Golden Sun"));
+    assert_eq!(tap(&mut a, Button::Down, 20), vec![]); // the game's
+    assert_eq!(tap(&mut a, Button::Menu, 30), vec![Effect::PauseGame(true), Effect::Redraw(Some(Transition::Push))]);
+    assert_eq!((a.input_target(), a.view().title.as_str()), (InputTarget::App, "Paused"));
+    assert_eq!(tap(&mut a, Button::B, 40), vec![Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
+    assert_eq!(a.input_target(), InputTarget::Game);
+    tap(&mut a, Button::Menu, 42);
+    assert_eq!(tap(&mut a, Button::Menu, 44), vec![Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
+    tap(&mut a, Button::Menu, 50);
+    tap(&mut a, Button::Down, 60);
+    assert_eq!(tap(&mut a, Button::A, 70), vec![Effect::SaveState, Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
+    // Sleeping and waking reopens the menu over the paused game.
+    assert_eq!(a.handle(Msg::Woke), vec![Effect::PauseGame(true), Effect::Redraw(Some(Transition::Push))]);
+    for (i, b) in [Button::Up, Button::A].into_iter().enumerate() { tap(&mut a, b, 80 + i as u64 * 10); } // wraps to "Quit game"
+    assert_eq!(a.playing(), None);
+    assert_eq!(a.view().title, "Game Boy Advance");
 }

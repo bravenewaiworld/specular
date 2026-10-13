@@ -1,9 +1,13 @@
 //! Specular on a desktop, for development: a window the size of the Brick's screen, simulated
-//! hardware, and the keyboard as the gamepad (see `specular_ui::run` for the keys).
+//! hardware, sound through ALSA, and the keyboard as the gamepad (see `specular_ui::run` for the
+//! keys). Games are paced by a timer (a desktop window can't wait for the display's refresh).
 //!
 //! Usage: specular [data folder, with roms/ and configs/ (default ./sdcard)]
+//! Cores are looked for in `cores/` next to the binary, or in $SPECULAR_CORES.
 
-use specular_core::device::{Device, DeviceProfile, Hardware, simulated};
+use std::io;
+
+use specular_core::device::{Device, DeviceProfile, Hardware, SoundOut, Vsync, simulated};
 use specular_core::input::Button;
 use specular_ui::DataRoot;
 
@@ -20,6 +24,8 @@ impl Device for Desktop {
         }
     }
     fn hardware(&self) -> Hardware { simulated::hardware() }
+    fn open_sound(&self) -> io::Result<Box<dyn SoundOut>> { Ok(Box::new(specular_linux::sound::Alsa::open("default")?)) }
+    fn open_vsync(&self) -> Option<Box<dyn Vsync>> { None }
 }
 
 fn main() -> Result<(), specular_ui::Error> {
@@ -27,5 +33,5 @@ fn main() -> Result<(), specular_ui::Error> {
     // SAFETY: before any other thread exists.
     unsafe { std::env::set_var("SLINT_SCALE_FACTOR", "1") };
     let data = std::env::args().nth(1).unwrap_or_else(|| "sdcard".into());
-    specular_ui::run(&Desktop, DataRoot(data.into()), None)
+    specular_ui::run(Box::new(Desktop), DataRoot(data.into()), None)
 }

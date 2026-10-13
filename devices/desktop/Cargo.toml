@@ -13,4 +13,5 @@ path = "src/main.rs"
 # Slint's desktop window (winit), drawn with the same renderer as on devices.
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg"] }
 specular-core = { path = "../../crates/specular-core" }
+specular-linux = { path = "../../crates/specular-linux" }
 specular-ui = { path = "../../crates/specular-ui" }

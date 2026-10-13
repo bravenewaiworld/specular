@@ -3937,6 +3937,7 @@ version = "0.1.0"
 dependencies = [
  "slint",
  "specular-core",
+ "specular-linux",
  "specular-ui",
 ]
 
@@ -3950,16 +3951,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "specular-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "specular-core",
+ "tempfile",
+]
+
+[[package]]
 name = "specular-ui"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "glow",
  "libc",
  "png",
  "serde_json",
  "slint",
  "slint-build",
  "specular-core",
+ "specular-runtime",
  "ureq",
 ]
 

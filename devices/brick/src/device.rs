@@ -6,7 +6,7 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
-use specular_core::device::{Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb};
+use specular_core::device::{Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
@@ -39,6 +39,16 @@ impl Device for Brick {
             display: Box::new(Disp),
             lights: Box::new(BrickLights(RgbLeds::new(Path::new("/sys/class/leds"), &names))),
             audio: Box::new(NoAudio),
+        }
+    }
+
+    fn open_sound(&self) -> io::Result<Box<dyn SoundOut>> { Ok(Box::new(specular_linux::sound::Alsa::open("default")?)) }
+
+    /// Our kernel implements the wait on /dev/fb0 (TrimUI's returned at once).
+    fn open_vsync(&self) -> Option<Box<dyn Vsync>> {
+        match specular_linux::vsync::FbVsync::open(Path::new("/dev/fb0")) {
+            Ok(v) => Some(Box::new(v)),
+            Err(e) => { eprintln!("vsync: {e}; games are paced by a timer"); None }
         }
     }
 }

@@ -6,6 +6,9 @@ use serde_json::json;
 use super::{Scope, SettingDecl, SettingKind, Visibility};
 
 pub const BRIGHTNESS: &str = "display.brightness";
+/// How a game's picture fills the screen: "integer" (the largest whole multiple of its size),
+/// "fit" (as large as fits, keeping its shape) or "stretch" (the whole screen).
+pub const SCALING: &str = "video.scaling";
 pub const LIGHT_BAR: &str = "lights.brightness";
 /// The light bar's brightness steps (0 = off).
 pub const LIGHT_BAR_MAX: i64 = 5;
@@ -19,7 +22,7 @@ pub fn settings() -> Vec<SettingDecl> {
         SettingDecl { key: BRIGHTNESS, section: "Display", label: "Brightness",
             kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" }, default: json!(6),
             visibility: Visibility::User, deepest: Scope::Global },
-        SettingDecl { key: "video.scaling", section: "Display", label: "Scaling",
+        SettingDecl { key: SCALING, section: "Display", label: "Scaling",
             kind: SettingKind::Choice(&[("integer", "Integer"), ("fit", "Fit"), ("stretch", "Stretch")]), default: json!("integer"),
             visibility: Visibility::User, deepest: Scope::Game },
         SettingDecl { key: LIGHT_BAR, section: "Lights", label: "Light bar",

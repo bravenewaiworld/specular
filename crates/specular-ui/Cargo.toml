@@ -14,6 +14,8 @@ png = "0.18.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 specular-core = { path = "../specular-core" }
+specular-runtime = { path = "../specular-runtime" }
+glow = "0.18"
 ureq = { version = "3.4.2", default-features = false }
 
 [build-dependencies]

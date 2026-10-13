@@ -8,7 +8,7 @@ use specular_ui::DataRoot;
 
 fn main() -> Result<(), specular_ui::Error> {
     let data = std::env::args().nth(1).unwrap_or_else(|| "/mnt/SDCARD".into());
-    specular_ui::run(&Brick, DataRoot(data.into()), Some(Box::new(|on_button| {
+    specular_ui::run(Box::new(Brick), DataRoot(data.into()), Some(Box::new(|on_button| {
         let platform = BrickPlatform::new()?;
         platform.on_button(on_button);
         slint::platform::set_platform(Box::new(platform)).map_err(|e| format!("{e:?}"))?;

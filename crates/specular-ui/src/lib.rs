@@ -4,6 +4,7 @@
 //! results come back as messages to the app, or as calls on the UI thread.
 
 mod art;
+mod game;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -13,8 +14,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, VecModel};
-use specular_core::app::{App, Effect, Msg};
+use specular_core::app::{App, Effect, InputTarget, Msg};
 use specular_core::device::{Device, DeviceProfile, Hardware, Rgb};
+use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::list;
 use specular_core::list::Rect;
@@ -48,11 +50,13 @@ impl DataRoot {
     pub fn roms(&self) -> PathBuf { self.0.join("roms") }
     pub fn configs(&self) -> PathBuf { self.0.join("configs") }
     pub fn cache(&self) -> PathBuf { self.0.join("cache") }
+    pub fn saves(&self) -> PathBuf { self.0.join("saves") }
+    pub fn bios(&self) -> PathBuf { self.0.join("bios") }
 }
 
 /// Runs Specular on `device` until the event loop ends. `install` sets up the device's platform;
 /// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`).
-pub fn run(device: &dyn Device, data: DataRoot, install: Option<InstallPlatform>) -> Result<(), Error> {
+pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatform>) -> Result<(), Error> {
     let profile = device.profile();
     let keyboard = install.is_none();
     if let Some(install) = install {
@@ -81,6 +85,10 @@ pub fn run(device: &dyn Device, data: DataRoot, install: Option<InstallPlatform>
         hardware: hardware_thread(device.hardware()),
         io,
         configs: data.configs(),
+        data,
+        device,
+        playing: RefCell::default(),
+        game_screen: RefCell::default(),
         repeat: slint::Timer::default(),
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
@@ -96,6 +104,9 @@ pub fn run(device: &dyn Device, data: DataRoot, install: Option<InstallPlatform>
     });
     window.set_rows(runner.rows.clone().into());
     window.set_hints(runner.hints.clone().into());
+    window.window().set_rendering_notifier(|state, api| {
+        if let slint::RenderingState::BeforeRendering = state && let Some(r) = RUNNER.with(|r| r.borrow().clone()) { r.before_render(api); }
+    }).map_err(|e| format!("this window can't show games: {e:?}"))?;
     RUNNER.with(|r| *r.borrow_mut() = Some(runner.clone()));
     if keyboard {
         window.on_key(|text, pressed| match key_button(&text) {
@@ -199,6 +210,11 @@ struct Runner {
     hardware: mpsc::Sender<HwCmd>,
     io: mpsc::Sender<Save>,
     configs: PathBuf,
+    data: DataRoot,
+    device: Box<dyn Device>,
+    /// The game being played (also while its menu is open).
+    playing: RefCell<Option<game::Playing>>,
+    game_screen: RefCell<game::Screen>,
     /// Fires when the next held-button repeat is due.
     repeat: slint::Timer,
     clock: slint::Timer,
@@ -231,6 +247,11 @@ const MAX_PICTURES: usize = 64;
 
 impl Runner {
     fn handle(self: &Rc<Self>, msg: Msg) {
+        // While a game is played, its buttons go straight to it.
+        if let Msg::Button(e) = &msg && game::for_game(e.button) && self.app.borrow().input_target() == InputTarget::Game {
+            if let Some(p) = self.playing.borrow().as_ref() { p.button(e); }
+            return;
+        }
         match &msg {
             Msg::Button(e) if e.button == Button::Power && e.time < self.ignore_power_until.get() => return,
             Msg::Woke => {
@@ -257,9 +278,59 @@ impl Runner {
                 let _ = self.io.send(Save(layer.path(&self.configs), values));
             }
             Effect::Apply { key, value } => self.apply_setting(key, &value),
-            Effect::Launch(game) => eprintln!("launch {} (the runtime comes later)", game.path.display()),
-            Effect::Sleep => { let _ = self.hardware.send(HwCmd::Sleep); }
+            Effect::Launch(game) => self.launch(&game),
+            Effect::PauseGame(paused) => self.with_game(|p| { if paused { p.release_all(); } p.session.pause(paused); Ok(()) }),
+            Effect::SaveState => {
+                let path = self.app.borrow().playing().map(|g| game::state_path(&self.data, g));
+                self.with_game(|p| path.map_or(Ok(()), |path| p.session.save_state(&path)));
+            }
+            Effect::LoadState => {
+                let path = self.app.borrow().playing().map(|g| game::state_path(&self.data, g)).filter(|p| p.exists());
+                self.with_game(|p| path.map_or(Ok(()), |path| p.session.load_state(&path)));
+            }
+            Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok(()) }),
+            Effect::QuitGame => {
+                if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
+                if let Some(w) = self.window.upgrade() { w.set_game_frame(slint::Image::default()); }
+                let _ = self.art_worker.send(art::ArtCmd::Paused(false));
+            }
+            Effect::Sleep => {
+                // A game's battery save is written first: power can fail while asleep.
+                self.with_game(|p| { p.release_all(); p.session.pause(true); p.session.flush() });
+                let _ = self.hardware.send(HwCmd::Sleep);
+            }
         }
+    }
+
+    /// Runs `f` on the game being played, if any, reporting its error.
+    fn with_game(&self, f: impl FnOnce(&game::Playing) -> std::io::Result<()>) {
+        if let Some(p) = self.playing.borrow().as_ref() && let Err(e) = f(p) { eprintln!("game: {e}"); }
+    }
+
+    /// Starts `game`. Art work stops while it runs, and loaded pictures are dropped, to leave the
+    /// game the memory and the CPU.
+    fn launch(self: &Rc<Self>, game: &Game) {
+        let _ = self.art_worker.send(art::ArtCmd::Paused(true));
+        self.art.borrow_mut().clear();
+        self.requested.borrow_mut().clear();
+        let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
+        let started = system.ok_or_else(|| format!("unknown system {}", game.system))
+            .and_then(|s| game::Playing::start(game, &s, &self.data, self.device.as_ref(), self.window.clone()));
+        match started {
+            Ok(p) => *self.playing.borrow_mut() = Some(p),
+            Err(e) => {
+                eprintln!("game: {e}");
+                let _ = self.art_worker.send(art::ArtCmd::Paused(false));
+                post(Msg::GameEnded(Some(e)));
+            }
+        }
+    }
+
+    /// Before each frame is drawn: the game's newest frame goes into its texture.
+    fn before_render(&self, api: &slint::GraphicsAPI) {
+        let Some(w) = self.window.upgrade() else { return };
+        let playing = self.playing.borrow();
+        self.game_screen.borrow_mut().before_render(api, playing.as_ref().map(|p| &*p.frames), &w);
     }
 
     /// Carries out the settings the device acts on; ignores the rest.
@@ -267,6 +338,10 @@ impl Runner {
         let level = value.as_i64().unwrap_or(0);
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
+            builtin::SCALING => {
+                if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
+                return;
+            }
             builtin::LIGHT_BAR => {
                 let scale = |c: u8| (c as i64 * level / builtin::LIGHT_BAR_MAX) as u8;
                 let Rgb(r, g, b) = ACCENT;
@@ -313,6 +388,8 @@ impl Runner {
         self.shown_layout.set(Some(view.layout));
         let hints = self.hints(&view);
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
+        w.set_playing(app.playing().is_some());
+        w.set_game_menu(app.playing().is_some() && app.input_target() == InputTarget::App);
         w.set_screen_title(view.title.as_str().into());
         w.set_crumb(app.parent_title().unwrap_or_default().into());
         w.set_focused_row(focus as i32);

@@ -29,6 +29,8 @@ pub enum Msg {
     Battery(Battery),
     /// The device woke from sleep.
     Woke,
+    /// The running game ended by itself, or failed to start (with why).
+    GameEnded(Option<String>),
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
 }
@@ -43,8 +45,26 @@ pub enum Effect {
     /// A global setting has this value (on loading, and when it changes). The UI carries out the
     /// ones the device acts on, such as brightness, and ignores the rest.
     Apply { key: &'static str, value: serde_json::Value },
+    /// Start playing a game.
     Launch(Game),
+    /// Pause (true) or resume the running game (its in-game menu opened or closed).
+    PauseGame(bool),
+    /// Save the running game's state, or load the state saved last.
+    SaveState,
+    LoadState,
+    ResetGame,
+    /// End the running game (its battery save is written).
+    QuitGame,
     Sleep,
+}
+
+/// Who a button press is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputTarget {
+    /// The app's screens.
+    App,
+    /// The running game: every button but Menu and Power goes to it (the app gets those two).
+    Game,
 }
 
 /// What a screen needs to build its view and act on presses.
@@ -71,6 +91,8 @@ pub enum Outcome {
     Changed,
     Push(ScreenState),
     Back,
+    /// Start playing this game.
+    Launch(Game),
     /// Carry these out (include `Effect::Redraw` if the screen changed too).
     Effects(Vec<Effect>),
 }
@@ -94,6 +116,8 @@ pub mod screens {
     pub const HOME: ScreenId = ScreenId(std::borrow::Cow::Borrowed("home"));
     pub const GAMES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("games"));
     pub const SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("settings"));
+    /// Over a paused game. Its presses are handled by the app itself (see `App::game_menu`).
+    pub const GAME_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game menu"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -105,6 +129,8 @@ pub struct App {
     screens: HashMap<ScreenId, Box<dyn Screen>>,
     nav: NavStack,
     repeater: Repeater,
+    /// The game being played (whether or not its menu is open).
+    playing: Option<Game>,
     /// How many columns a grid has on this display (from the UI; see `list::grid_columns`).
     grid_columns: usize,
     /// The current screen as last built, and its parent's title; None when they must be built
@@ -120,12 +146,14 @@ impl App {
         screens.insert(screens::HOME, Box::new(Home));
         screens.insert(screens::GAMES, Box::new(Games));
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
+        screens.insert(screens::GAME_MENU, Box::new(GameMenu));
         Self {
             ctx: Ctx { systems, games: Vec::new(), settings: Settings::new(settings), battery: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
             grid_columns: 1,
+            playing: None,
             cache: RefCell::default(),
         }
     }
@@ -135,6 +163,14 @@ impl App {
 
     /// Tells the app how many columns the UI's grids have, so up and down move by a whole row.
     pub fn set_grid_columns(&mut self, n: usize) { self.grid_columns = n.max(1); }
+
+    /// The game being played, if any.
+    pub fn playing(&self) -> Option<&Game> { self.playing.as_ref() }
+
+    /// Who buttons are for now: the game while one is played and its menu is closed.
+    pub fn input_target(&self) -> InputTarget {
+        if self.playing.is_some() && self.nav.top().id != screens::GAME_MENU { InputTarget::Game } else { InputTarget::App }
+    }
 
     /// What the screens see (read-only: changes go through messages, so the cache stays right).
     pub fn ctx(&self) -> &Ctx { &self.ctx }
@@ -174,7 +210,17 @@ impl App {
             Msg::Button(e) => self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default(),
             Msg::Tick(now) => self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default(),
             Msg::Library(games) => { self.ctx.games = games; self.changed(); vec![Effect::Redraw(None)] }
-            Msg::Woke => { self.repeater.reset(); vec![] }
+            // A game slept through stays paused, with its menu open.
+            Msg::Woke => {
+                self.repeater.reset();
+                if self.input_target() == InputTarget::Game { self.open_game_menu() } else { vec![] }
+            }
+            Msg::GameEnded(_) => {
+                if self.playing.take().is_none() { return vec![]; }
+                if self.nav.top().id == screens::GAME_MENU { self.nav.pop(); }
+                self.changed();
+                vec![Effect::Redraw(None)]
+            }
             Msg::Battery(b) => {
                 let changed = self.ctx.battery != Some(b);
                 self.ctx.battery = Some(b);
@@ -192,6 +238,12 @@ impl App {
     }
 
     fn press(&mut self, p: Press) -> Vec<Effect> {
+        match (self.input_target(), p.button) {
+            (InputTarget::Game, Button::Menu) => return self.open_game_menu(),
+            (InputTarget::Game, Button::Power) => return vec![Effect::Sleep],
+            (InputTarget::Game, _) => return vec![], // the UI gives these to the game
+            _ => {}
+        }
         let (view, focus) = (self.view(), self.focus());
         // Focus moves change nothing on the screen itself, so its cache stays. In a grid, left and
         // right move one cell, up and down a row of cells and the shoulder buttons two rows; in a
@@ -209,22 +261,56 @@ impl App {
             self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
             return vec![Effect::Redraw(None)];
         }
+        let focused = view.rows.get(focus).filter(|r| r.kind.focusable() && r.enabled);
+        let id = self.nav.top().id.clone();
+        if id == screens::GAME_MENU && p.button != Button::Power { return self.game_menu(p.button, focused.map(|r| r.id.0.as_str())); }
         match p.button {
             // (A, B, Menu and Power never repeat.)
             Button::Menu => return self.go(|nav| nav.home()),
             Button::Power => return vec![Effect::Sleep],
             _ => {}
         }
-        let focused = view.rows.get(focus).filter(|r| r.kind.focusable() && r.enabled);
-        let id = self.nav.top().id.clone();
         let outcome = self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p);
         match outcome {
             Outcome::None => vec![],
             Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
             Outcome::Push(s) => self.go(|nav| Some(nav.push(s))),
             Outcome::Back => self.go(|nav| nav.pop()),
+            Outcome::Launch(game) => {
+                self.playing = Some(game.clone());
+                self.repeater.reset();
+                vec![Effect::Launch(game), Effect::Redraw(None)]
+            }
             Outcome::Effects(e) => { self.changed(); e }
         }
+    }
+
+    fn open_game_menu(&mut self) -> Vec<Effect> {
+        let mut e = vec![Effect::PauseGame(true)];
+        e.extend(self.go(|nav| Some(nav.push(ScreenState::new(screens::GAME_MENU, None)))));
+        e
+    }
+
+    /// A press in the in-game menu: B and Menu resume, A does the focused row's action. Every
+    /// action closes the menu.
+    fn game_menu(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
+        let action = match (button, row) {
+            (Button::B | Button::Menu, _) | (Button::A, Some("resume")) => None,
+            (Button::A, Some("save")) => Some(Effect::SaveState),
+            (Button::A, Some("load")) => Some(Effect::LoadState),
+            (Button::A, Some("reset")) => Some(Effect::ResetGame),
+            (Button::A, Some("quit")) => {
+                self.playing = None;
+                let mut e = vec![Effect::QuitGame];
+                e.extend(self.go(|nav| nav.pop()));
+                return e;
+            }
+            _ => return vec![],
+        };
+        let mut e: Vec<Effect> = action.into_iter().collect();
+        e.push(Effect::PauseGame(false));
+        e.extend(self.go(|nav| nav.pop()));
+        e
     }
 
     /// Changes screen (if `f` does), with a redraw that animates the change.
@@ -293,7 +379,7 @@ impl Screen for Games {
                 Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global)])
             }
             (Button::A, Some(row)) => ctx.games.iter().find(|g| g.path.as_os_str() == row.id.0.as_str())
-                .map_or(Outcome::None, |g| Outcome::Effects(vec![Effect::Launch(g.clone())])),
+                .map_or(Outcome::None, |g| Outcome::Launch(g.clone())),
             _ => Outcome::None,
         }
     }
@@ -315,6 +401,24 @@ impl Screen for SettingsScreen {
         let Some((key, value)) = focused.and_then(|row| ctx.settings.press(&row.id.0, &Layer::Global, p)) else { return Outcome::None };
         Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key, value }])
     }
+}
+
+/// The menu over a paused game. The app handles its presses (`App::game_menu`), since they
+/// control the game itself.
+struct GameMenu;
+
+impl Screen for GameMenu {
+    fn view(&self, _: &Ctx, _: &ScreenState) -> ScreenView {
+        let action = |id: &str, label: &str| Row::new(id, label, RowKind::Action { value: None });
+        ScreenView {
+            title: "Paused".into(), layout: Layout::List,
+            rows: vec![action("resume", "Resume"), action("save", "Save state"), action("load", "Load state"),
+                       action("reset", "Restart"), action("quit", "Quit game")],
+            hints: vec![(Button::B, "Resume".into()), (Button::A, "Select".into())],
+        }
+    }
+
+    fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
 }
 
 #[cfg(test)]
