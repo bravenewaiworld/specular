@@ -98,6 +98,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         picture: RefCell::default(),
         picture_timer: slint::Timer::default(),
         toast_timer: slint::Timer::default(),
+        volume_timer: slint::Timer::default(),
         art_worker,
         art_loader,
         on_screen: RefCell::default(),
@@ -141,7 +142,7 @@ fn on_ui(f: impl FnOnce(&Rc<Runner>) + Send + 'static) {
 /// Delivers a message to the app on the UI thread, from any thread.
 fn post(msg: Msg) { on_ui(move |r| r.handle(msg)); }
 
-enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Sleep }
+enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Volume(u8), Sleep }
 
 /// How often the battery is read (on some devices each read is a slow bus transfer).
 const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
@@ -159,6 +160,7 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
             let result = match rx.recv_timeout(next_battery.saturating_duration_since(Instant::now())) {
                 Ok(HwCmd::Brightness(l)) => hw.display.set_brightness(l),
                 Ok(HwCmd::Lights(c)) => hw.lights.show(&c),
+                Ok(HwCmd::Volume(l)) => hw.audio.set_volume(l),
                 Ok(HwCmd::Sleep) => {
                     let r = hw.power.sleep();
                     post(Msg::Woke);
@@ -232,6 +234,7 @@ struct Runner {
     picture: RefCell<Option<PathBuf>>,
     picture_timer: slint::Timer,
     toast_timer: slint::Timer,
+    volume_timer: slint::Timer,
     art_worker: mpsc::Sender<art::ArtCmd>,
     art_loader: mpsc::Sender<Vec<PathBuf>>,
     /// What the art worker and loader were last told (less the pictures loaded since), so
@@ -242,6 +245,8 @@ struct Runner {
 
 /// How long a toast shows.
 const TOAST_TIME: Duration = Duration::from_millis(2500);
+/// How long the volume shows after the last change.
+const VOLUME_TIME: Duration = Duration::from_millis(1200);
 /// While a direction is held, the picture beside the list changes only once the focus has
 /// rested this long.
 const PICTURE_DELAY: Duration = Duration::from_millis(120);
@@ -288,6 +293,14 @@ impl Runner {
             Effect::LoadState => self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") }),
             Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok("") }),
             Effect::Notice(text) => self.toast(&text),
+            Effect::ShowVolume(level) => {
+                let Some(w) = self.window.upgrade() else { return };
+                w.set_volume(level as f32 / builtin::VOLUME_MAX as f32);
+                w.set_volume_text(level.to_string().into());
+                w.set_volume_shown(true);
+                let weak = self.window.clone();
+                self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
+            }
             Effect::QuitGame => {
                 // (The game's texture is freed, and stops being shown, at the next draw.)
                 if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
@@ -331,7 +344,13 @@ impl Runner {
         let started = system.ok_or_else(|| format!("unknown system {}", game.system))
             .and_then(|s| game::Playing::start(game, &s, &self.data, self.device.as_ref(), self.window.clone()));
         match started {
-            Ok(p) => *self.playing.borrow_mut() = Some(p),
+            Ok(p) => {
+                *self.playing.borrow_mut() = Some(p);
+                // Some devices can only set the volume once sound has been opened (ALSA's
+                // software volume appears with its first stream).
+                let level = self.app.borrow().ctx().settings.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
+                let _ = self.hardware.send(HwCmd::Volume(level as u8));
+            }
             Err(e) => {
                 eprintln!("game: {e}");
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
@@ -354,6 +373,7 @@ impl Runner {
         let level = value.as_i64().unwrap_or(0);
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
+            builtin::VOLUME => HwCmd::Volume(level as u8),
             builtin::SCALING => {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
                 return;

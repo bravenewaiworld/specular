@@ -9,6 +9,9 @@ pub const BRIGHTNESS: &str = "display.brightness";
 /// How a game's picture fills the screen: "integer" (the largest whole multiple of its size),
 /// "fit" (as large as fits, keeping its shape) or "stretch" (the whole screen).
 pub const SCALING: &str = "video.scaling";
+/// Sound volume, 0 (silent) to `VOLUME_MAX`; the volume keys step it.
+pub const VOLUME: &str = "sound.volume";
+pub const VOLUME_MAX: i64 = 20;
 pub const LIGHT_BAR: &str = "lights.brightness";
 /// The light bar's brightness steps (0 = off).
 pub const LIGHT_BAR_MAX: i64 = 5;
@@ -25,6 +28,9 @@ pub fn settings() -> Vec<SettingDecl> {
         SettingDecl { key: SCALING, section: "Display", label: "Scaling",
             kind: SettingKind::Choice(&[("integer", "Integer"), ("fit", "Fit"), ("stretch", "Stretch")]), default: json!("integer"),
             visibility: Visibility::User, deepest: Scope::Game },
+        SettingDecl { key: VOLUME, section: "Sound", label: "Volume",
+            kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(12),
+            visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: LIGHT_BAR, section: "Lights", label: "Light bar",
             kind: SettingKind::Int { min: 0, max: LIGHT_BAR_MAX, step: 1, unit: "" }, default: json!(3),
             visibility: Visibility::User, deepest: Scope::Global },

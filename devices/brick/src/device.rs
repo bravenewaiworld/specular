@@ -38,7 +38,7 @@ impl Device for Brick {
             power: Box::new(BrickPower(PowerSupply::find(Path::new("/sys/class/power_supply")))),
             display: Box::new(Disp),
             lights: Box::new(BrickLights(RgbLeds::new(Path::new("/sys/class/leds"), &names))),
-            audio: Box::new(NoAudio),
+            audio: Box::new(SoftVolume),
         }
     }
 
@@ -103,8 +103,16 @@ impl Lights for BrickLights {
 }
 
 /// Volume isn't mapped onto the codec's controls yet (see ROADMAP.md, "Audio").
-struct NoAudio;
+/// The volume, as the software volume control in TrimUI's ALSA set-up ("Soft Volume Master" on
+/// the default output, /etc/asound.conf), with amixer. ALSA creates that control when something
+/// first plays after boot, so until then setting it fails (Specular sets it again when a game
+/// starts). One level for the speaker and headphones alike, for now.
+struct SoftVolume;
 
-impl Audio for NoAudio {
-    fn set_volume(&self, _: u8) -> io::Result<()> { Ok(()) }
+impl Audio for SoftVolume {
+    fn set_volume(&self, level: u8) -> io::Result<()> {
+        // The control's steps are even in dB (-51 to 0 dB), so percent of it sounds even too.
+        let percent = format!("{}%", level as u32 * 100 / specular_core::settings::builtin::VOLUME_MAX as u32);
+        run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "sset", "Soft Volume Master", &percent])
+    }
 }

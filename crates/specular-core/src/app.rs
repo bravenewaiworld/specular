@@ -57,6 +57,8 @@ pub enum Effect {
     QuitGame,
     /// Show this short message for a moment.
     Notice(String),
+    /// The volume keys changed the volume: show its new level (0 to `builtin::VOLUME_MAX`).
+    ShowVolume(i64),
     Sleep,
 }
 
@@ -241,6 +243,7 @@ impl App {
 
     fn press(&mut self, p: Press) -> Vec<Effect> {
         match (self.input_target(), p.button) {
+            (_, Button::VolUp | Button::VolDown) => return self.step_volume(if p.button == Button::VolUp { 1 } else { -1 }),
             (InputTarget::Game, Button::Menu) => return self.open_game_menu(),
             (InputTarget::Game, Button::Power) => return vec![Effect::Sleep],
             (InputTarget::Game, _) => return vec![], // the UI gives these to the game
@@ -285,6 +288,17 @@ impl App {
             }
             Outcome::Effects(e) => { self.changed(); e }
         }
+    }
+
+    /// The volume keys, on every screen and in games.
+    fn step_volume(&mut self, delta: i64) -> Vec<Effect> {
+        let s = &mut self.ctx.settings;
+        let now = s.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
+        let new = (now + delta).clamp(0, builtin::VOLUME_MAX);
+        if new != now { let _ = s.set(builtin::VOLUME, &Layer::Global, new.into()); }
+        // The settings screen shows the volume too.
+        self.changed();
+        vec![Effect::Apply { key: builtin::VOLUME, value: new.into() }, Effect::SaveSettings(Layer::Global), Effect::ShowVolume(new), Effect::Redraw(None)]
     }
 
     fn open_game_menu(&mut self) -> Vec<Effect> {

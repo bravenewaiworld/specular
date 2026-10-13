@@ -238,6 +238,11 @@ export component AppWindow inherits Window {
     // A short message, shown over everything while `toast-shown`.
     in property <string> toast;
     in property <bool> toast-shown;
+    // The volume (0–1, and as the number shown), shown over everything for a moment after the
+    // volume keys change it.
+    in property <float> volume;
+    in property <string> volume-text;
+    in property <bool> volume-shown;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
     // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
     // change and eases back to 0, sliding the screen in and fading it up.
@@ -338,6 +343,29 @@ export component AppWindow inherits Window {
         animate opacity { duration: Motion.fade; }
         Rectangle { y: 0; height: Theme.line; width: parent.width - 2 * parent.border-radius; background: Theme.edge; }
         toast-text := Text { text: root.toast; font-size: Theme.caption; font-weight: 500; color: Theme.fg; }
+    }
+
+    // The volume: a slim gauge down the right edge, by the volume keys.
+    Rectangle {
+        x: root.width - self.width - 28px * Theme.u; y: (root.height - self.height) / 2;
+        width: 56px * Theme.u; height: 320px * Theme.u;
+        border-radius: Theme.radius; background: Theme.raised;
+        opacity: root.volume-shown ? 1 : 0;
+        animate opacity { duration: Motion.fade; }
+        Rectangle {
+            x: (parent.width - self.width) / 2; width: 8px * Theme.u;
+            y: 20px * Theme.u; height: parent.height - 72px * Theme.u;
+            border-radius: self.width / 2; background: Theme.faint; clip: true;
+            Rectangle {
+                y: parent.height * (1 - root.volume); height: parent.height * root.volume;
+                animate y, height { duration: Motion.focus; easing: Motion.decelerate; }
+                background: Theme.accent;
+            }
+        }
+        Text {
+            y: parent.height - 44px * Theme.u; height: 32px * Theme.u; width: parent.width; horizontal-alignment: center;
+            text: root.volume-text; font-family: Theme.mono; font-size: Theme.caption; color: Theme.fg;
+        }
     }
 
     HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }

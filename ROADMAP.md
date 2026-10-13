@@ -192,7 +192,7 @@ Found along the way:
 5. The Slint theme and prefabs from the Light Bar tokens, and the image loader.
 6. A test-pattern runtime: launch zoom, in-game menu, quit.
 7. The app with desktop and Brick builds, and a screen for when there's no SD card.
-8. `make specular`; the test card's frontend service switches from `status` to Specular.
+8. `make specular`; the test card's frontend service switches from `status` to Specular (2026-10-13: it runs Specular, and falls back to `status` until the next boot after 3 failures within a minute).
 
 Long lists (2026-10-12): the core's list layout gives the rows within a screen of the view, and the UI draws them from a fixed set of about 30 reusable row slots (each row keeps its slot while in view), so a list's cost doesn't grow with its length. The app builds a screen's rows once and keeps them until its content changes; a focus move takes about 15 µs (desktop) with 3,000 games. On the Brick, 3,000 games use 22 MB resident (21 MB with none); scrolling continuously at 20 moves a second uses about 47 % of one core at the governor's low clock, mostly drawing.
 
@@ -236,4 +236,3 @@ Minor or unproven savings, left until profiling shows they matter.
 ## Open questions
 
 - Whether folder names count as a hint when working out a ROM's system.
-- After repeated crashes, should the test card fall back to `status`?

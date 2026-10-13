@@ -160,3 +160,15 @@ fn the_game_menu_pauses_and_quits() {
     assert_eq!(a.playing(), None);
     assert_eq!(a.view().title, "Game Boy Advance");
 }
+
+#[test]
+fn volume_keys_work_in_games_and_stop_at_the_ends() {
+    let mut a = app();
+    let level = |e: &[Effect]| e.iter().find_map(|e| match e { Effect::ShowVolume(v) => Some(*v), _ => None });
+    assert_eq!(level(&tap(&mut a, Button::VolUp, 0)), Some(13));
+    tap(&mut a, Button::A, 10);
+    tap(&mut a, Button::A, 20); // playing
+    assert_eq!(level(&tap(&mut a, Button::VolDown, 30)), Some(12));
+    for t in 0..30 { tap(&mut a, Button::VolDown, 40 + t); }
+    assert_eq!(level(&tap(&mut a, Button::VolDown, 100)), Some(0));
+}
