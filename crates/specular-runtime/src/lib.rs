@@ -384,7 +384,7 @@ impl Game {
         self.save_pending = ram.is_empty();
         let n = ram.len().min(data.len());
         ram[..n].copy_from_slice(&data[..n]);
-        if data.len() != ram.len() { eprintln!("game: {} is {} bytes, the game's save memory {}", self.save.display(), data.len(), ram.len()); }
+        if !ram.is_empty() && data.len() != ram.len() { eprintln!("game: {} is {} bytes, the game's save memory {}", self.save.display(), data.len(), ram.len()); }
         self.saved = ram.to_vec();
     }
 
@@ -392,7 +392,10 @@ impl Game {
     /// some cores (mGBA) only know it once the game has used its save memory.
     fn write_save(&mut self) -> io::Result<()> {
         // A core that only now has save memory gets the file first.
-        if self.save_pending { self.read_save(); return Ok(()); }
+        if self.save_pending {
+            if !self.core.save_ram().is_empty() { self.read_save(); }
+            return Ok(());
+        }
         let ram = self.core.save_ram();
         if ram.is_empty() || ram == self.saved.as_slice() { return Ok(()); }
         let data = ram.to_vec();
