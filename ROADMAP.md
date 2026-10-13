@@ -212,7 +212,7 @@ Long lists (2026-10-12): the core's list layout gives the rows within a screen o
 4. Per-system cores and defaults: mGBA for GB, GBC and GBA (`tools/build-cores.sh`). The MVP plays these three (decided 2026-10-13); systems with no core are left out of the library. NES, SNES, Mega Drive and PS1 come after it, each with a licence and speed check: the usual cores are non-commercial (snes9x, Genesis Plus GX, PicoDrive) or possibly GPLv2-only (FCEUmm, PCSX ReARMed); bsnes, BlastEm, QuickNES or Nestopia, and SwanStation are the GPLv3-compatible candidates.
 5. Done: pausing on sleep, writing the battery save first; waking reopens the in-game menu.
 6. Done: battery saves written every 10 s when changed, on quit, on sleep and on a stop signal.
-7. Done: a watchdog: a game that makes no frame for 6 s while not paused makes Specular exit, and the service manager restarts it.
+7. Done: a watchdog: a core that spends 6 s on one frame (stuck in a loop or a deadlock) makes Specular exit, and the service manager restarts it.
 
 ### Later
 

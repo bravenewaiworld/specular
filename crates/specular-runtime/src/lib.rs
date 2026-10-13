@@ -71,7 +71,12 @@ const STATS_FRAMES: usize = 600;
 
 /// The run times behind `Stats`, shared with the game's thread.
 #[derive(Default)]
-struct Runs { count: u64, recent: VecDeque<Duration> }
+struct Runs {
+    count: u64,
+    recent: VecDeque<Duration>,
+    /// When the core's current run began; None between runs (see `Session::watch`).
+    running_since: Option<Instant>,
+}
 
 /// A picture from the game, 8-bit RGBA.
 #[derive(Default)]
@@ -163,6 +168,20 @@ impl Session {
         sorted.sort();
         let worst = sorted.last().copied().unwrap_or_default();
         Stats { frames: runs.count, median: percentile(&sorted, 50), p95: percentile(&sorted, 95), worst }
+    }
+
+    /// Calls `stuck`, once, if one run of the core (one frame, normally milliseconds) goes on for
+    /// `limit`: the core is caught in a loop or a deadlock, and its thread can't be stopped. Time
+    /// paused or waiting for the display isn't a run, so it never counts. Watches from a thread of
+    /// its own, so it still works while the UI thread waits on the stuck game (to quit it, say),
+    /// until the game ends. The core's other calls (save states, reset) aren't watched.
+    pub fn watch(&self, limit: Duration, stuck: impl FnOnce() + Send + 'static) {
+        let runs = Arc::downgrade(&self.runs);
+        let running_since = move || runs.upgrade().map(|r| r.lock().unwrap().running_since);
+        std::thread::spawn(move || while let Some(since) = running_since() {
+            if since.is_some_and(|t| t.elapsed() >= limit) { return stuck(); }
+            std::thread::sleep(limit / 4);
+        });
     }
 
     /// The buttons held now, as `joypad_bit`s.
@@ -284,11 +303,13 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
         }
         pacer.wait();
         let t = Instant::now();
+        runs.lock().unwrap().running_since = Some(t);
         unsafe { (game.core.run)() };
         let took = t.elapsed();
         pacer.ran(took);
         {
             let mut r = runs.lock().unwrap();
+            r.running_since = None;
             r.count += 1;
             r.recent.push_back(took);
             if r.recent.len() > STATS_FRAMES { r.recent.pop_front(); }
