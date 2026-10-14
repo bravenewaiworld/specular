@@ -38,6 +38,10 @@ pub struct LaunchSpec {
     pub system_dir: PathBuf,
     /// Core options to set, by key (e.g. "mgba_idle_optimization"); the rest keep their defaults.
     pub options: Vec<(String, String)>,
+    /// Give the core only the ROM's path, even if it asks for the contents. Only for a core known
+    /// to then read the file itself (libretro doesn't promise that a core will); it can map the
+    /// file instead of copying it.
+    pub rom_by_path: bool,
 }
 
 /// Where the game's output goes.
@@ -354,8 +358,9 @@ impl Game {
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
-        // A core that reads the file itself gets only its path; others get its contents.
-        let rom = if info.need_fullpath { None } else {
+        // A core that reads the file itself (as it says, or as the spec says) gets only its path;
+        // others get its contents too.
+        let rom = if info.need_fullpath || spec.rom_by_path { None } else {
             Some(MappedFile::open(&spec.rom).map_err(|e| format!("reading {}: {e}", spec.rom.display()))?)
         };
         let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());

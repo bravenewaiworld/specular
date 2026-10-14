@@ -1,8 +1,8 @@
 //! Runs a game headless for a while, then reports how long the core took per frame and saves
 //! the last frame as raw RGBA (for checking a core and a ROM without the UI, on any machine).
-//! Usage: play [--vsync] <core.so> <rom> [seconds (default 5)] [out.rgba (default /tmp/play.rgba)]
+//! Usage: play [--vsync] [--by-path] <core.so> <rom> [seconds (default 5)] [out.rgba (default /tmp/play.rgba)]
 //! --vsync paces the game by /dev/fb0's refresh (as a device does, assuming the Brick's 60.2 Hz)
-//! instead of a timer.
+//! instead of a timer. --by-path gives the core only the ROM's path (`LaunchSpec::rom_by_path`).
 //! Battery saves go to /tmp/play.srm; no sound.
 
 use std::sync::Arc;
@@ -12,13 +12,14 @@ use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
 fn main() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().collect();
-    let vsync = args.iter().position(|a| a == "--vsync").map(|i| args.remove(i)).is_some();
-    let [_, core, rom, ..] = &args[..] else { return Err("usage: play [--vsync] <core.so> <rom> [seconds] [out.rgba]".into()) };
+    let mut flag = |name: &str| args.iter().position(|a| a == name).map(|i| args.remove(i)).is_some();
+    let (vsync, rom_by_path) = (flag("--vsync"), flag("--by-path"));
+    let [_, core, rom, ..] = &args[..] else { return Err("usage: play [--vsync] [--by-path] <core.so> <rom> [seconds] [out.rgba]".into()) };
     let seconds: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let out = args.get(4).cloned().unwrap_or_else(|| "/tmp/play.rgba".into());
     let frames = Arc::new(FrameSlot::default());
     let session = Session::start(
-        LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), system_dir: "/tmp".into(), options: vec![] },
+        LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), system_dir: "/tmp".into(), options: vec![], rom_by_path },
         Outputs {
             sound: None, frames: frames.clone(), on_frame: Box::new(|| {}),
             vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },

@@ -42,11 +42,12 @@ impl Playing {
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
         let spec = LaunchSpec {
-            core: cores_dir().join(format!("{core}.so")),
+            core: cores_dir().join(format!("{}.so", core.library)),
             rom: data.roms().join(&game.path),
             save: game.save_path(&data.saves(), "srm"),
             system_dir: data.bios(),
-            options: system.core_options.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
+            options: core.options.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
+            rom_by_path: core.rom_by_path,
         };
         let sound = device.open_sound().map_err(|e| eprintln!("sound: {e}; playing without")).ok();
         let frames = Arc::new(FrameSlot::default());

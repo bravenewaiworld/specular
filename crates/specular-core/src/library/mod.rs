@@ -32,39 +32,52 @@ pub struct SystemDecl {
     /// Where its ROM header holds a game code that the table lists as a serial: (offset, length).
     /// Identifies ROMs no checksum matches, such as hacks, which keep their base game's code.
     pub header_code: Option<(u64, usize)>,
-    /// The libretro core that plays its games (its library's name without ".so", e.g.
-    /// "mgba_libretro"), and the core options it runs with; None while there is none (its games
-    /// can't be played yet).
-    pub core: Option<&'static str>,
-    pub core_options: &'static [(&'static str, &'static str)],
+    /// The libretro core that plays its games; None while there is none (its games can't be
+    /// played yet).
+    pub core: Option<&'static CoreDecl>,
     /// The size of a header some dumps put before the ROM (such as the 512 bytes that old SNES
     /// copier devices added), which the table's checksums leave out: skipped when hashing a file
     /// whose size is that much over a multiple of 1 KiB.
     pub dump_header: u64,
 }
 
-/// mGBA's options, for GB, GBC and GBA alike. "Remove Known" skips the busy-wait loops of known
-/// games, which saves battery without changing how they run (TrimUI's own setting too).
-const MGBA: &[(&str, &str)] = &[("mgba_idle_optimization", "Remove Known")];
+/// A libretro core, and how Specular runs it.
+#[derive(Debug)]
+pub struct CoreDecl {
+    /// Its library's name without ".so", e.g. "mgba_libretro".
+    pub library: &'static str,
+    /// The core options it runs with; the rest keep the core's defaults.
+    pub options: &'static [(&'static str, &'static str)],
+    /// Give it only the ROM's path, although it asks for the contents (see
+    /// `LaunchSpec::rom_by_path` in specular-runtime).
+    pub rom_by_path: bool,
+}
+
+/// mGBA, for GB, GBC and GBA alike. "Remove Known" skips the busy-wait loops of known games,
+/// which saves battery without changing how they run (TrimUI's own setting too). It gets only the
+/// ROM's path, and our build (tools/core-patches/mgba) maps that file instead of copying it. Given
+/// the contents, mGBA copies them, and copies a GBA ROM again on the first write to its cartridge
+/// area (as Pokémon games' clock does): 64 MB of memory for a 32 MB ROM.
+const MGBA: &CoreDecl = &CoreDecl { library: "mgba_libretro", options: &[("mgba_idle_optimization", "Remove Known")], rom_by_path: true };
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,
 /// .chd, .pbp or .m3u; a .bin is only a track of a .cue.
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
         SystemDecl { id: "gb", name: "Game Boy", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
-            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: None, dump_header: 0 },
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some(MGBA), header_code: None, dump_header: 0 },
         SystemDecl { id: "gbc", name: "Game Boy Color", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
-            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: None, dump_header: 0 },
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some(MGBA), header_code: None, dump_header: 0 },
         SystemDecl { id: "gba", name: "Game Boy Advance", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
-            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some("mgba_libretro"), core_options: MGBA, header_code: Some((0xac, 4)), dump_header: 0 },
+            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some(MGBA), header_code: Some((0xac, 4)), dump_header: 0 },
         SystemDecl { id: "nes", name: "NES", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
-            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: None, core_options: &[], header_code: None, dump_header: 0 },
+            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: None, header_code: None, dump_header: 0 },
         SystemDecl { id: "snes", name: "Super Nintendo", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
-            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, core_options: &[], header_code: None, dump_header: 512 },
+            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, header_code: None, dump_header: 512 },
         SystemDecl { id: "md", name: "Mega Drive", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
-            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, core_options: &[], header_code: None, dump_header: 0 },
+            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, header_code: None, dump_header: 0 },
         SystemDecl { id: "ps1", name: "PlayStation", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
-            screen: (320, 240), game_db: "", core: None, core_options: &[], header_code: None, dump_header: 0 },
+            screen: (320, 240), game_db: "", core: None, header_code: None, dump_header: 0 },
     ]
 }
 

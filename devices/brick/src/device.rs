@@ -5,7 +5,6 @@
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
 
 use specular_core::device::{Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
@@ -44,7 +43,7 @@ impl Device for Brick {
     }
 
     fn open_sound(&self) -> io::Result<Box<dyn SoundOut>> {
-        Ok(Box::new(BrickSound { alsa: specular_linux::sound::Alsa::open("default")?, started: false }))
+        Ok(Box::new(specular_linux::sound::Alsa::open("default")?))
     }
 
     /// The wait for the display's refresh on /dev/fb0 (our kernel's; TrimUI's returns at once).
@@ -62,13 +61,8 @@ impl Power for BrickPower {
     fn battery(&self) -> io::Result<specular_core::device::Battery> { self.0.battery() }
 
     /// Through the test card's `sleepnow`, which also stops WiFi around sleep (its driver can't
-    /// suspend while connected). The codec's driver resets the volume on waking, so it is set
-    /// again then.
-    fn sleep(&self) -> io::Result<()> {
-        let slept = run("/usr/bin/sleepnow", &[]);
-        if let Err(e) = restore_volume() { eprintln!("volume after waking: {e}"); }
-        slept
-    }
+    /// suspend while connected).
+    fn sleep(&self) -> io::Result<()> { run("/usr/bin/sleepnow", &[]) }
 
     fn shutdown(&self) -> io::Result<()> { run("/sbin/poweroff", &[]) }
 }
@@ -110,58 +104,19 @@ impl Lights for BrickLights {
     fn show(&self, colours: &[Rgb]) -> io::Result<()> { self.0.show(colours, LED_LIMIT) }
 }
 
-/// The volume, as the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), which
-/// both the speaker and the headphones follow, set with amixer. Specular's levels are 2 dB apart,
-/// the top one at 0 dB (louder only clips); 0 is the control's lowest, -119 dB. (TrimUI's ALSA
-/// set-up also has a software volume, "Soft Volume Master", but the driver refuses writes to it.)
-/// One level for the speaker and headphones alike, for now.
-///
-/// The codec's driver writes its own default (about 0 dB) over the control whenever playback
-/// starts and on waking, so the last level is kept and set again then (`restore_volume`).
+/// The volume, as the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), set
+/// with amixer. Specular's levels are 2 dB apart, the top one at 0 dB (louder only clips); 0 is
+/// the control's lowest, -119 dB. (TrimUI's ALSA set-up also has a software volume, "Soft Volume
+/// Master", but the driver refuses writes to it.) One level for the speaker and headphones alike,
+/// for now.
 struct DacVolume;
-
-/// The level last set (None: none yet). Locked while amixer runs, so that setting it again can't
-/// land after, and so undo, a newer level set at the same time.
-static VOLUME: Mutex<Option<u8>> = Mutex::new(None);
 
 impl Audio for DacVolume {
     fn set_volume(&self, level: u8) -> io::Result<()> {
-        let mut last = VOLUME.lock().unwrap_or_else(PoisonError::into_inner);
-        *last = Some(level);
-        set_dac_volume(level)
+        // 2 dB per level below the top is 8/3 of the control's steps. Never above 159: the
+        // control goes up to +72 dB.
+        let below_top = (specular_core::settings::builtin::VOLUME_MAX - level as i64).max(0) as f64;
+        let value = if level == 0 { 0 } else { (159.0 - below_top * 2.0 / 0.75).round() as i32 };
+        run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", "name=DAC volume", &format!("{value},{value}")])
     }
-}
-
-/// Sets the last level again, if one was set.
-fn restore_volume() -> io::Result<()> {
-    let last = VOLUME.lock().unwrap_or_else(PoisonError::into_inner);
-    last.map_or(Ok(()), set_dac_volume)
-}
-
-fn set_dac_volume(level: u8) -> io::Result<()> {
-    // 2 dB per level below the top is 8/3 of the control's steps. Never above 159: the control
-    // goes up to +72 dB.
-    let below_top = (specular_core::settings::builtin::VOLUME_MAX - level as i64).max(0) as f64;
-    let value = if level == 0 { 0 } else { (159.0 - below_top * 2.0 / 0.75).round() as i32 };
-    run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", "name=DAC volume", &format!("{value},{value}")])
-}
-
-/// Sound output that sets the volume again once its playback has started (see `DacVolume`).
-struct BrickSound { alsa: specular_linux::sound::Alsa, started: bool }
-
-impl SoundOut for BrickSound {
-    fn rate(&self) -> u32 { self.alsa.rate() }
-    fn write(&mut self, frames: &[[i16; 2]]) -> io::Result<usize> {
-        let n = self.alsa.write(frames)?;
-        if n > 0 && !self.started {
-            self.started = true;
-            // On a thread of its own, so the game's frame doesn't wait for amixer. (Through
-            // TrimUI's dmix the codec's stream keeps running while the game's underruns, so later
-            // writes don't restart it.)
-            std::thread::spawn(|| { if let Err(e) = restore_volume() { eprintln!("volume at playback start: {e}"); } });
-        }
-        Ok(n)
-    }
-    fn queued(&mut self) -> usize { self.alsa.queued() }
-    fn capacity(&self) -> usize { self.alsa.capacity() }
 }

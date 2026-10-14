@@ -37,7 +37,7 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let (count, sound) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let c = count.clone();
     let session = Session::start(
-        LaunchSpec { core, rom, save: save.clone(), system_dir: dir.path().into(), options: vec![] },
+        LaunchSpec { core, rom, save: save.clone(), system_dir: dir.path().into(), options: vec![], rom_by_path: false },
         Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(),
                   on_frame: Box::new(move || *c.lock().unwrap() += 1) },
     ).unwrap();
@@ -63,7 +63,7 @@ fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) };
-    let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), system_dir: dir.path().into(), options: vec![] };
+    let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), system_dir: dir.path().into(), options: vec![], rom_by_path: false };
     assert!(Session::start(spec(dir.path().join("none.so")), out()).is_err());
     if let Some(core) = mgba() { assert!(Session::start(spec(core), out()).err().unwrap().contains("none.gba")); }
 }
