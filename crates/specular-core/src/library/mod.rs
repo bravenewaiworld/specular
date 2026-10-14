@@ -103,7 +103,7 @@ fn skip_dir(name: &str) -> bool { name.starts_with('.') || name.eq_ignore_ascii_
 fn skip_file(name: &str) -> bool { name.starts_with('.') }
 
 /// How deep folders are followed, so a huge tree can't stall the scan.
-const MAX_DEPTH: usize = 8;
+pub const MAX_DEPTH: usize = 8;
 
 /// Finds every game under `roms`, sorted by system order then title. Unreadable folders and
 /// files are skipped; the scan never fails as a whole.

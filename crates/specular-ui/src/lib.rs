@@ -5,6 +5,7 @@
 
 mod art;
 mod game;
+mod watch;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -241,12 +242,19 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         post(Msg::SettingsLoaded(Layer::Global, values));
         let roms = data.roms();
         let saves = data.saves();
+        // The library: scanned now, and again whenever the games on the card change.
         std::thread::spawn(move || {
-            let games = specular_core::library::scan(&roms, &playable_systems());
-            for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
-                eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
+            let watch = watch::RomsWatch::new().map_err(|e| eprintln!("library: can't watch for new games: {e}")).ok();
+            loop {
+                if let Some(w) = &watch { w.watch(&roms); }
+                let games = specular_core::library::scan(&roms, &playable_systems());
+                for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
+                    eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
+                }
+                post(Msg::Library(games));
+                let Some(w) = &watch else { return };
+                w.wait_for_change();
             }
-            post(Msg::Library(games));
         });
         while let Ok(first) = rx.recv() {
             let latest: HashMap<PathBuf, _> = std::iter::once(first).chain(rx.try_iter()).map(|Save(p, v)| (p, v)).collect();
