@@ -394,15 +394,21 @@ export component AppWindow inherits Window {
         height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
     }
 
-    // The toast: a short message above the hint bar.
+    // The toast: a short message above the hint bar. A long one wraps, within the gutters.
+    property <length> toast-pad: 32px * Theme.u;
     Rectangle {
         y: root.height - Theme.hint-bar - self.height - 24px * Theme.u;
-        width: toast-text.preferred-width + 2 * 32px * Theme.u; height: 64px * Theme.u;
-        border-radius: self.height / 2; background: Theme.raised;
+        width: min(toast-text.preferred-width + 2 * root.toast-pad, root.width - 2 * Theme.gutter);
+        height: max(64px * Theme.u, toast-text.preferred-height + 2 * 16px * Theme.u);
+        border-radius: 32px * Theme.u; background: Theme.raised;
         opacity: root.toast-shown ? 1 : 0;
         animate opacity { duration: Motion.fade; }
         Rectangle { y: 0; height: Theme.line; width: parent.width - 2 * parent.border-radius; background: Theme.edge; }
-        toast-text := Text { text: root.toast; font-size: Theme.caption; font-weight: 500; color: Theme.fg; }
+        toast-text := Text {
+            width: parent.width - 2 * root.toast-pad;
+            text: root.toast; wrap: word-wrap; horizontal-alignment: center;
+            font-size: Theme.caption; font-weight: 500; color: Theme.fg;
+        }
     }
 
     // The volume: a slim gauge down the right edge, by the volume keys.
