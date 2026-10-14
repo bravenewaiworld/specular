@@ -63,7 +63,13 @@ impl Power for BrickPower {
 
     /// Through the test card's `sleepnow`, which also stops WiFi around sleep (its driver can't
     /// suspend while connected).
-    fn sleep(&self) -> io::Result<()> { run("/usr/bin/sleepnow", &[]) }
+    /// The codec's driver resets its volume on waking, so it is set again (see `DacVolume`).
+    fn sleep(&self) -> io::Result<()> {
+        let slept = run("/usr/bin/sleepnow", &[]);
+        let level = VOLUME.load(Relaxed);
+        if level != u8::MAX && let Err(e) = set_dac_volume(level) { eprintln!("volume after waking: {e}"); }
+        slept
+    }
 
     fn shutdown(&self) -> io::Result<()> { run("/sbin/poweroff", &[]) }
 }
@@ -123,7 +129,7 @@ impl Audio for DacVolume {
 }
 
 /// Sound output whose start sets the volume again: the codec's driver puts its DAC volume back
-/// to its default whenever playback starts.
+/// to its default whenever playback starts (and on waking; see `BrickPower::sleep`).
 struct BrickSound { alsa: specular_linux::sound::Alsa, started: bool }
 
 impl SoundOut for BrickSound {

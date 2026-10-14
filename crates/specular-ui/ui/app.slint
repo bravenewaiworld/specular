@@ -317,7 +317,7 @@ export component AppWindow inherits Window {
             opacity: root.game-shown ? 1 : 0;
             animate opacity { duration: Motion.fade; }
         }
-        if root.stats != "" : Text {
+        if root.stats != "" && !root.game-menu : Text {
             x: 16px * Theme.u; y: 12px * Theme.u;
             text: root.stats; font-family: Theme.mono; font-size: Theme.caption; color: Theme.accent;
         }

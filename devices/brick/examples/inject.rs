@@ -1,8 +1,9 @@
 //! Test helper: presses buttons on an input device by writing events to its node (the kernel
 //! passes injected events to every reader), skipping padbridge's hop from the real buttons.
 //! Usage: inject <event node of "TRIMUI Player1", e.g. /dev/input/event5> <buttons> [step ms (default 400)]
-//! <buttons> is a comma-separated list of up, down, left, right, a, b, x, y, l1, r1, select, start
-//! and menu, pressed one per step and each held for 50 ms; "wait" leaves a step empty.
+//! <buttons> is a comma-separated list of up, down, left, right, a, b, x, y, l1, r1, select, start,
+//! menu, volup, voldown and power, pressed one per step and each held for 50 ms; "wait" leaves a step
+//! empty.
 
 use std::io::Write;
 use std::time::Duration;
@@ -27,6 +28,8 @@ fn button(name: &str) -> Option<(u16, u16, i32)> {
         "b" => (EV_KEY, 0x130, 1), "a" => (EV_KEY, 0x131, 1), "y" => (EV_KEY, 0x133, 1), "x" => (EV_KEY, 0x134, 1),
         "l1" => (EV_KEY, 0x136, 1), "r1" => (EV_KEY, 0x137, 1),
         "select" => (EV_KEY, 0x13a, 1), "start" => (EV_KEY, 0x13b, 1), "menu" => (EV_KEY, 0x13c, 1),
+        "volup" => (EV_KEY, 115, 1), "voldown" => (EV_KEY, 114, 1), // KEY_VOLUMEUP/DOWN
+        "power" => (EV_KEY, 116, 1), // KEY_POWER: on the power key's own device, axp2202-pek
         _ => return None,
     })
 }
