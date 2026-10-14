@@ -329,7 +329,73 @@ mod wireless {
 
     fn net(ssid: &str, secured: bool, saved: bool) -> Network { Network { ssid: ssid.into(), bars: 3, secured, saved, in_range: true, supported: true } }
 
-    fn connected(ssid: &str) -> Msg { Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: ssid.into(), address: "10.0.0.2".into() })) }
+    fn connected(ssid: &str) -> Msg { Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: ssid.into(), address: "10.0.0.2".into(), bars: None })) }
+
+    #[test]
+    fn the_status_bar_shows_the_battery_and_the_radios_that_are_on() {
+        use crate::device::Battery;
+        let mut a = radio_app();
+        assert_eq!(a.status(), []);
+        let battery = Battery { percent: Some(78), charging: false, plugged: false };
+        a.handle(Msg::Battery(battery));
+        assert_eq!(a.status(), [Icon::Battery(battery)]);
+        let wifi = |bars| Icon::Wifi { bars, locked: false };
+        // WiFi on but not connected: empty bars; connected: the live signal, unknown at first.
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
+        assert_eq!(a.status()[0], wifi(Some(0)));
+        a.handle(connected("Home"));
+        assert_eq!(a.status()[0], wifi(None));
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: "Home".into(), address: "10.0.0.2".into(), bars: Some(3) })));
+        assert_eq!(a.status()[0], wifi(Some(3)));
+        // Bluetooth shows once powered, lit with a device connected.
+        let device = BtDevice { address: BtAddress("00:11:22:33:44:55".into()), name: "Buds".into(), kind: BtKind::Headphones, paired: true, connected: false, audio: false };
+        a.handle(Msg::Bluetooth(BtEvent::Powered(true)));
+        assert_eq!(a.status()[1], Icon::Bluetooth { kind: BtKind::Other, lit: false });
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![BtDevice { connected: true, ..device }])));
+        assert_eq!(a.status()[1], Icon::Bluetooth { kind: BtKind::Other, lit: true });
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Off)));
+        a.handle(Msg::Bluetooth(BtEvent::Powered(false)));
+        assert_eq!(a.status(), [Icon::Battery(battery)]);
+    }
+
+    #[test]
+    fn rows_carry_icons_for_signal_security_and_device_type() {
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        let strong = Network { bars: 4, ..net("Home", true, true) };
+        a.handle(Msg::Wifi(WifiEvent::Networks(vec![strong, Network { bars: 1, ..net("Cafe", false, false) }])));
+        let icon = |a: &App, label: &str| a.view().rows.iter().find(|r| r.label == label).unwrap().icon;
+        assert_eq!(icon(&a, "Home"), Some(Icon::Wifi { bars: Some(4), locked: true }));
+        assert_eq!(icon(&a, "Cafe"), Some(Icon::Wifi { bars: Some(1), locked: false }));
+        // The network joined shows the live signal, not the scan's.
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: "Cafe".into(), address: "10.0.0.2".into(), bars: Some(3) })));
+        assert_eq!(icon(&a, "Cafe"), Some(Icon::Wifi { bars: Some(3), locked: false }));
+        tap(&mut a, Button::B, 0);
+        focus_on(&mut a, "Bluetooth");
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 0); // switches it on
+        let address = BtAddress("00:11:22:33:44:55".into());
+        let device = BtDevice { address, name: "Pad".into(), kind: BtKind::Controller, paired: true, connected: false, audio: false };
+        a.handle(Msg::Bluetooth(BtEvent::Powered(true)));
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![device.clone()])));
+        assert_eq!(icon(&a, "Pad"), Some(Icon::Bluetooth { kind: BtKind::Controller, lit: false }));
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![BtDevice { connected: true, ..device }])));
+        assert_eq!(icon(&a, "Pad"), Some(Icon::Bluetooth { kind: BtKind::Controller, lit: true }));
+    }
+
+    #[test]
+    fn the_icons_screen_is_a_developer_setting() {
+        let mut a = app();
+        tap(&mut a, Button::Up, 0);
+        tap(&mut a, Button::A, 0);
+        assert!(!a.view().rows.iter().any(|r| r.label == "Icons"));
+        focus_on(&mut a, "Developer details");
+        tap(&mut a, Button::A, 0);
+        focus_on(&mut a, "Icons");
+        tap(&mut a, Button::A, 0);
+        assert_eq!(a.view().title, "Icons");
+        assert!(a.view().rows.iter().filter(|r| r.icon.is_some()).count() > 20);
+    }
 
     #[test]
     fn settings_link_to_the_radios_only_when_the_device_has_them() {

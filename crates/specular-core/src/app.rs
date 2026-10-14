@@ -14,13 +14,14 @@ use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
 use crate::library::{Game, SystemDecl};
 use crate::list;
-use crate::model::{ImageRef, Layout, Row, RowKind, ScreenId, ScreenView, TextEntry};
+use crate::model::{Icon, ImageRef, Layout, Row, RowKind, ScreenId, ScreenView, TextEntry};
 use crate::nav::{NavStack, ScreenState, Transition};
 use crate::repeat::Repeater;
 use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
 use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
+mod icons;
 mod wireless;
 pub use wireless::{BtState, WifiNeed, WifiState};
 
@@ -179,6 +180,8 @@ pub mod screens {
     /// game). Its presses are handled by the app itself (see `App::power_menu`).
     pub const POWER_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("power menu"));
     pub const WIFI: ScreenId = ScreenId(std::borrow::Cow::Borrowed("wifi"));
+    /// Every icon in each of its states; a developer screen.
+    pub const ICONS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("icons"));
     pub const BLUETOOTH: ScreenId = ScreenId(std::borrow::Cow::Borrowed("bluetooth"));
     /// "Forget …?", with what to forget in its params (see `app::wireless::Forget`).
     pub const FORGET: ScreenId = ScreenId(std::borrow::Cow::Borrowed("forget"));
@@ -233,6 +236,7 @@ impl App {
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
         screens.insert(screens::POWER_MENU, Box::new(PowerMenu));
         wireless::register(&mut screens);
+        icons::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None },
             screens,
@@ -267,6 +271,14 @@ impl App {
 
     /// What the screens see (read-only: changes go through messages, so the cache stays right).
     pub fn ctx(&self) -> &Ctx { &self.ctx }
+
+    /// The status bar's icons, left to right: WiFi and Bluetooth when on, then the battery (if
+    /// the device reports one).
+    pub fn status(&self) -> Vec<Icon> {
+        let mut icons = wireless::status_icons(&self.ctx);
+        icons.extend(self.ctx.battery.map(Icon::Battery));
+        icons
+    }
 
     /// The title of the screen below the current one (for a breadcrumb), if any.
     pub fn parent_title(&self) -> Option<String> { self.built().1 }
@@ -658,12 +670,14 @@ impl Screen for SettingsScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows = wireless::settings_rows(ctx);
         rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility()));
+        if ctx.visibility() == Visibility::Developer { rows.push(Row::new("open:icons", "Icons", RowKind::Action { value: None })); }
         ScreenView { title: "Settings".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         if p.button == Button::B { return Outcome::Back; }
         if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
+        if focused.is_some_and(|row| row.id.0 == "open:icons") && p.button == Button::A { return Outcome::Push(ScreenState::new(screens::ICONS, None)); }
         focused.map_or(Outcome::None, |row| setting_press(ctx, row, p))
     }
 }

@@ -42,6 +42,15 @@ pub struct Battery {
     pub plugged: bool,
 }
 
+impl Battery {
+    /// Charge in percent at and below which the battery counts as low.
+    const LOW: u8 = 15;
+
+    /// At or below `LOW` and not on external power (when plugged in, being low is being fixed).
+    /// False when the charge is unknown.
+    pub fn low(&self) -> bool { !self.plugged && self.percent.is_some_and(|p| p <= Self::LOW) }
+}
+
 /// Battery and power state.
 pub trait Power: Send {
     /// The battery now (may be a slow hardware read).
@@ -193,6 +202,15 @@ pub mod simulated {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_battery_is_low_only_off_power() {
+        let battery = |percent, plugged| super::Battery { percent, charging: plugged, plugged };
+        assert!(battery(Some(15), false).low());
+        assert!(!battery(Some(16), false).low());
+        assert!(!battery(Some(5), true).low());
+        assert!(!battery(None, false).low());
+    }
+
     #[test]
     fn the_built_in_scenario_reads() {
         let script = serde_json::from_str(include_str!("wireless/default-scenario.json")).unwrap();

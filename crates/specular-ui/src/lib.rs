@@ -23,7 +23,9 @@ use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::list;
 use specular_core::list::Rect;
-use specular_core::model::{ImageRef, Layout, Row, RowKind, ScreenView};
+use specular_core::palette;
+use specular_core::model::{Icon, ImageRef, Layout, Row, RowKind, ScreenView};
+use specular_core::wireless::bluetooth::BtKind;
 use specular_core::nav::Transition;
 use specular_core::settings::{Layer, builtin, store};
 use specular_core::wireless::Wireless;
@@ -103,6 +105,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, install: Optio
         window: window.as_weak(),
         rows: Rc::new(VecModel::default()),
         hints: Rc::new(VecModel::default()),
+        status_icons: Rc::new(VecModel::default()),
         profile,
         hardware: hardware_thread(hardware),
         wifi: wifi.map(|s| radio_thread("wifi", s, Msg::Wifi)),
@@ -138,6 +141,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, install: Optio
     runner.show_theme();
     window.set_rows(runner.rows.clone().into());
     window.set_hints(runner.hints.clone().into());
+    window.set_status_icons(runner.status_icons.clone().into());
     window.window().set_rendering_notifier(|state, api| {
         if let slint::RenderingState::BeforeRendering = state && let Some(r) = RUNNER.with(|r| r.borrow().clone()) { r.before_render(api); }
     }).map_err(|e| format!("this window can't show games: {e:?}"))?;
@@ -353,6 +357,7 @@ struct Runner {
     window: slint::Weak<AppWindow>,
     rows: Rc<VecModel<RowData>>,
     hints: Rc<VecModel<Hint>>,
+    status_icons: Rc<VecModel<IconData>>,
     profile: DeviceProfile,
     hardware: mpsc::Sender<HwCmd>,
     /// The radios' threads (None for a radio the device doesn't have).
@@ -688,6 +693,7 @@ impl Runner {
         theme.set_accent(colour(first));
         theme.set_tint(colour(first));
         theme.set_focus(colour(second));
+        theme.set_warning(colour(palette::WARNING));
     }
 
     /// Arms `timer` to give the app a `Tick` at `due`, or stops it if nothing is due. Re-armed
@@ -751,10 +757,8 @@ impl Runner {
         // animating them would pass rows that aren't drawn.
         w.set_scroll_jumps((layout.scroll - w.get_scroll()).abs() > height);
         w.set_scroll(layout.scroll);
-        if let Some(b) = app.ctx().battery {
-            let pct = b.percent.map_or("–".to_string(), |p| format!("{p}%"));
-            w.set_battery(if b.charging { format!("{pct} charging") } else { pct }.into());
-        }
+        let status: Vec<IconData> = app.status().iter().map(icon_data).collect();
+        if self.status_icons.iter().ne(status.iter().cloned()) { self.status_icons.set_vec(status); }
         if let Some(t) = t {
             w.set_shift(if t == Transition::Push { 64.0 } else { -64.0 });
             w.set_transitions(w.get_transitions() + 1);
@@ -859,6 +863,7 @@ impl Runner {
             cover: self.cover(r),
             // Transparent (not drawn) for rows without one.
             swatch: match r.kind { RowKind::Choice { swatch: Some(Rgb(r, g, b)), .. } => slint::Color::from_rgb_u8(r, g, b), _ => Default::default() },
+            icon: r.icon.as_ref().map(icon_data).unwrap_or_default(),
         }
     }
 
@@ -894,6 +899,25 @@ fn cover_colours(title: &str) -> (slint::Color, slint::Color) {
     let hash = title.bytes().fold(0x811c9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x01000193));
     let hue = (hash % 360) as f32;
     (slint::Color::from_hsva(hue, 0.62, 0.493, 1.0), slint::Color::from_hsva(hue + 40.0, 2.0 / 3.0, 0.21, 1.0))
+}
+
+/// An icon as the UI draws it. Unknown values become -1 (Slint has no optionals), and a battery
+/// that is charging counts as plugged in.
+fn icon_data(icon: &Icon) -> IconData {
+    match *icon {
+        Icon::Wifi { bars, locked } => IconData { kind: IconKind::Wifi, bars: bars.map_or(-1, i32::from), locked, ..Default::default() },
+        Icon::Bluetooth { kind, lit } => {
+            let kind = match kind {
+                BtKind::Headphones => IconKind::Headphones, BtKind::Speaker => IconKind::Speaker, BtKind::Controller => IconKind::Controller,
+                BtKind::Keyboard => IconKind::Keyboard, BtKind::Phone => IconKind::Phone, BtKind::Computer => IconKind::Computer,
+                BtKind::Other => IconKind::Bluetooth,
+            };
+            IconData { kind, lit, ..Default::default() }
+        }
+        Icon::Battery(b) => IconData {
+            kind: IconKind::Battery, percent: b.percent.map_or(-1, i32::from), plugged: b.plugged || b.charging, low: b.low(), ..Default::default()
+        },
+    }
 }
 
 /// The local time (hours, minutes, seconds), or None while the clock is clearly unset (before

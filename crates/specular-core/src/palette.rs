@@ -20,3 +20,33 @@ pub const PALETTE: &[Colour] = &[
 
 /// The palette colour stored as `id`.
 pub fn find(id: &str) -> Option<Rgb> { PALETTE.iter().find(|c| c.id == id).map(|c| c.rgb) }
+
+/// The one colour outside the palette: a low battery. Like every palette colour, it is light
+/// enough for dark text (`Theme.bg`) to be read on it.
+pub const WARNING: Rgb = Rgb(0xe5, 0x48, 0x4d);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WCAG relative luminance.
+    fn luminance(Rgb(r, g, b): Rgb) -> f64 {
+        let linear = |c: u8| { let c = c as f64 / 255.0; if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) } };
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    /// The battery's number is dark (`Theme.bg`) over its fill and light (`Theme.fg`) over the
+    /// empty part, so each colour a fill can have must be readable under the dark one. The
+    /// theme's colours are repeated here (from theme.slint), as the core can't read them.
+    #[test]
+    fn dark_text_reads_on_every_fill_colour() {
+        let (bg, fg) = (Rgb(0x08, 0x09, 0x0a), Rgb(0xf2, 0xf2, 0xf2));
+        let contrast = |a: Rgb, b: Rgb| { let (a, b) = (luminance(a), luminance(b)); (a.max(b) + 0.05) / (a.min(b) + 0.05) };
+        for c in PALETTE.iter().map(|c| (c.id, c.rgb)).chain([("warning", WARNING)]) {
+            assert!(contrast(c.1, bg) >= 4.5, "{} is too dark for dark text", c.0);
+        }
+        // And the light number on the empty part (the gauge's `Theme.bg`; checked against the
+        // lighter `Theme.raised` for margin).
+        assert!(contrast(fg, Rgb(0x20, 0x22, 0x26)) >= 4.5);
+    }
+}

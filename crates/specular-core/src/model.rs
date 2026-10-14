@@ -4,8 +4,9 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use crate::device::Rgb;
+use crate::device::{Battery, Rgb};
 use crate::input::Button;
+use crate::wireless::bluetooth::BtKind;
 
 /// A screen's identity. A string, so plugins can register screens of their own later.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +23,20 @@ pub enum ImageRef {
     /// A game's box art, by its system and its ROM's path under `roms/`. The UI's art service
     /// finds it; while there is none, the UI draws a generated cover.
     Art { system: &'static str, rom: PathBuf },
+}
+
+/// A small symbol, drawn by the UI in the accent colours: beside a row's label, or in the status
+/// bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Icon {
+    /// WiFi's arcs, one lit per bar, 0–4 (None: strength unknown, drawn full), with a padlock
+    /// for a network that needs a password.
+    Wifi { bars: Option<u8>, locked: bool },
+    /// What a Bluetooth device is. Dimmed unless `lit`: the device is connected (in the status
+    /// bar: any device is). `BtKind::Other` draws the bare Bluetooth mark.
+    Bluetooth { kind: BtKind, lit: bool },
+    /// A battery with its charge inside; turns to the warning colour when `Battery::low`.
+    Battery(Battery),
 }
 
 /// What a row is, and the value it shows.
@@ -62,13 +77,18 @@ pub struct Row {
     pub enabled: bool,
     /// Its value overrides the layer below (e.g. a per-game setting); the UI marks it.
     pub overridden: bool,
+    /// Drawn before the label.
+    pub icon: Option<Icon>,
 }
 
 impl Row {
     /// An enabled row that overrides nothing.
     pub fn new(id: impl Into<String>, label: impl Into<String>, kind: RowKind) -> Self {
-        Self { id: RowId(id.into()), label: label.into(), kind, enabled: true, overridden: false }
+        Self { id: RowId(id.into()), label: label.into(), kind, enabled: true, overridden: false, icon: None }
     }
+
+    /// This row with `icon` drawn before its label.
+    pub fn icon(mut self, icon: Icon) -> Self { self.icon = Some(icon); self }
 }
 
 /// How a screen's rows are arranged.

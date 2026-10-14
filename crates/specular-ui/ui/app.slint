@@ -2,7 +2,8 @@
 // The core decides what rows there are and where they sit; this file only draws and animates them.
 
 import { Theme, Motion } from "theme.slint";
-export { Theme }
+import { Icon, IconData, IconKind, BluetoothMark } from "icons.slint";
+export { Theme, IconData, IconKind }
 
 // What a row is (the core's row kinds; a row with a picture is drawn as text in a list).
 export enum Kind { header, text, toggle, choice, number, action, key }
@@ -46,6 +47,8 @@ export struct RowData {
     cover: Cover,
     // A colour choice's colour, shown as a dot beside its value (transparent for other rows).
     swatch: color,
+    // Drawn before the label (kind `none` for no icon).
+    icon: IconData,
 }
 
 export struct Hint { button: string, label: string }
@@ -158,6 +161,9 @@ component RowView inherits Rectangle {
     }
     if data.kind != Kind.header : HorizontalLayout {
         padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 20px * Theme.u;
+        if data.icon.kind != IconKind.none : Icon {
+            data: data.icon; paint: focused ? Theme.focus : Theme.accent; y: (parent.height - self.height) / 2;
+        }
         Text {
             text: data.label; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
             font-size: Theme.body; font-weight: focused ? 500 : 400;
@@ -240,12 +246,15 @@ component TextEntry inherits Rectangle {
 component StatusBar inherits Rectangle {
     in property <string> crumb;
     in property <string> clock;
-    in property <string> battery;
+    in property <[IconData]> icons;
     height: Theme.status-bar;
     HorizontalLayout {
-        padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 22px * Theme.u;
+        padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 26px * Theme.u;
         Text { text: crumb; vertical-alignment: center; horizontal-stretch: 1; font-size: Theme.caption; font-weight: 500; color: Theme.dim; overflow: elide; }
-        Text { text: battery; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.caption; color: Theme.dim; }
+        for icon in icons : Rectangle {
+            width: status-icon.width;
+            status-icon := Icon { data: icon; paint: Theme.accent; size: 44px * Theme.u; compact: true; y: (parent.height - self.height) / 2; }
+        }
         Text { text: clock; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.caption; color: Theme.dim; }
     }
 }
@@ -292,7 +301,7 @@ export component AppWindow inherits Window {
     in property <float> entry-height;
     in property <[Hint]> hints;
     in property <string> clock;
-    in property <string> battery;
+    in property <[IconData]> status-icons;
     // A game being played: its newest frame, how it is scaled ("integer", "fit" or "stretch"),
     // and whether its menu is open over it (paused).
     in property <bool> playing;
@@ -405,7 +414,7 @@ export component AppWindow inherits Window {
         animate background { duration: Motion.tint; }
         drop-shadow-blur: 18px * Theme.u; drop-shadow-color: Theme.tint.with-alpha(0.45);
     }
-    StatusBar { visible: root.screens-shown; y: 0; width: root.width; crumb: root.crumb; clock: root.clock; battery: root.battery; }
+    StatusBar { visible: root.screens-shown; y: 0; width: root.width; crumb: root.crumb; clock: root.clock; icons: root.status-icons; }
 
     content := Rectangle {
         visible: root.screens-shown;
@@ -501,11 +510,8 @@ export component AppWindow inherits Window {
         opacity: root.volume-shown ? 1 : 0;
         animate opacity { duration: Motion.fade; }
         // The Bluetooth mark
-        if root.volume-bluetooth : Path {
-            x: (parent.width - self.width) / 2; y: 18px * Theme.u; width: 28px * Theme.u; height: self.width;
-            viewbox-width: 24; viewbox-height: 24;
-            commands: "M 6.5 7 L 17 16.5 L 12 21.5 L 12 2.5 L 17 7.5 L 6.5 17";
-            stroke: Theme.fg; stroke-width: 2px * Theme.u;
+        if root.volume-bluetooth : BluetoothMark {
+            x: (parent.width - self.width) / 2; y: 18px * Theme.u; width: 28px * Theme.u; paint: Theme.fg;
         }
         Rectangle {
             x: (parent.width - self.width) / 2; width: 8px * Theme.u;

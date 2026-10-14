@@ -95,7 +95,32 @@
        "Link": {
         "Connected": {
          "ssid": "Home",
-         "address": "192.168.1.42"
+         "address": "192.168.1.42",
+         "bars": 3
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 7000,
+      "event": {
+       "Link": {
+        "Connected": {
+         "ssid": "Home",
+         "address": "192.168.1.42",
+         "bars": 2
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 13000,
+      "event": {
+       "Link": {
+        "Connected": {
+         "ssid": "Home",
+         "address": "192.168.1.42",
+         "bars": 4
         }
        }
       }
@@ -251,7 +276,8 @@
        "Link": {
         "Connected": {
          "ssid": "Office",
-         "address": "192.168.1.42"
+         "address": "192.168.1.42",
+         "bars": 3
         }
        }
       }
@@ -391,7 +417,8 @@
        "Link": {
         "Connected": {
          "ssid": "Home",
-         "address": "192.168.1.42"
+         "address": "192.168.1.42",
+         "bars": 3
         }
        }
       }
@@ -445,7 +472,8 @@
        "Link": {
         "Connected": {
          "ssid": "CafeFree",
-         "address": "192.168.1.42"
+         "address": "192.168.1.42",
+         "bars": 3
         }
        }
       }

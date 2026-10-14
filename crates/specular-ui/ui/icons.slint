@@ -1,0 +1,192 @@
+// Specular's icons, drawn from shapes so they take the accent colours. `Icon` draws whatever an
+// `IconData` (the core's `model::Icon`) describes; the rest are its parts. The parts are sized
+// by their `width` (or `size`) and scale their drawing to it; only the battery is sized in u
+// (see theme.slint).
+
+import { Theme } from "theme.slint";
+
+// `bluetooth` is the bare Bluetooth mark (a device of no known kind); `none` draws nothing.
+export enum IconKind { none, wifi, bluetooth, headphones, speaker, controller, keyboard, phone, computer, battery }
+
+export struct IconData {
+    kind: IconKind,
+    // Slint has no optional values, so an unknown reading is -1.
+    // WiFi: the lit bars, 0–4 (-1: unknown, drawn full), and whether there is a padlock.
+    bars: int,
+    locked: bool,
+    // Bluetooth, and every device kind: drawn in the accent rather than dimmed.
+    lit: bool,
+    // Battery: charge in percent (-1: unknown), on external power, and low (decided by the core).
+    percent: int,
+    plugged: bool,
+    low: bool,
+}
+
+// WiFi's dot and three arcs, one bar each (the dot first); the first `bars` of them are lit in
+// `paint`, the rest in `off`. Wider than tall (30 by 23): `width` is set, `height` follows.
+export component WifiSignal inherits Rectangle {
+    in property <int> bars;
+    in property <color> paint;
+    in property <color> off: Theme.faint;
+    property <int> lit: root.bars < 0 ? 4 : root.bars;
+    // Scale from the 30-unit drawing to `width`.
+    property <float> k: root.width / 30px;
+    height: root.width * 23 / 30;
+    Rectangle {
+        x: 12.6px * root.k; y: 17.8px * root.k; width: 4.8px * root.k; height: self.width; border-radius: self.width / 2;
+        background: root.lit >= 1 ? root.paint : root.off;
+    }
+    for arc[i] in [
+        "M 10.404 15.604 A 6.5 6.5 0 0 1 19.596 15.604",
+        "M 6.515 11.715 A 12 12 0 0 1 23.485 11.715",
+        "M 2.626 7.826 A 17.5 17.5 0 0 1 27.374 7.826",
+    ] : Path {
+        width: root.width; height: root.height; viewbox-width: 30; viewbox-height: 23;
+        commands: arc; stroke-width: 2.6px * root.k; stroke-line-cap: round;
+        stroke: root.lit >= i + 2 ? root.paint : root.off;
+    }
+}
+
+// A padlock: shackle over body. 14 by 18.
+export component Padlock inherits Rectangle {
+    in property <color> paint;
+    property <float> k: root.width / 14px;
+    height: root.width * 18 / 14;
+    Path {
+        width: root.width; height: root.height; viewbox-width: 14; viewbox-height: 18;
+        commands: "M 3.6 9 V 5.6 A 3.4 3.4 0 0 1 10.4 5.6 V 9";
+        stroke: root.paint; stroke-width: 2.2px * root.k;
+    }
+    Rectangle { y: 8px * root.k; width: root.width; height: 10px * root.k; border-radius: 2.4px * root.k; background: root.paint; }
+}
+
+// The Bluetooth mark, in a square.
+export component BluetoothMark inherits Rectangle {
+    in property <color> paint;
+    height: root.width;
+    Path {
+        width: root.width; height: root.height; viewbox-width: 24; viewbox-height: 24;
+        commands: "M 6.5 7 L 17 16.5 L 12 21.5 L 12 2.5 L 17 7.5 L 6.5 17";
+        stroke: root.paint; stroke-width: 1.9px * root.width / 24px; stroke-line-join: round;
+    }
+}
+
+// A line drawing in a square of 24 units: what a Bluetooth device is. `lines` is stroked and
+// `solid` stroked and filled, both in `paint`. Both are SVG path data; a dot is a path a
+// fraction of a unit long, which the round line caps and joins turn into a dot.
+component Drawing inherits Rectangle {
+    in property <color> paint;
+    in property <string> lines;
+    in property <string> solid;
+    height: root.width;
+    Path {
+        width: root.width; height: root.height; viewbox-width: 24; viewbox-height: 24;
+        commands: root.lines; stroke: root.paint; stroke-width: 1.8px * root.width / 24px;
+        stroke-line-cap: round; stroke-line-join: round;
+    }
+    Path {
+        width: root.width; height: root.height; viewbox-width: 24; viewbox-height: 24;
+        commands: root.solid; fill: root.paint; stroke: root.paint; stroke-width: 1.8px * root.width / 24px;
+        stroke-line-join: round;
+    }
+}
+
+// A battery with its charge as a number inside. The number is drawn twice in the same place:
+// light on the empty part, and dark on the fill, clipped to the fill's edge. So it reads at any
+// charge and in any accent. When `low` (the core sets it only for a battery not on power) it
+// turns to the warning colour. On power a bolt stands before it; without power the bolt's
+// place is kept unless `compact`, so rows line up.
+export component BatteryGauge inherits Rectangle {
+    in property <int> percent;
+    in property <bool> plugged;
+    in property <bool> low;
+    in property <bool> compact;
+    in property <color> paint;
+    property <color> fill: root.low ? Theme.warning : root.paint;
+    property <length> bolt: root.compact && !root.plugged ? 0px : 28px * Theme.u;
+    property <length> pad: 5px * Theme.u;
+    property <length> body-width: 72px * Theme.u;
+    property <length> body-height: 38px * Theme.u;
+    property <string> label: root.percent < 0 ? "–" : "\{root.percent}";
+    property <float> fraction: max(0, min(100, root.percent)) / 100;
+    width: root.bolt + root.body-width + 7px * Theme.u;
+    height: root.body-height;
+    if root.plugged : Path {
+        x: 2px * Theme.u; y: (root.height - self.height) / 2; width: 15px * Theme.u; height: 26px * Theme.u;
+        viewbox-width: 12; viewbox-height: 20;
+        commands: "M 8 0 L 1 11 H 6 L 4 20 L 11 8 H 6.5 Z"; fill: root.paint; stroke: root.paint; stroke-width: 0.5px * Theme.u; stroke-line-join: round;
+    }
+    Rectangle {
+        x: root.width - 5px * Theme.u; y: (root.height - self.height) / 2; width: 5px * Theme.u; height: 16px * Theme.u;
+        border-top-right-radius: 3px * Theme.u; border-bottom-right-radius: 3px * Theme.u; background: root.fill;
+    }
+    Rectangle {
+        x: root.bolt; width: root.body-width; height: root.body-height;
+        border-radius: 8px * Theme.u; border-width: 2.5px * Theme.u; border-color: root.fill; background: Theme.bg;
+        inner := Rectangle {
+            x: root.pad; y: root.pad; width: parent.width - 2 * root.pad; height: parent.height - 2 * root.pad;
+            Text {
+                width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center;
+                text: root.label; font-family: Theme.mono; font-size: Theme.caption; font-weight: 600; color: Theme.fg;
+            }
+            Rectangle {
+                x: 0; y: 0; width: parent.width * root.fraction; height: parent.height; border-radius: 4px * Theme.u; background: root.fill; clip: true;
+                Text {
+                    x: 0; y: 0; width: inner.width; height: inner.height; horizontal-alignment: center; vertical-alignment: center;
+                    text: root.label; font-family: Theme.mono; font-size: Theme.caption; font-weight: 600; color: Theme.bg;
+                }
+            }
+        }
+    }
+}
+
+// Whatever `data` describes. Lit parts are drawn in `paint`; a WiFi or device glyph is `size`
+// wide (the battery sizes itself). With `compact` the icon takes only the room it draws in;
+// otherwise it keeps room for its padlock or bolt, so a list of them lines up.
+export component Icon inherits Rectangle {
+    in property <IconData> data;
+    in property <color> paint;
+    in property <length> size: 48px * Theme.u;
+    in property <bool> compact;
+    property <color> device-color: root.data.lit ? root.paint : Theme.dim;
+    width: root.data.kind == IconKind.battery ? battery.width : root.data.kind == IconKind.wifi ? root.size + (root.compact ? 0px : root.size * 0.5) : root.size;
+    height: root.data.kind == IconKind.battery ? battery.height : root.size;
+
+    if root.data.kind == IconKind.wifi : Rectangle {
+        WifiSignal { y: (root.height - self.height) / 2; width: root.size; bars: root.data.bars; paint: root.paint; }
+        if root.data.locked : Padlock { x: root.size * 1.08; y: (root.height - self.height) / 2; width: root.size * 0.4; paint: root.paint; }
+    }
+    if root.data.kind == IconKind.bluetooth : BluetoothMark { width: root.size; paint: root.device-color; }
+    if root.data.kind == IconKind.headphones : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 4.5 15 V 12 A 7.5 7.5 0 0 1 19.5 12 V 15";
+        solid: "M 4 14.5 H 7 V 19.5 H 4 Z M 17 14.5 H 20 V 19.5 H 17 Z";
+    }
+    if root.data.kind == IconKind.speaker : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 7 3.5 H 17 V 20.5 H 7 Z M 15 14.5 A 3 3 0 1 1 9 14.5 A 3 3 0 1 1 15 14.5 Z";
+        solid: "M 12 7.4 H 12.1 V 7.5 H 12 Z";
+    }
+    if root.data.kind == IconKind.controller : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 6.5 7.5 H 17.5 A 4.5 4.5 0 0 1 22 12 V 14.5 A 2.8 2.8 0 0 1 16.4 15.4 L 15.3 13.5 H 8.7 L 7.6 15.4 A 2.8 2.8 0 0 1 2 14.5 V 12 A 4.5 4.5 0 0 1 6.5 7.5 Z M 7 10 V 13 M 5.5 11.5 H 8.5";
+        solid: "M 16.2 10.4 H 16.4 V 10.6 H 16.2 Z M 18.4 12.4 H 18.6 V 12.6 H 18.4 Z";
+    }
+    if root.data.kind == IconKind.keyboard : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 3 6.5 H 21 V 17.5 H 3 Z M 6.5 10 H 6.7 M 9.5 10 H 9.7 M 12.5 10 H 12.7 M 15.5 10 H 15.7 M 8 14 H 16";
+    }
+    if root.data.kind == IconKind.phone : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 7 3.5 H 17 V 20.5 H 7 Z M 10.5 17.5 H 13.5";
+    }
+    if root.data.kind == IconKind.computer : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 5 5.5 H 19 V 15.5 H 5 Z M 2.5 19 H 21.5";
+    }
+    // Always present, hidden for other kinds (not an `if`): the width above reads its size.
+    battery := BatteryGauge {
+        visible: root.data.kind == IconKind.battery;
+        percent: root.data.percent; plugged: root.data.plugged; low: root.data.low; compact: root.compact; paint: root.paint;
+    }
+}

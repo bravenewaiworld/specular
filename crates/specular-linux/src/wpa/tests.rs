@@ -75,7 +75,24 @@ fn link_from_status() {
     assert_eq!(link("wpa_state=SCANNING\naddress=16:e5:71:99:1e:50\n"), WifiLink::Idle);
     assert_eq!(link("bssid=7e:7f:f0:76:08:8e\nssid=VRP\nwpa_state=4WAY_HANDSHAKE\n"), WifiLink::Connecting { ssid: "VRP".into(), step: JoinStep::Authenticating });
     assert_eq!(link("ssid=VRP\nid=0\nwpa_state=COMPLETED\n"), WifiLink::Connecting { ssid: "VRP".into(), step: JoinStep::GettingAddress });
-    assert_eq!(link("ssid=VRP\nwpa_state=COMPLETED\nip_address=192.168.1.7\n"), WifiLink::Connected { ssid: "VRP".into(), address: "192.168.1.7".into() });
+    assert_eq!(link("ssid=VRP\nwpa_state=COMPLETED\nip_address=192.168.1.7\n"), WifiLink::Connected { ssid: "VRP".into(), address: "192.168.1.7".into(), bars: None });
+}
+
+#[test]
+fn bars_from_signal_strength() {
+    assert_eq!([-30, -55, -56, -65, -66, -75, -76, -90].map(bars_for), [4, 4, 3, 3, 2, 2, 1, 1]);
+}
+
+#[test]
+fn signal_is_read_once_connected() {
+    const CONNECTED: &str = "ssid=VRP\nwpa_state=COMPLETED\nip_address=10.0.0.9\n";
+    let base = answers(Arc::new(Mutex::new(CONNECTED)));
+    let fake = Fake::new(move |cmd| if cmd == "SIGNAL_POLL" { "RSSI=-60\nLINKSPEED=72\nNOISE=9999\nFREQUENCY=2412\n".into() } else { base(cmd) });
+    let (_wifi, rx) = started(&fake);
+    let connected = |bars| WifiEvent::Link(WifiLink::Connected { ssid: "VRP".into(), address: "10.0.0.9".into(), bars });
+    assert_eq!(next(&rx), connected(None));
+    assert!(matches!(next(&rx), WifiEvent::Networks(_)));
+    assert_eq!(next(&rx), connected(Some(3)));
 }
 
 #[test]
@@ -181,7 +198,7 @@ fn a_join_is_saved_once_connected_then_waits_for_an_address() {
     assert_eq!(next(&rx), WifiEvent::Link(WifiLink::Connecting { ssid: "VRP".into(), step: JoinStep::GettingAddress }));
     assert!(fake.sent().contains(&"SAVE_CONFIG".to_string()));
     *status.lock().unwrap() = "ssid=VRP\nwpa_state=COMPLETED\nip_address=10.0.0.9\n";
-    assert_eq!(next(&rx), WifiEvent::Link(WifiLink::Connected { ssid: "VRP".into(), address: "10.0.0.9".into() }));
+    assert_eq!(next(&rx), WifiEvent::Link(WifiLink::Connected { ssid: "VRP".into(), address: "10.0.0.9".into(), bars: None }));
 }
 
 #[test]

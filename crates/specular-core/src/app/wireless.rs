@@ -13,7 +13,7 @@ use std::time::Duration;
 use super::{App, Ctx, Effect, Outcome, Screen, action, screens, setting_press};
 use crate::device::Output;
 use crate::input::{Button, Press};
-use crate::model::{Layout, Row, RowKind, ScreenId, ScreenView};
+use crate::model::{Icon, Layout, Row, RowKind, ScreenId, ScreenView};
 use crate::nav::ScreenState;
 use crate::settings::{Layer, builtin};
 use crate::wireless::Secret;
@@ -260,6 +260,19 @@ pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
     std::iter::once(Row::new("section:Wireless", "Wireless", RowKind::Header)).chain(rows).collect()
 }
 
+/// The status bar's icons for the radios: WiFi when it is on (no bars until connected, then its
+/// live strength), Bluetooth when it is powered (lit while a device is connected). Neither
+/// shows a padlock or says what the connected device is.
+pub(super) fn status_icons(ctx: &Ctx) -> Vec<Icon> {
+    let wifi = ctx.wifi.as_ref().and_then(|w| match w.link {
+        WifiLink::Off => None,
+        WifiLink::Idle | WifiLink::Connecting { .. } => Some(Icon::Wifi { bars: Some(0), locked: false }),
+        WifiLink::Connected { bars, .. } => Some(Icon::Wifi { bars, locked: false }),
+    });
+    let bluetooth = ctx.bluetooth.as_ref().filter(|b| b.powered).map(|b| Icon::Bluetooth { kind: BtKind::Other, lit: b.devices.iter().any(|d| d.connected) });
+    wifi.into_iter().chain(bluetooth).collect()
+}
+
 /// A press on a row of `settings_rows`: A opens its screen.
 pub(super) fn settings_press(row: &Row, p: Press) -> Option<Outcome> {
     if p.button != Button::A { return None; }
@@ -281,7 +294,7 @@ impl WifiScreen {
     }
 }
 
-/// What a network's row says about it.
+/// What a network's row says about it (its signal and security are in its icon).
 fn network_detail(n: &Network, link: &WifiLink) -> String {
     match link {
         WifiLink::Connected { ssid, .. } if *ssid == n.ssid => return "Connected".into(),
@@ -292,13 +305,19 @@ fn network_detail(n: &Network, link: &WifiLink) -> String {
         }.into(),
         _ => {}
     }
-    let signal = ["Weak", "Weak", "Fair", "Good", "Strong"][n.bars.min(4) as usize];
     if !n.supported { return "Not supported".into(); }
     match (n.saved, n.in_range) {
-        (true, false) => "Saved · out of range".into(),
-        (true, true) => format!("Saved · {signal}"),
-        (false, _) => format!("{} · {signal}", if n.secured { "Secured" } else { "Open" }),
-    }
+        (true, false) => "Saved · out of range",
+        (true, true) => "Saved",
+        (false, _) => "",
+    }.into()
+}
+
+/// A network's icon: its signal and whether it has a password. The signal is the live reading
+/// while connected to it (if there is one yet), else the last scan's.
+fn network_icon(n: &Network, link: &WifiLink) -> Icon {
+    let live = match link { WifiLink::Connected { ssid, bars, .. } if *ssid == n.ssid => *bars, _ => None };
+    Icon::Wifi { bars: Some(live.unwrap_or(n.bars)), locked: n.secured }
 }
 
 impl Screen for WifiScreen {
@@ -316,7 +335,9 @@ impl Screen for WifiScreen {
             let current = match &w.link { WifiLink::Connected { ssid, .. } | WifiLink::Connecting { ssid, .. } => Some(ssid), _ => None };
             let mut networks: Vec<&Network> = w.networks.iter().collect();
             networks.sort_by_key(|n| (Some(&n.ssid) != current, !n.in_range, std::cmp::Reverse(n.bars), n.ssid.to_lowercase()));
-            rows.extend(networks.iter().map(|n| Row::new(format!("net:{}", n.ssid), &n.ssid, RowKind::Text { detail: Some(network_detail(n, &w.link)) })));
+            rows.extend(networks.iter().map(|n| {
+                Row::new(format!("net:{}", n.ssid), &n.ssid, RowKind::Text { detail: Some(network_detail(n, &w.link)) }).icon(network_icon(n, &w.link))
+            }));
         }
         ScreenView {
             title: "Wi-Fi".into(), layout: Layout::List, rows,
@@ -367,7 +388,7 @@ impl BluetoothScreen {
     }
 }
 
-/// What a device's row says about it.
+/// What a device's row says about it (what it is is in its icon).
 fn device_detail(d: &BtDevice, busy: Option<&BtCmd>) -> String {
     match busy {
         Some(BtCmd::Pair(a)) if *a == d.address => return "Pairing…".into(),
@@ -378,17 +399,17 @@ fn device_detail(d: &BtDevice, busy: Option<&BtCmd>) -> String {
     if d.paired {
         return match (d.connected, d.audio) { (true, true) => "Connected · sound", (true, false) => "Connected", _ => "Not connected" }.into();
     }
-    match d.kind {
-        BtKind::Headphones => "Headphones", BtKind::Speaker => "Speaker", BtKind::Controller => "Controller",
-        BtKind::Keyboard => "Keyboard", BtKind::Phone => "Phone", BtKind::Computer => "Computer", BtKind::Other => "",
-    }.into()
+    String::new()
 }
 
 impl Screen for BluetoothScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows: Vec<Row> = ctx.settings.row(builtin::BLUETOOTH, &Layer::Global).into_iter().collect();
         if let Some(b) = ctx.bluetooth.as_ref().filter(|_| bluetooth_on(ctx)) {
-            let row = |d: &BtDevice| Row::new(format!("dev:{}", d.address.0), &d.name, RowKind::Text { detail: Some(device_detail(d, b.busy.as_ref())) });
+            let row = |d: &BtDevice| {
+                Row::new(format!("dev:{}", d.address.0), &d.name, RowKind::Text { detail: Some(device_detail(d, b.busy.as_ref())) })
+                    .icon(Icon::Bluetooth { kind: d.kind, lit: d.connected })
+            };
             if !b.powered {
                 rows.push(note("note:starting", "Starting…"));
             } else {

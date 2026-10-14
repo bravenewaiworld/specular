@@ -14,6 +14,8 @@ export global Theme {
     in property <color> focus;
     // The on-screen light bar's colour (the accent for now).
     in property <color> tint;
+    // A low battery's colour, the one colour that is not an accent (set from Rust).
+    in property <color> warning;
 
     out property <color> bg: #08090a;
     out property <color> surface: #141518;

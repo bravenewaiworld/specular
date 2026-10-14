@@ -40,8 +40,9 @@ pub enum WifiLink {
     /// On, not connected: no saved network is in range, or it's still looking.
     Idle,
     Connecting { ssid: String, step: JoinStep },
-    /// `address` is the device's address on the network, as text.
-    Connected { ssid: String, address: String },
+    /// `address` is the device's address on the network, as text. `bars` is the live signal
+    /// strength, 0–4 (None until the first reading, or when the service can't give one).
+    Connected { ssid: String, address: String, #[serde(default)] bars: Option<u8> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -131,7 +131,7 @@ mod tests {
         let next = || rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert_eq!(next(), WifiEvent::Link(WifiLink::Idle));
         s.send(WifiCmd::Join { ssid: "Home".into(), password: Some(crate::wireless::Secret::new("hunter22")) });
-        assert_eq!(next(), WifiEvent::Link(WifiLink::Connected { ssid: "Home".into(), address: "a".into() }));
+        assert_eq!(next(), WifiEvent::Link(WifiLink::Connected { ssid: "Home".into(), address: "a".into(), bars: None }));
         s.send(WifiCmd::Join { ssid: "Home".into(), password: None }); // used up: nothing
         s.send(WifiCmd::Scan);
         s.send(WifiCmd::Scan);

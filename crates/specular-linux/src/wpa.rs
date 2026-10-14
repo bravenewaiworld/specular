@@ -38,6 +38,8 @@ const ADDRESS_POLL: Duration = Duration::from_secs(1);
 /// How often to try reconnecting after wpa_supplicant went away while WiFi is on (it is
 /// restarted around sleep, for one).
 const RECONNECT_POLL: Duration = Duration::from_secs(1);
+/// How often the signal strength is read, while connected.
+const SIGNAL_POLL: Duration = Duration::from_secs(10);
 
 /// What a device does around wpa_supplicant.
 pub trait WifiDevice: Send {
@@ -67,7 +69,7 @@ impl Wireless<WifiCmd, WifiEvent> for WpaSupplicant {
         let (tx, rx) = mpsc::channel();
         let worker = Worker {
             socket, device, events, tx: tx.clone(), conn: None, powered: false, link: WifiLink::Off,
-            saved: vec![], seen: vec![], join: None, address: None, lost_at: None,
+            saved: vec![], seen: vec![], join: None, address: None, lost_at: None, signal_due: None,
         };
         self.tx = Some(tx);
         std::thread::Builder::new().name("wifi".into()).spawn(move || worker.run(rx)).expect("spawning the WiFi thread");
@@ -196,6 +198,8 @@ struct Worker {
     address: Option<AddressWait>,
     /// When the connection was lost (or last tried again), while on.
     lost_at: Option<Instant>,
+    /// When the signal strength is next read; set only while connected.
+    signal_due: Option<Instant>,
 }
 
 impl Worker {
@@ -225,6 +229,24 @@ impl Worker {
 
     fn set_link(&mut self, link: WifiLink) {
         if link != self.link { self.link = link.clone(); self.report(WifiEvent::Link(link)); }
+        self.schedule_signal();
+    }
+
+    /// Starts reading the signal as soon as the link is connected (an existing deadline is kept);
+/// stops when it isn't.
+    fn schedule_signal(&mut self) {
+        let connected = matches!(self.link, WifiLink::Connected { .. });
+        self.signal_due = if connected { self.signal_due.or(Some(Instant::now())) } else { None };
+    }
+
+    /// Reads the signal strength of the connected link and reports it if it changed. A failed or
+    /// unreadable reading (a failed request is traced) keeps the last one.
+    fn poll_signal(&mut self) {
+        let WifiLink::Connected { ssid, address, bars } = self.link.clone() else { return };
+        self.signal_due = Some(Instant::now() + SIGNAL_POLL);
+        let Ok(reply) = self.request("signal", "SIGNAL_POLL") else { return };
+        let now = field(&reply, "RSSI").and_then(|r| r.parse().ok()).map(bars_for);
+        if now.is_some() && now != bars { self.set_link(WifiLink::Connected { ssid, address, bars: now }); }
     }
 
     fn report_networks(&self) { self.report(WifiEvent::Networks(networks(&self.seen, &self.saved))) }
@@ -234,7 +256,7 @@ impl Worker {
         let join = self.join.as_ref().map(|j| j.since + JOIN_WAIT);
         let address = self.address.as_ref().map(|a| a.next);
         let reconnect = self.lost_at.map(|t| t + RECONNECT_POLL);
-        [join, address, reconnect].into_iter().flatten().min()
+        [join, address, reconnect, self.signal_due].into_iter().flatten().min()
     }
 
     fn tick(&mut self) {
@@ -247,6 +269,7 @@ impl Worker {
             self.fail_join(WifiError::Service { step: "join".into(), detail: format!("not connected after {} s", JOIN_WAIT.as_secs()) });
         }
         if self.address.as_ref().is_some_and(|a| now >= a.next) { self.check_address(); }
+        if self.signal_due.is_some_and(|t| now >= t) { self.poll_signal(); }
     }
 
     /// Opens the connection; false (and traced) if it can't.
@@ -309,6 +332,9 @@ impl Worker {
             Ok(link) => {
                 if let WifiLink::Connecting { ssid, step: JoinStep::GettingAddress } = &link { self.wait_for_address(ssid.clone()); }
                 self.link = link.clone();
+                // The link has no signal reading yet: read it now rather than at the next poll.
+                self.signal_due = None;
+                self.schedule_signal();
                 self.report(WifiEvent::Link(link));
                 self.report_networks();
                 // wpa_supplicant scans by itself only while it has a saved network to look for.
@@ -611,8 +637,8 @@ fn parse_saved(reply: &str) -> Vec<(u32, String)> {
     }).collect()
 }
 
-/// Signal strength in bars, 1–4, for a network in range.
-fn bars(dbm: i32) -> u8 {
+/// Signal strength in bars, 1–4, for a network in range, from its level in dBm.
+fn bars_for(dbm: i32) -> u8 {
     match dbm { -55.. => 4, -65.. => 3, -75.. => 2, _ => 1 }
 }
 
@@ -620,7 +646,7 @@ fn bars(dbm: i32) -> u8 {
 /// of range.
 fn networks(seen: &[Seen], saved: &[Saved]) -> Vec<Network> {
     let in_range = seen.iter().map(|s| Network {
-        ssid: s.ssid.clone(), bars: bars(s.dbm), secured: s.secured, saved: saved.iter().any(|v| v.ssid == s.ssid), in_range: true,
+        ssid: s.ssid.clone(), bars: bars_for(s.dbm), secured: s.secured, saved: saved.iter().any(|v| v.ssid == s.ssid), in_range: true,
         supported: s.joinable,
     });
     let mut out: Vec<Network> = in_range.collect();
@@ -639,7 +665,7 @@ fn status_link(reply: &str) -> WifiLink {
         Some("AUTHENTICATING" | "ASSOCIATING") => JoinStep::Associating,
         Some("ASSOCIATED" | "4WAY_HANDSHAKE" | "GROUP_HANDSHAKE") => JoinStep::Authenticating,
         Some("COMPLETED") => match (field(reply, "ip_address").filter(|a| *a != "0.0.0.0"), &ssid) {
-            (Some(address), Some(ssid)) => return WifiLink::Connected { ssid: ssid.clone(), address: address.into() },
+            (Some(address), Some(ssid)) => return WifiLink::Connected { ssid: ssid.clone(), address: address.into(), bars: None },
             _ => JoinStep::GettingAddress,
         },
         _ => return WifiLink::Idle,
