@@ -81,7 +81,7 @@ fn rows_follow_sections_visibility_and_layer() {
     let rows = s.rows(&golden_sun(), Visibility::User);
     assert_eq!(labels(&rows), ["Display", "Scaling"]);
     assert!(rows[1].overridden);
-    assert_eq!(rows[1].kind, RowKind::Choice { options: vec!["Integer".into(), "Fit".into(), "Stretch".into()], selected: 2 });
+    assert_eq!(rows[1].kind, RowKind::Choice { options: vec!["Integer".into(), "Fit".into(), "Stretch".into()], selected: 2, swatch: None });
 }
 
 #[test]
@@ -104,6 +104,31 @@ fn presses_change_values() {
     assert!(s.press("dev.frame_stats", &g, press(Button::A)).is_some());
     assert_eq!(s.get("dev.frame_stats", &g).unwrap().0, &json!(true));
     assert!(s.press("dev.frame_stats", &g, held(Button::Left)).is_none());
+}
+
+#[test]
+fn colours_step_through_the_palette_and_can_follow_another() {
+    let colour = |key, same_as, default| SettingDecl { key, section: "Look", label: key, kind: SettingKind::Colour { same_as },
+        default: json!(default), visibility: Visibility::User, deepest: Scope::Global };
+    let mut s = Settings::new(vec![colour("Accent", None, "teal"), colour("second", Some("Accent"), "coral")]);
+    let g = Layer::Global;
+    assert_eq!(s.colour("second", &g), palette::find("coral"));
+    // "same" comes first, and follows the other setting's colour
+    assert_eq!(s.press("second", &g, press(Button::Right)), Some(("second", json!("amber"))));
+    s.set("second", &g, json!(SAME)).unwrap();
+    s.set("Accent", &g, json!("lime")).unwrap();
+    assert_eq!(s.colour("second", &g), palette::find("lime"));
+    let rows = s.rows(&g, Visibility::User);
+    let RowKind::Choice { options, selected: 0, swatch } = &rows[2].kind else { panic!("{:?}", rows[2]) };
+    assert_eq!((options[0].as_str(), options[1].as_str(), *swatch), ("Same as accent", "Teal", palette::find("lime")));
+    // without `same_as` there is no "same"; a stored id not in the palette is ignored, and the
+    // default applies
+    assert_eq!(s.set("Accent", &g, json!(SAME)), Err(SettingError::WrongValue));
+    s.layers.clear();
+    s.set_layer(g.clone(), Map::from_iter([("Accent".into(), json!("mauve"))]));
+    assert_eq!(s.colour("Accent", &g), palette::find("teal"));
+    assert!(s.press("Accent", &g, press(Button::Left)).is_some());
+    assert_eq!(s.get("Accent", &g).unwrap().0, &json!("lime"));
 }
 
 #[test]

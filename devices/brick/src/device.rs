@@ -6,13 +6,17 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
-use specular_core::device::{Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb, SoundOut, Vsync};
+use specular_core::device::{Accent, Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
 
-/// The light bar: the 8 LEDs along the top (LED-class names "sunxi_led0r" … "sunxi_led7b").
-const LIGHT_BAR: usize = 8;
+/// Every LED, in chain order (LED-class names "sunxi_led0r" … "sunxi_led13b"): the 8 along the top
+/// show the first accent; F2 and F1 on the front, then the 4 under the shoulder buttons, the second.
+const LEDS: &[Accent] = {
+    use Accent::*;
+    &[First, First, First, First, First, First, First, First, Second, Second, Second, Second, Second, Second]
+};
 /// The LEDs are very bright at full power; like TrimUI's firmware, limit them to about 40/255.
 const LED_LIMIT: u8 = 40;
 
@@ -28,12 +32,12 @@ impl Device for Brick {
             ppi: 400,
             refresh_hz: 60.2,
             buttons: &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power, Mute],
-            light_bar_leds: LIGHT_BAR,
+            leds: LEDS,
         }
     }
 
     fn hardware(&self) -> Hardware {
-        let names: Vec<[String; 3]> = (0..LIGHT_BAR).map(|i| ["r", "g", "b"].map(|c| format!("sunxi_led{i}{c}"))).collect();
+        let names: Vec<[String; 3]> = (0..LEDS.len()).map(|i| ["r", "g", "b"].map(|c| format!("sunxi_led{i}{c}"))).collect();
         Hardware {
             power: Box::new(BrickPower(PowerSupply::find(Path::new("/sys/class/power_supply")))),
             display: Box::new(Disp),

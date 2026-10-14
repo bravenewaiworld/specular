@@ -10,5 +10,6 @@ pub mod library;
 pub mod list;
 pub mod model;
 pub mod nav;
+pub mod palette;
 pub mod repeat;
 pub mod settings;

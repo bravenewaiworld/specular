@@ -20,7 +20,7 @@ impl Device for Desktop {
             name: "Desktop",
             width: 1024, height: 768, ppi: 400, refresh_hz: 60.0,
             buttons: &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, VolUp, VolDown, Power],
-            light_bar_leds: 0,
+            leds: &[],
         }
     }
     fn hardware(&self) -> Hardware { simulated::hardware() }

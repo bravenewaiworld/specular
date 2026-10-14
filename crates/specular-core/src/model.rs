@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
+use crate::device::Rgb;
 use crate::input::Button;
 
 /// A screen's identity. A string, so plugins can register screens of their own later.
@@ -34,8 +35,9 @@ pub enum RowKind {
     Image { image: ImageRef, detail: Option<String> },
     /// On or off; A, left or right switches it.
     Toggle { on: bool },
-    /// One of a few options; left and right step through them.
-    Choice { options: Vec<String>, selected: usize },
+    /// One of a few options; left and right step through them. A colour choice also shows the
+    /// colour it stands for.
+    Choice { options: Vec<String>, selected: usize, swatch: Option<Rgb> },
     /// A number in a range; left and right step it.
     Number { value: i64, min: i64, max: i64, step: i64, unit: &'static str },
     /// Does something or opens a screen when A is pressed; may show its current value.

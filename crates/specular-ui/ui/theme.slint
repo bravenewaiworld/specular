@@ -1,15 +1,18 @@
 // The Light Bar look (see specular/design/README.md). Sizes are in u: 1 u is one pixel of the
 // Brick's 400 ppi panel, and `Theme.u` is this device's pixels per u (ppi / 400), so text keeps
 // its physical size on every screen. The UI's sizes, colours and timings live here; row heights
-// come from specular_core::list, and the accent colour is set from Rust (ACCENT).
+// come from specular_core::list, and the accent colours from the settings (set from Rust).
 
 import "../../../assets/fonts/Geist.ttf";
 import "../../../assets/fonts/GeistMono.ttf";
 
 export global Theme {
     in property <float> u: 1;
-    // The accent, and the light bar's tint (the accent for now).
+    // The accent: toggles, unfocused gauges, the volume gauge.
     in property <color> accent;
+    // The second accent: the focus marks (the focus plate's stripe, the grid outline, a focused gauge).
+    in property <color> focus;
+    // The on-screen light bar's colour (the accent for now).
     in property <color> tint;
 
     out property <color> bg: #08090a;

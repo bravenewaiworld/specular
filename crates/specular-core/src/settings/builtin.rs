@@ -12,9 +12,16 @@ pub const SCALING: &str = "video.scaling";
 /// Sound volume, 0 (silent) to `VOLUME_MAX`; the volume keys step it.
 pub const VOLUME: &str = "sound.volume";
 pub const VOLUME_MAX: i64 = 20;
-pub const LIGHT_BAR: &str = "lights.brightness";
-/// The light bar's brightness steps (0 = off).
-pub const LIGHT_BAR_MAX: i64 = 5;
+/// The LEDs' brightness (its key predates there being more LEDs than the light bar).
+pub const LED_BRIGHTNESS: &str = "lights.brightness";
+/// The LEDs' brightness steps (0 = off).
+pub const LED_BRIGHTNESS_MAX: i64 = 5;
+/// The accent (a palette id): the on-screen light bar, toggles and unfocused gauges, and the LEDs
+/// the device profile marks `Accent::First`.
+pub const ACCENT: &str = "appearance.accent";
+/// The second accent (a palette id, or `SAME`): the focus marks, and the LEDs marked
+/// `Accent::Second`.
+pub const SECOND_ACCENT: &str = "appearance.second_accent";
 /// Sleep after this many seconds without a button press, outside a running game ("never" for
 /// never).
 pub const SLEEP_AFTER: &str = "power.sleep_after_seconds";
@@ -36,8 +43,14 @@ pub fn settings() -> Vec<SettingDecl> {
         SettingDecl { key: VOLUME, section: "Sound", label: "Volume",
             kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(12),
             visibility: Visibility::User, deepest: Scope::Global },
-        SettingDecl { key: LIGHT_BAR, section: "Lights", label: "Light bar",
-            kind: SettingKind::Int { min: 0, max: LIGHT_BAR_MAX, step: 1, unit: "" }, default: json!(3),
+        SettingDecl { key: LED_BRIGHTNESS, section: "Lights", label: "Brightness",
+            kind: SettingKind::Int { min: 0, max: LED_BRIGHTNESS_MAX, step: 1, unit: "" }, default: json!(3),
+            visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: ACCENT, section: "Appearance", label: "Accent",
+            kind: SettingKind::Colour { same_as: None }, default: json!("teal"),
+            visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: SECOND_ACCENT, section: "Appearance", label: "Second accent",
+            kind: SettingKind::Colour { same_as: Some(ACCENT) }, default: json!("coral"),
             visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: LIBRARY_VIEW, section: "Library", label: "Games shown as",
             kind: SettingKind::Choice(&[("list", "List"), ("grid", "Grid")]), default: json!("list"),

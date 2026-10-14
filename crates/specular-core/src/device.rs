@@ -23,9 +23,13 @@ pub struct DeviceProfile {
     pub refresh_hz: f64,
     /// The buttons the device has; hints never show others.
     pub buttons: &'static [Button],
-    /// How many LEDs the light bar has (0 for none).
-    pub light_bar_leds: usize,
+    /// The device's RGB LEDs in chain order, with the accent each one shows (empty for none).
+    pub leds: &'static [Accent],
 }
+
+/// Which of the two accent colours an LED shows (`settings::builtin::ACCENT` or `SECOND_ACCENT`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Accent { First, Second }
 
 /// The battery and charger, as the status bar shows them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,10 +63,10 @@ pub trait Display: Send {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
-/// The light bar.
+/// The RGB LEDs.
 pub trait Lights: Send {
-    /// Sets the light bar, one colour per LED (as many as the profile says). Implementations
-    /// apply the device's brightness limits.
+    /// Sets the LEDs, one colour per LED (as many as the profile lists). Implementations apply
+    /// the device's brightness limits.
     fn show(&self, colours: &[Rgb]) -> io::Result<()>;
 }
 

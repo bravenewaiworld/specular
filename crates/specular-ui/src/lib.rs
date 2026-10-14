@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, VecModel};
 use specular_core::app::{App, Effect, InputTarget, Msg};
-use specular_core::device::{Device, DeviceProfile, Hardware, Rgb};
+use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Rgb};
 use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::list;
@@ -32,9 +32,6 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 /// Installs a device's Slint platform (how it draws and how its buttons arrive). It is given the
 /// callback for button events, which the platform must call on the UI thread.
 pub type InstallPlatform = Box<dyn FnOnce(Box<dyn FnMut(ButtonEvent)>) -> Result<(), Error>>;
-
-/// The accent colour (also the light bar's); the UI's theme takes it from here.
-const ACCENT: Rgb = Rgb(0x2e, 0xc4, 0xb6);
 
 /// Now, on the monotonic clock button times use.
 pub fn now() -> Duration {
@@ -67,9 +64,6 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
     let window = AppWindow::new()?;
     let theme = window.global::<Theme>();
     theme.set_u(profile.ppi as f32 / 400.0);
-    let Rgb(r, g, b) = ACCENT;
-    theme.set_accent(slint::Color::from_rgb_u8(r, g, b));
-    theme.set_tint(slint::Color::from_rgb_u8(r, g, b));
     window.window().set_size(slint::PhysicalSize::new(profile.width, profile.height));
 
     let (io, io_thread) = io_thread(data.clone());
@@ -109,6 +103,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         on_screen: RefCell::default(),
         requested: RefCell::default(),
     });
+    runner.show_theme();
     window.set_rows(runner.rows.clone().into());
     window.set_hints(runner.hints.clone().into());
     window.window().set_rendering_notifier(|state, api| {
@@ -507,14 +502,40 @@ impl Runner {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
                 return;
             }
-            builtin::LIGHT_BAR => {
-                let scale = |c: u8| (c as i64 * level / builtin::LIGHT_BAR_MAX) as u8;
-                let Rgb(r, g, b) = ACCENT;
-                HwCmd::Lights(vec![Rgb(scale(r), scale(g), scale(b)); self.profile.light_bar_leds])
+            builtin::ACCENT | builtin::SECOND_ACCENT | builtin::LED_BRIGHTNESS => {
+                // The theme and the LEDs each depend on several settings, so they are read back
+                // from the settings (already updated) rather than taken from `value`.
+                self.show_theme();
+                let (first, second) = self.accents();
+                let level = self.app.borrow().ctx().settings.get(builtin::LED_BRIGHTNESS, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
+                let scale = |c: u8| (c as i64 * level / builtin::LED_BRIGHTNESS_MAX) as u8;
+                HwCmd::Lights(self.profile.leds.iter().map(|led| {
+                    let Rgb(r, g, b) = match led { Accent::First => first, Accent::Second => second };
+                    Rgb(scale(r), scale(g), scale(b))
+                }).collect())
             }
             _ => return,
         };
         let _ = self.hardware.send(cmd);
+    }
+
+    /// The accent and second accent, as the settings resolve them.
+    fn accents(&self) -> (Rgb, Rgb) {
+        let app = self.app.borrow();
+        let s = &app.ctx().settings;
+        let first = s.colour(builtin::ACCENT, &Layer::Global).unwrap_or_default();
+        (first, s.colour(builtin::SECOND_ACCENT, &Layer::Global).unwrap_or(first))
+    }
+
+    /// Sets the theme's colours (the on-screen light bar's tint is the accent for now).
+    fn show_theme(&self) {
+        let Some(w) = self.window.upgrade() else { return };
+        let (first, second) = self.accents();
+        let colour = |Rgb(r, g, b): Rgb| slint::Color::from_rgb_u8(r, g, b);
+        let theme = w.global::<Theme>();
+        theme.set_accent(colour(first));
+        theme.set_tint(colour(first));
+        theme.set_focus(colour(second));
     }
 
     fn schedule_repeat(self: &Rc<Self>) {
@@ -672,7 +693,7 @@ impl Runner {
             RowKind::Header => (Kind::Header, String::new(), false, 0.0),
             RowKind::Text { detail } | RowKind::Image { detail, .. } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
             RowKind::Toggle { on } => (Kind::Toggle, String::new(), *on, 0.0),
-            RowKind::Choice { options, selected } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
+            RowKind::Choice { options, selected, .. } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
             RowKind::Number { value, min, max, unit, .. } => (Kind::Number, format!("{value}{unit}"), false, (value - min) as f32 / (max - min).max(1) as f32),
             RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
         };
@@ -680,6 +701,8 @@ impl Runner {
             shown: true, index: index as i32, kind, label: r.label.as_str().into(), value: value.into(), on, fraction,
             enabled: r.enabled, overridden: r.overridden, x: rect.x, top: rect.y, width: rect.width, height: rect.height,
             cover: self.cover(r),
+            // Transparent (not drawn) for rows without one.
+            swatch: match r.kind { RowKind::Choice { swatch: Some(Rgb(r, g, b)), .. } => slint::Color::from_rgb_u8(r, g, b), _ => Default::default() },
         }
     }
 

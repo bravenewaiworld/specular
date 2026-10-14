@@ -15,8 +15,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
+use crate::device::Rgb;
 use crate::input::{Button, Press};
 use crate::model::{Row, RowKind};
+use crate::palette::{self, PALETTE};
 
 /// Who a setting is for. Settings screens show user settings, and developer ones too while the
 /// "Developer details" setting is on.
@@ -66,8 +68,25 @@ pub enum SettingKind {
     Bool,
     /// One of these (stored value, label) pairs.
     Choice(&'static [(&'static str, &'static str)]),
+    /// A colour from the palette, stored by its id. With `same_as` (another Colour setting's
+    /// key), the first option is `SAME`: show that setting's colour.
+    Colour { same_as: Option<&'static str> },
     /// A whole number from `min` to `max` in steps of `step`, shown with `unit`.
     Int { min: i64, max: i64, step: i64, unit: &'static str },
+}
+
+/// The value of a Colour setting that follows another (see `SettingKind::Colour`).
+pub const SAME: &str = "same";
+
+impl SettingKind {
+    /// The stored values a Choice or Colour steps through, in order (empty for other kinds).
+    fn options(self) -> Vec<&'static str> {
+        match self {
+            SettingKind::Choice(options) => options.iter().map(|(o, _)| *o).collect(),
+            SettingKind::Colour { same_as } => same_as.map(|_| SAME).into_iter().chain(PALETTE.iter().map(|c| c.id)).collect(),
+            SettingKind::Bool | SettingKind::Int { .. } => Vec::new(),
+        }
+    }
 }
 
 /// One setting. Declared in code (or later by a plugin); the settings screens are built from these.
@@ -90,7 +109,7 @@ impl SettingDecl {
     fn accepts(&self, v: &Value) -> bool {
         match self.kind {
             SettingKind::Bool => v.is_boolean(),
-            SettingKind::Choice(options) => v.as_str().is_some_and(|s| options.iter().any(|(o, _)| *o == s)),
+            SettingKind::Choice(_) | SettingKind::Colour { .. } => v.as_str().is_some_and(|s| self.kind.options().contains(&s)),
             SettingKind::Int { min, max, step, .. } => v.as_i64().is_some_and(|n| (min..=max).contains(&n) && (n - min) % step == 0),
         }
     }
@@ -170,10 +189,12 @@ impl Settings {
             let (v, from) = self.get(d.key, at).unwrap();
             let kind = match d.kind {
                 SettingKind::Bool => RowKind::Toggle { on: v.as_bool().unwrap_or(false) },
-                SettingKind::Choice(options) => RowKind::Choice {
-                    options: options.iter().map(|(_, label)| label.to_string()).collect(),
-                    selected: options.iter().position(|(o, _)| Some(*o) == v.as_str()).unwrap_or(0),
-                },
+                SettingKind::Choice(options) => choice_row(options.iter().map(|(o, label)| (*o, label.to_string())), v, None),
+                SettingKind::Colour { same_as } => {
+                    let same = same_as.and_then(|k| self.decl(k)).map(|f| (SAME, format!("Same as {}", f.label.to_lowercase())));
+                    let colours = PALETTE.iter().map(|c| (c.id, c.label.to_string()));
+                    choice_row(same.into_iter().chain(colours), v, self.colour(d.key, at))
+                }
                 SettingKind::Int { min, max, step, unit } => RowKind::Number { value: v.as_i64().unwrap_or(min), min, max, step, unit },
             };
             let mut row = Row::new(d.key, d.label, kind);
@@ -181,6 +202,15 @@ impl Settings {
             rows.push(row);
         }
         rows
+    }
+
+    /// The colour a Colour setting shows at `at`, following `SAME`; None for other settings.
+    pub fn colour(&self, key: &str, at: &Layer) -> Option<Rgb> {
+        let SettingKind::Colour { same_as } = self.decl(key)?.kind else { return None };
+        match self.get(key, at)?.0.as_str()? {
+            SAME => self.colour(same_as?, at),
+            id => palette::find(id),
+        }
     }
 
     /// Applies a press to the setting `key` shown at `at` (A, left or right on its row). Returns
@@ -194,11 +224,12 @@ impl Settings {
         let new = match kind {
             SettingKind::Bool if !p.repeat => Value::Bool(!current.as_bool().unwrap_or(false)),
             SettingKind::Bool => return None,
-            SettingKind::Choice(options) => {
+            SettingKind::Choice(_) | SettingKind::Colour { .. } => {
+                let options = kind.options();
                 let n = options.len() as i64;
-                let i = options.iter().position(|(o, _)| Some(*o) == current.as_str()).unwrap_or(0) as i64 + delta;
+                let i = options.iter().position(|o| Some(*o) == current.as_str()).unwrap_or(0) as i64 + delta;
                 if !(0..n).contains(&i) && p.repeat { return None; }
-                Value::from(options[i.rem_euclid(n) as usize].0)
+                Value::from(options[i.rem_euclid(n) as usize])
             }
             SettingKind::Int { .. } if p.button == Button::A => return None,
             SettingKind::Int { min, max, step, .. } => Value::from((current.as_i64().unwrap_or(min) + delta * step).clamp(min, max)),
@@ -206,6 +237,14 @@ impl Settings {
         if new == current { return None; }
         self.set(key, at, new.clone()).ok().map(|_| (key, new))
     }
+}
+
+/// A choice row from (stored value, label) options, with `v` selected (the first if it matches
+/// none) and `swatch` shown beside the value.
+fn choice_row(options: impl Iterator<Item = (&'static str, String)>, v: &Value, swatch: Option<Rgb>) -> RowKind {
+    let (values, labels): (Vec<_>, Vec<_>) = options.unzip();
+    let selected = values.iter().position(|o| Some(*o) == v.as_str()).unwrap_or(0);
+    RowKind::Choice { options: labels, selected, swatch }
 }
 
 #[cfg(test)]

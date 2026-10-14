@@ -44,12 +44,14 @@ export struct RowData {
     width: float,
     height: float,
     cover: Cover,
+    // A colour choice's colour, shown as a dot beside its value (transparent for other rows).
+    swatch: color,
 }
 
 export struct Hint { button: string, label: string }
 
 // The focus plate: sharp top corners, rounded bottom ones (like the device's case), a chamfer
-// highlight along the top and the accent along its left edge.
+// highlight along the top and the focus colour along its left edge.
 component FocusPlate inherits Rectangle {
     background: Theme.raised;
     border-bottom-left-radius: Theme.radius;
@@ -57,9 +59,9 @@ component FocusPlate inherits Rectangle {
     Rectangle { y: 0; height: Theme.line; background: Theme.edge; }
     Rectangle {
         x: 0; y: 18px * Theme.u; width: 4px * Theme.u; height: parent.height - 36px * Theme.u;
-        background: Theme.accent;
+        background: Theme.focus;
         drop-shadow-blur: 12px * Theme.u;
-        drop-shadow-color: Theme.accent.with-alpha(0.7);
+        drop-shadow-color: Theme.focus.with-alpha(0.7);
     }
 }
 
@@ -88,7 +90,7 @@ component Gauge inherits Rectangle {
     Rectangle {
         x: 0; height: parent.height; width: parent.width * fraction;
         animate width { duration: Motion.focus; easing: Motion.focus-easing; }
-        background: focused ? Theme.accent : Theme.fg;
+        background: focused ? Theme.focus : Theme.fg;
     }
 }
 
@@ -116,7 +118,7 @@ component CoverView inherits Rectangle {
 }
 
 // One cell of a grid: the cover, and the title underneath. The focused cell lifts and gets an
-// accent outline.
+// outline in the focus colour.
 component GridCell inherits Rectangle {
     in property <RowData> data;
     in property <bool> focused;
@@ -131,7 +133,7 @@ component GridCell inherits Rectangle {
     if focused : Rectangle {
         width: parent.width + 2 * Theme.line; height: parent.width + 2 * Theme.line; x: -Theme.line; y: -Theme.line;
         border-bottom-left-radius: Theme.radius + Theme.line; border-bottom-right-radius: Theme.radius + Theme.line;
-        border-width: Theme.line; border-color: Theme.accent;
+        border-width: Theme.line; border-color: Theme.focus;
     }
     CoverView { y: 0; width: parent.width; height: parent.width; cover: data.cover; }
     Text {
@@ -165,6 +167,10 @@ component RowView inherits Rectangle {
         if data.overridden : Rectangle {
             width: 10px * Theme.u; height: self.width; border-radius: self.width / 2; y: (parent.height - self.height) / 2;
             background: Theme.accent;
+        }
+        if data.swatch.alpha > 0 : Rectangle {
+            width: 24px * Theme.u; height: self.width; border-radius: self.width / 2; y: (parent.height - self.height) / 2;
+            background: data.swatch;
         }
         if data.kind == Kind.number : Gauge { fraction: data.fraction; focused: focused; y: (parent.height - self.height) / 2; }
         if data.kind == Kind.toggle : Toggle { on: data.on; y: (parent.height - self.height) / 2; }
