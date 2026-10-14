@@ -78,7 +78,7 @@ fn watch_buttons(stats: Arc<Stats>) {
     loop {
         let mut fds: Vec<libc::pollfd> = input.fds().map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 }).collect();
         unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, 1000) };
-        input.retry();
+        input.retry(&mut events);
         input.read(&mut events);
         for e in events.drain(..).filter(|e| e.pressed) {
             let _ = stats.press_us.compare_exchange(0, micros(e.time).max(1), Relaxed, Relaxed);

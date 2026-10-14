@@ -27,7 +27,7 @@ impl Device for Brick {
             height: 768,
             ppi: 400,
             refresh_hz: 60.2,
-            buttons: &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power],
+            buttons: &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power, Mute],
             light_bar_leds: LIGHT_BAR,
         }
     }

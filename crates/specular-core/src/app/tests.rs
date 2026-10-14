@@ -164,13 +164,24 @@ fn the_game_menu_pauses_and_quits() {
 #[test]
 fn volume_keys_work_in_games_and_stop_at_the_ends() {
     let mut a = app();
-    let level = |e: &[Effect]| e.iter().find_map(|e| match e { Effect::ShowVolume(v) => Some(*v), _ => None });
+    let level = |e: &[Effect]| e.iter().find_map(|e| match e { Effect::ShowVolume { level, .. } => Some(*level), _ => None });
     assert_eq!(level(&tap(&mut a, Button::VolUp, 0)), Some(13));
     tap(&mut a, Button::A, 10);
     tap(&mut a, Button::A, 20); // playing
     assert_eq!(level(&tap(&mut a, Button::VolDown, 30)), Some(12));
     for t in 0..30 { tap(&mut a, Button::VolDown, 40 + t); }
-    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume(0)]); // nothing changed to save
+    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume { level: 0, muted: false }]); // nothing changed to save
+}
+
+#[test]
+fn the_mute_switch_mutes_without_touching_the_volume() {
+    let mut a = app();
+    let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t) }));
+    assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true }]);
+    assert_eq!(switch(&mut a, true, 10), vec![]); // already on
+    // The volume keys still work, and say the sound is muted.
+    assert!(tap(&mut a, Button::VolUp, 20).contains(&Effect::ShowVolume { level: 13, muted: true }));
+    assert_eq!(switch(&mut a, false, 30), vec![Effect::Mute(false), Effect::ShowVolume { level: 13, muted: false }]);
 }
 
 #[test]

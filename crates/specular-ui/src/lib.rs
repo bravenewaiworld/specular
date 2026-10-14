@@ -195,7 +195,7 @@ fn on_ui(f: impl FnOnce(&Rc<Runner>) + Send + 'static) {
 /// Delivers a message to the app on the UI thread, from any thread.
 fn post(msg: Msg) { on_ui(move |r| r.handle(msg)); }
 
-enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Volume(u8), Sleep }
+enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Volume(u8), Muted(bool), Sleep }
 
 /// How often the battery is read (on some devices each read is a slow bus transfer).
 const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
@@ -205,6 +205,8 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut next_battery = Instant::now();
+        // Muting sets the device's volume to 0, so the level and the mute state are kept apart.
+        let (mut volume, mut muted) = (0, false);
         loop {
             if Instant::now() >= next_battery {
                 if let Ok(b) = hw.power.battery() { post(Msg::Battery(b)); }
@@ -213,7 +215,8 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
             let result = match rx.recv_timeout(next_battery.saturating_duration_since(Instant::now())) {
                 Ok(HwCmd::Brightness(l)) => hw.display.set_brightness(l),
                 Ok(HwCmd::Lights(c)) => hw.lights.show(&c),
-                Ok(HwCmd::Volume(l)) => hw.audio.set_volume(l),
+                Ok(HwCmd::Volume(l)) => { volume = l; hw.audio.set_volume(if muted { 0 } else { volume }) }
+                Ok(HwCmd::Muted(m)) => { muted = m; hw.audio.set_volume(if muted { 0 } else { volume }) }
                 Ok(HwCmd::Sleep) => {
                     let r = hw.power.sleep();
                     post(Msg::Woke);
@@ -377,10 +380,12 @@ impl Runner {
             Effect::LoadState => self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") }),
             Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok("") }),
             Effect::Notice(text) => self.toast(&text),
-            Effect::ShowVolume(level) => {
+            Effect::Mute(muted) => { let _ = self.hardware.send(HwCmd::Muted(muted)); }
+            Effect::ShowVolume { level, muted } => {
                 let Some(w) = self.window.upgrade() else { return };
                 w.set_volume(level as f32 / builtin::VOLUME_MAX as f32);
                 w.set_volume_text(level.to_string().into());
+                w.set_volume_muted(muted);
                 w.set_volume_shown(true);
                 let weak = self.window.clone();
                 self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
@@ -726,7 +731,7 @@ fn button_label(b: Button) -> &'static str {
     match b {
         A => "A", B => "B", X => "X", Y => "Y", L1 => "L1", R1 => "R1", L2 => "L2", R2 => "R2",
         Select => "SELECT", Start => "START", Menu => "MENU", F1 => "F1", F2 => "F2",
-        Up => "↑", Down => "↓", Left => "←", Right => "→", VolUp => "+", VolDown => "−", Power => "⏻",
+        Up => "↑", Down => "↓", Left => "←", Right => "→", VolUp => "+", VolDown => "−", Power => "⏻", Mute => "MUTE",
     }
 }
 

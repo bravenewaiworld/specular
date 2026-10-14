@@ -62,8 +62,12 @@ pub enum Effect {
     QuitGame,
     /// Show this short message for a moment.
     Notice(String),
-    /// The volume keys changed the volume: show its new level (0 to `builtin::VOLUME_MAX`).
-    ShowVolume(i64),
+    /// Show the volume: its level (0 to `builtin::VOLUME_MAX`) and whether the sound is muted.
+    /// Sent on every volume key press (even at an end) and whenever the mute switch moves.
+    ShowVolume { level: i64, muted: bool },
+    /// Silence the sound (true) or restore it (false). The volume level is untouched; `Apply`
+    /// still carries it.
+    Mute(bool),
     Sleep,
 }
 
@@ -147,6 +151,8 @@ pub struct App {
     /// started: the next `Tick` starts it. Not consulted while a game is running (its buttons
     /// never reach the app); the game menu counts as idle.
     idle_since: Option<Duration>,
+    /// Whether the mute switch is on. Not saved: the device reports the switch when it opens.
+    muted: bool,
     /// The game being played (whether or not its menu is open).
     playing: Option<Game>,
     /// How many columns a grid has on this display (from the UI; see `list::grid_columns`).
@@ -171,6 +177,7 @@ impl App {
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
             idle_since: None,
+            muted: false,
             grid_columns: 1,
             playing: None,
             cache: RefCell::default(),
@@ -255,6 +262,8 @@ impl App {
         match msg {
             Msg::Button(e) => {
                 self.idle_since = Some(e.time);
+                // A switch, not a key: it counts as activity but is never repeated.
+                if e.button == Button::Mute { return self.set_muted(e.pressed); }
                 self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default()
             }
             Msg::Tick(now) => {
@@ -347,16 +356,30 @@ impl App {
         }
     }
 
+    /// The volume setting (0 if unset).
+    fn volume(&self) -> i64 {
+        self.ctx.settings.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0)
+    }
+
     /// The volume keys, on every screen and in games. The level is shown even when it is already
-    /// at an end and doesn't change.
+    /// at an end and doesn't change. While muted they still change the level, which is heard once
+    /// the sound is switched back on.
     fn step_volume(&mut self, delta: i64) -> Vec<Effect> {
-        let s = &mut self.ctx.settings;
-        let now = s.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
+        let (now, muted) = (self.volume(), self.muted);
         let new = (now + delta).clamp(0, builtin::VOLUME_MAX);
-        if new == now { return vec![Effect::ShowVolume(new)]; }
-        let _ = s.set(builtin::VOLUME, &Layer::Global, new.into());
+        let show = Effect::ShowVolume { level: new, muted };
+        if new == now { return vec![show]; }
+        let _ = self.ctx.settings.set(builtin::VOLUME, &Layer::Global, new.into());
         self.changed(); // the settings screen shows the volume too
-        vec![Effect::Apply { key: builtin::VOLUME, value: new.into() }, Effect::SaveSettings(Layer::Global), Effect::ShowVolume(new), Effect::Redraw(None)]
+        vec![Effect::Apply { key: builtin::VOLUME, value: new.into() }, Effect::SaveSettings(Layer::Global), show, Effect::Redraw(None)]
+    }
+
+    /// The mute switch. Not saved: the switch holds its own position, and the device reports it at
+    /// startup (a switch already on then counts as a change).
+    fn set_muted(&mut self, muted: bool) -> Vec<Effect> {
+        if muted == self.muted { return vec![]; }
+        self.muted = muted;
+        vec![Effect::Mute(muted), Effect::ShowVolume { level: self.volume(), muted }]
     }
 
     fn open_game_menu(&mut self) -> Vec<Effect> {

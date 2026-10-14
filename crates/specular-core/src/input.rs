@@ -3,9 +3,10 @@
 use std::time::Duration;
 
 /// The buttons Specular knows, by position on a typical handheld (A = right, B = bottom,
-/// X = top, Y = left). A device may lack some; its profile says which it has.
+/// X = top, Y = left). A device may lack some; its profile says which it has. `Mute` is a
+/// switch: pressed while the sound is switched off, released when it is switched on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Button { Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power }
+pub enum Button { Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power, Mute }
 
 impl Button {
     /// Whether holding the button repeats it (moving through lists, changing values, volume).

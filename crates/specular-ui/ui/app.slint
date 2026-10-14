@@ -277,8 +277,10 @@ export component AppWindow inherits Window {
     in property <string> toast;
     in property <bool> toast-shown;
     // The volume (0–1, and as the number shown), shown over everything while `volume-shown`.
+    // While `volume-muted`, the gauge is dimmed and says MUTE instead of the number.
     in property <float> volume;
     in property <string> volume-text;
+    in property <bool> volume-muted;
     in property <bool> volume-shown;
     // Developer frame statistics, shown over a game while not empty.
     in property <string> stats;
@@ -411,10 +413,10 @@ export component AppWindow inherits Window {
         }
     }
 
-    // The volume: a slim gauge down the right edge, by the volume keys.
+    // The volume: a slim gauge down the left edge, by the volume keys, shown when they or the mute switch change something.
     Rectangle {
-        x: root.width - self.width - 28px * Theme.u; y: (root.height - self.height) / 2;
-        width: 56px * Theme.u; height: 320px * Theme.u;
+        x: 28px * Theme.u; y: (root.height - self.height) / 2;
+        width: 76px * Theme.u; height: 320px * Theme.u;
         border-radius: Theme.radius; background: Theme.raised;
         opacity: root.volume-shown ? 1 : 0;
         animate opacity { duration: Motion.fade; }
@@ -425,12 +427,12 @@ export component AppWindow inherits Window {
             Rectangle {
                 y: parent.height * (1 - root.volume); height: parent.height * root.volume;
                 animate y, height { duration: Motion.focus; easing: Motion.decelerate; }
-                background: Theme.accent;
+                background: root.volume-muted ? Theme.dim : Theme.accent;
             }
         }
         Text {
             y: parent.height - 44px * Theme.u; height: 32px * Theme.u; width: parent.width; horizontal-alignment: center;
-            text: root.volume-text; font-family: Theme.mono; font-size: Theme.caption; color: Theme.fg;
+            text: root.volume-muted ? "MUTE" : root.volume-text; font-family: Theme.mono; font-size: Theme.caption; color: Theme.fg;
         }
     }
 }

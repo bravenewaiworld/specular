@@ -118,8 +118,13 @@ impl BrickPlatform {
         if fds[1..].iter().any(|f| f.revents != 0) {
             let mut events = Vec::new();
             self.input.borrow_mut().read(&mut events);
-            if let Some(f) = self.on_button.borrow_mut().as_mut() { events.into_iter().for_each(f); }
+            self.send_buttons(events);
         }
+    }
+
+    /// Passes button events to the `on_button` handler, in order (dropped if none is set).
+    fn send_buttons(&self, events: Vec<ButtonEvent>) {
+        if let Some(f) = self.on_button.borrow_mut().as_mut() { events.into_iter().for_each(f); }
     }
 }
 
@@ -145,7 +150,9 @@ impl Platform for BrickPlatform {
             // While animating, the swap in draw() paces the loop at the display's rate.
             let animating = self.draw()?;
             let timer = if animating { Some(Duration::ZERO) } else { slint::platform::duration_until_next_timer_update() };
-            let retry = self.input.borrow_mut().retry();
+            let mut events = Vec::new(); // (opening a device can report a mute switch already on)
+            let retry = self.input.borrow_mut().retry(&mut events);
+            self.send_buttons(events);
             self.wait([timer, retry].into_iter().flatten().min());
         }
     }
