@@ -7,6 +7,7 @@ use specular_brick::platform::BrickPlatform;
 use specular_ui::DataRoot;
 
 fn main() -> Result<(), specular_ui::Error> {
+    specular_ui::use_fallback_fonts();
     let data = std::env::args().nth(1).unwrap_or_else(|| "/mnt/SDCARD".into());
     specular_ui::run(Box::new(Brick), DataRoot(data.into()), Some(Box::new(|on_button| {
         let platform = BrickPlatform::new()?;

@@ -3,14 +3,14 @@
 //! Slint draws (the only time its GL context is sure to be current), into one texture that the
 //! window shows as a borrowed GL texture.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use glow::HasContext;
 use slint::ComponentHandle;
-use specular_core::device::Device;
+use specular_core::device::{Device, Output, SoundOut};
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::library::{Game, SystemDecl};
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
@@ -30,15 +30,22 @@ pub struct Playing {
     pub frames: Arc<FrameSlot>,
     /// The file of the save state the menu saves and loads (one slot for now).
     pub state: PathBuf,
+    /// The output its sound was last sent to; if that couldn't be opened, the game is silent.
+    pub output: RefCell<Output>,
+    /// Whether `output` couldn't be opened at launch, so the game started silent.
+    pub sound_failed: bool,
     /// The buttons held, as libretro joypad bits.
     held: Cell<u16>,
 }
 
+/// A device the UI can use from other threads too (to open sound outputs, which can block).
+pub type SharedDevice = Arc<dyn Device + Send + Sync>;
+
 impl Playing {
-    /// Starts `game` with its system's core, loading it on another thread (reading a large ROM
-    /// takes a while), then calls `started` there with the result. `window` is redrawn whenever
-    /// a new frame arrives.
-    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &dyn Device, window: slint::Weak<AppWindow>,
+    /// Starts `game` with its system's core and its sound on `output`, on another thread, since
+    /// reading a large ROM or opening a Bluetooth output can take a second or more; then calls
+    /// `started` there with the result. `window` is redrawn whenever a new frame arrives.
+    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &SharedDevice, output: Output, window: slint::Weak<AppWindow>,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
         let spec = LaunchSpec {
@@ -50,7 +57,6 @@ impl Playing {
             options: core.options.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
             rom_by_path: core.rom_by_path,
         };
-        let sound = device.open_sound().map_err(|e| eprintln!("sound: {e}; playing without")).ok();
         let frames = Arc::new(FrameSlot::default());
         // One redraw request at a time: frames arriving while one is pending are drawn by it.
         let pending = Arc::new(AtomicBool::new(false));
@@ -62,14 +68,17 @@ impl Playing {
                 if let Some(w) = window.upgrade() { w.window().request_redraw(); }
             });
         });
-        let out = Outputs { sound, vsync: device.open_vsync(), display_hz: device.profile().refresh_hz, frames: frames.clone(), on_frame };
+        let (vsync, display_hz) = (device.open_vsync(), device.profile().refresh_hz);
         let state = game.state_path(&data.roms(), "state1");
-        let (roms, saves, played) = (data.roms(), data.saves(), game.clone());
+        let (roms, saves, played, device) = (data.roms(), data.saves(), game.clone(), device.clone());
         std::thread::spawn(move || {
+            let sound = open_sound(device.as_ref(), &output);
+            let sound_failed = sound.is_none();
+            let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame };
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }
-            started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0) }))
+            started(Session::start(spec, out).map(|session| Self { session, frames, state, output: RefCell::new(output), sound_failed, held: Cell::new(0) }))
         });
     }
 
@@ -86,6 +95,12 @@ impl Playing {
         if paused { self.held.set(0); self.session.set_buttons(0); }
         self.session.pause(paused);
     }
+}
+
+/// Opens `output` for a game's sound; None (having said why) if it can't be. May block: a
+/// Bluetooth output can take a second.
+pub fn open_sound(device: &dyn Device, output: &Output) -> Option<Box<dyn SoundOut>> {
+    device.open_sound(output).map_err(|e| eprintln!("sound: opening {output:?}: {e}")).ok()
 }
 
 /// Whether `b` goes to the game while it is played (the app keeps Menu, Power and volume).

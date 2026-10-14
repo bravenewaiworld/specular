@@ -5,10 +5,10 @@ import { Theme, Motion } from "theme.slint";
 export { Theme }
 
 // What a row is (the core's row kinds; a row with a picture is drawn as text in a list).
-export enum Kind { header, text, toggle, choice, number, action }
+export enum Kind { header, text, toggle, choice, number, action, key }
 
 // How the screen's rows are arranged (the core's layouts).
-export enum ScreenLayout { list, list-with-picture, grid }
+export enum ScreenLayout { list, list-with-picture, grid, keys }
 
 // A game's box art, or what stands in for it.
 export struct Cover {
@@ -183,6 +183,60 @@ component RowView inherits Rectangle {
     }
 }
 
+// A key of the on-screen keyboard, drawn in two layers so the focus plate sits above the key
+// backgrounds and below their labels: the plate (KeyPlate), then the label (KeyLabel).
+component KeyPlate inherits Rectangle {
+    in property <RowData> data;
+    visible: data.shown;
+    x: data.x * 1px * Theme.u; y: data.top * 1px * Theme.u;
+    width: data.width * 1px * Theme.u; height: data.height * 1px * Theme.u;
+    background: Theme.surface;
+    border-bottom-left-radius: Theme.radius;
+    border-bottom-right-radius: Theme.radius;
+}
+
+component KeyLabel inherits Text {
+    in property <RowData> data;
+    in property <bool> focused;
+    visible: data.shown;
+    x: data.x * 1px * Theme.u; y: data.top * 1px * Theme.u;
+    width: data.width * 1px * Theme.u; height: data.height * 1px * Theme.u;
+    text: data.label; horizontal-alignment: center; vertical-alignment: center;
+    // Characters large; the named keys ("shift", "space", ...) as small as captions.
+    font-size: data.label.character-count > 1 ? Theme.caption : Theme.body;
+    font-weight: focused ? 500 : 400;
+    color: focused ? Theme.fg : Theme.dim;
+    animate color { duration: Motion.fade; }
+}
+
+// The text being typed (masked text arrives as dots: the core masks it). The caret, in the focus colour, doesn't
+// blink (that would redraw the screen all the time); a text too long for the field slides left
+// to keep the caret in view.
+component TextEntry inherits Rectangle {
+    in property <string> before;
+    in property <string> after;
+    property <length> pad: 24px * Theme.u;
+    background: Theme.surface;
+    border-bottom-left-radius: Theme.radius;
+    border-bottom-right-radius: Theme.radius;
+    clip: true;
+    Rectangle { y: 0; height: Theme.line; background: Theme.edge; }
+    before-text := Text {
+        x: parent.pad + min(0, parent.width - 2 * parent.pad - self.width - caret.width);
+        width: self.preferred-width; height: parent.height; vertical-alignment: center;
+        text: root.before; font-family: Theme.mono; font-size: Theme.body; color: Theme.fg;
+    }
+    caret := Rectangle {
+        x: before-text.x + before-text.width; y: (parent.height - self.height) / 2;
+        width: 3px * Theme.u; height: 48px * Theme.u;
+        background: Theme.focus;
+    }
+    Text {
+        x: caret.x + caret.width; width: self.preferred-width; height: parent.height; vertical-alignment: center;
+        text: root.after; font-family: Theme.mono; font-size: Theme.body; color: Theme.fg;
+    }
+}
+
 component StatusBar inherits Rectangle {
     in property <string> crumb;
     in property <string> clock;
@@ -231,6 +285,11 @@ export component AppWindow inherits Window {
     in property <float> scroll;
     // Set with each new `scroll`: true makes that change a jump instead of an animation.
     in property <bool> scroll-jumps;
+    // The keyboard's text entry (layout `keys`): the text before and after the caret, and the
+    // entry's height (u; the keys sit below it).
+    in property <string> entry-before;
+    in property <string> entry-after;
+    in property <float> entry-height;
     in property <[Hint]> hints;
     in property <string> clock;
     in property <string> battery;
@@ -283,10 +342,12 @@ export component AppWindow inherits Window {
     in property <string> toast;
     in property <bool> toast-shown;
     // The volume (0–1, and as the number shown), shown over everything while `volume-shown`.
-    // While `volume-muted`, the gauge is dimmed and says MUTE instead of the number.
+    // While `volume-muted`, the gauge is dimmed and says MUTE instead of the number; while
+    // `volume-bluetooth`, it is a Bluetooth device's volume, and has the Bluetooth mark on top.
     in property <float> volume;
     in property <string> volume-text;
     in property <bool> volume-muted;
+    in property <bool> volume-bluetooth;
     in property <bool> volume-shown;
     // Developer frame statistics, shown over a game while not empty.
     in property <string> stats;
@@ -361,10 +422,10 @@ export component AppWindow inherits Window {
             width: root.layout == ScreenLayout.list-with-picture ? parent.width * 0.58 : parent.width;
             clip: true;
             track := Rectangle {
-                x: root.layout == ScreenLayout.grid ? Theme.gutter : 0;
+                x: root.layout == ScreenLayout.grid || root.layout == ScreenLayout.keys ? Theme.gutter : 0;
                 y: -root.scroll * 1px * Theme.u;
                 animate y { duration: root.scroll-jumps ? 0ms : Motion.scroll; easing: Motion.decelerate; }
-                if root.layout != ScreenLayout.grid : Rectangle {
+                if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle {
                     FocusPlate {
                         x: Theme.gutter - 20px * Theme.u; width: list.width - 2 * (Theme.gutter - 20px * Theme.u);
                         y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
@@ -375,10 +436,23 @@ export component AppWindow inherits Window {
                 if root.layout == ScreenLayout.grid : Rectangle {
                     for row in root.rows : GridCell { data: row; focused: row.index == root.focused-row; }
                 }
+                if root.layout == ScreenLayout.keys : Rectangle {
+                    TextEntry {
+                        x: 0; y: 0; width: root.grid-width * 1px * Theme.u; height: root.entry-height * 1px * Theme.u;
+                        before: root.entry-before; after: root.entry-after;
+                    }
+                    for row in root.rows : KeyPlate { data: row; }
+                    FocusPlate {
+                        x: root.plate-x * 1px * Theme.u; width: root.plate-width * 1px * Theme.u;
+                        y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
+                        animate x, y, width { duration: Motion.focus; easing: Motion.focus-easing; }
+                    }
+                    for row in root.rows : KeyLabel { data: row; focused: row.index == root.focused-row; }
+                }
             }
             // Soft edges where list rows scroll under the title and the hint bar.
-            if root.layout != ScreenLayout.grid : Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
-            if root.layout != ScreenLayout.grid : Rectangle { y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+            if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+            if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle { y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
         }
         if root.layout == ScreenLayout.list-with-picture : Rectangle {
             x: list.width + 16px * Theme.u; y: 24px * Theme.u;
@@ -426,9 +500,16 @@ export component AppWindow inherits Window {
         border-radius: Theme.radius; background: Theme.raised;
         opacity: root.volume-shown ? 1 : 0;
         animate opacity { duration: Motion.fade; }
+        // The Bluetooth mark
+        if root.volume-bluetooth : Path {
+            x: (parent.width - self.width) / 2; y: 18px * Theme.u; width: 28px * Theme.u; height: self.width;
+            viewbox-width: 24; viewbox-height: 24;
+            commands: "M 6.5 7 L 17 16.5 L 12 21.5 L 12 2.5 L 17 7.5 L 6.5 17";
+            stroke: Theme.fg; stroke-width: 2px * Theme.u;
+        }
         Rectangle {
             x: (parent.width - self.width) / 2; width: 8px * Theme.u;
-            y: 20px * Theme.u; height: parent.height - 72px * Theme.u;
+            y: (root.volume-bluetooth ? 62px : 20px) * Theme.u; height: parent.height - self.y - 52px * Theme.u;
             border-radius: self.width / 2; background: Theme.faint; clip: true;
             Rectangle {
                 y: parent.height * (1 - root.volume); height: parent.height * root.volume;

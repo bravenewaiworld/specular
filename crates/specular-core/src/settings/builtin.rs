@@ -12,6 +12,17 @@ pub const SCALING: &str = "video.scaling";
 /// Sound volume, 0 (silent) to `VOLUME_MAX`; the volume keys step it.
 pub const VOLUME: &str = "sound.volume";
 pub const VOLUME_MAX: i64 = 20;
+/// The volume of Bluetooth headphones and speakers (all of them share it), 0 to `VOLUME_MAX`;
+/// `VOLUME` is the device's own speaker and jack.
+pub const BLUETOOTH_VOLUME: &str = "sound.bluetooth_volume";
+/// WiFi: "on", "off", or "auto" (on only while something needs it: see `app::WifiNeed`). Shown
+/// on the Wi-Fi screen.
+pub const WIFI: &str = "wireless.wifi";
+/// Bluetooth on or off. Shown on the Bluetooth screen.
+pub const BLUETOOTH: &str = "wireless.bluetooth";
+/// WiFi set to Auto stays on (a developer setting, for SSH and file transfer over WiFi, which
+/// don't ask for it yet).
+pub const WIFI_KEEP_ON: &str = "dev.wifi_keep_on";
 /// The LEDs' brightness (its key predates there being more LEDs than the light bar).
 pub const LED_BRIGHTNESS: &str = "lights.brightness";
 /// The LEDs' brightness steps (0 = off).
@@ -43,6 +54,9 @@ pub fn settings() -> Vec<SettingDecl> {
         SettingDecl { key: VOLUME, section: "Sound", label: "Volume",
             kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(12),
             visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: BLUETOOTH_VOLUME, section: "Sound", label: "Bluetooth volume",
+            kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(10),
+            visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: LED_BRIGHTNESS, section: "Lights", label: "Brightness",
             kind: SettingKind::Int { min: 0, max: LED_BRIGHTNESS_MAX, step: 1, unit: "" }, default: json!(3),
             visibility: Visibility::User, deepest: Scope::Global },
@@ -60,6 +74,13 @@ pub fn settings() -> Vec<SettingDecl> {
             visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: DEVELOPER_DETAILS, section: "System", label: "Developer details",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: WIFI, section: "Wireless", label: "Wi-Fi",
+            kind: SettingKind::Choice(&[("auto", "Auto"), ("on", "On"), ("off", "Off")]), default: json!("auto"),
+            visibility: Visibility::OwnScreen, deepest: Scope::Global },
+        SettingDecl { key: BLUETOOTH, section: "Wireless", label: "Bluetooth",
+            kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global },
+        SettingDecl { key: WIFI_KEEP_ON, section: "Developer", label: "Keep Wi-Fi on",
+            kind: SettingKind::Bool, default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global },
         SettingDecl { key: FRAME_STATS, section: "Developer", label: "Frame statistics",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global },
     ]

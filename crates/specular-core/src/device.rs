@@ -9,6 +9,7 @@ use std::io;
 use std::time::Duration;
 
 use crate::input::Button;
+use crate::wireless::{self, bluetooth::BtAddress};
 
 /// The screen, buttons and lights of a device.
 #[derive(Clone, Debug)]
@@ -73,10 +74,19 @@ pub trait Lights: Send {
     fn show(&self, colours: &[Rgb]) -> io::Result<()>;
 }
 
+/// Where sound plays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Output {
+    /// The device's own speaker or headphone jack.
+    Builtin,
+    /// A connected Bluetooth audio device.
+    Bluetooth(BtAddress),
+}
+
 /// Sound output.
 pub trait Audio: Send {
-    /// Output volume, 0–20 (Specular's scale; the device maps it to its own controls).
-    fn set_volume(&self, level: u8) -> io::Result<()>;
+    /// An output's volume, 0–20 (Specular's scale; the device maps it to its own controls).
+    fn set_volume(&self, output: &Output, level: u8) -> io::Result<()>;
 }
 
 /// Where a game's sound goes: a queue of 16-bit stereo frames, played at a fixed rate.
@@ -103,6 +113,10 @@ pub struct Hardware {
     pub display: Box<dyn Display>,
     pub lights: Box<dyn Lights>,
     pub audio: Box<dyn Audio>,
+    /// None on devices without WiFi.
+    pub wifi: Option<Box<wireless::Wifi>>,
+    /// None on devices without Bluetooth.
+    pub bluetooth: Option<Box<wireless::Bluetooth>>,
 }
 
 /// A device: what it is, and its hardware.
@@ -110,17 +124,23 @@ pub trait Device {
     fn profile(&self) -> DeviceProfile;
     /// The hardware services. Called once; they then move to the UI crate's hardware thread.
     fn hardware(&self) -> Hardware;
-    /// Opens the sound output for a game (each game opens its own and closes it when it ends).
-    fn open_sound(&self) -> io::Result<Box<dyn SoundOut>>;
+    /// Opens a sound output for a game (each game opens its own and closes it when it ends, and
+    /// opens another when the output changes while it plays).
+    fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>>;
     /// The display's refresh, if the device can wait for it; without, games are paced by a
     /// timer at their own frame rate.
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
 }
 
-/// Simulated hardware, for the desktop build: it prints what it is asked to do, and its battery
-/// drains from 80 % by 1 % a minute.
+/// Simulated hardware, for the desktop build: it prints what it is asked to do, its battery
+/// drains from 80 % by 1 % a minute, and its radios follow a scenario (`wireless::scenario`): the
+/// file named by $SPECULAR_SCENARIO, `{"wifi": <script>, "bluetooth": <script>}`, else a built-in
+/// one with a few networks and devices.
 pub mod simulated {
     use std::time::Instant;
+
+    use crate::wireless::scenario::Scenario;
+    use crate::wireless::trace::Traced;
 
     use super::*;
 
@@ -143,11 +163,40 @@ pub mod simulated {
         fn show(&self, colours: &[Rgb]) -> io::Result<()> { eprintln!("simulated: lights {colours:?}"); Ok(()) }
     }
     impl Audio for Sim {
-        fn set_volume(&self, level: u8) -> io::Result<()> { eprintln!("simulated: volume {level}"); Ok(()) }
+        fn set_volume(&self, output: &Output, level: u8) -> io::Result<()> { eprintln!("simulated: {output:?} volume {level}"); Ok(()) }
     }
 
     pub fn hardware() -> Hardware {
         let t = Instant::now();
-        Hardware { power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)) }
+        let script = scenario().unwrap_or_else(|e| panic!("$SPECULAR_SCENARIO: {e}"));
+        Hardware {
+            power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)),
+            wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),
+            bluetooth: Some(Box::new(Traced::new("bluetooth", radio(&script, "bluetooth")))),
+        }
+    }
+
+    /// The scenario for one radio, `name`, in `script` (an empty one if it has none).
+    pub(super) fn radio<E: serde::de::DeserializeOwned + 'static>(script: &serde_json::Value, name: &str) -> Scenario<E> {
+        Scenario::from_json(script.get(name).unwrap_or(&serde_json::Value::Null)).unwrap_or_else(|e| panic!("scenario: {name}: {e}"))
+    }
+
+    /// The radios' scenario: $SPECULAR_SCENARIO's, or the built-in one.
+    fn scenario() -> Result<serde_json::Value, String> {
+        let text = match std::env::var_os("SPECULAR_SCENARIO") {
+            Some(path) => std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.to_string_lossy()))?,
+            None => include_str!("wireless/default-scenario.json").to_string(),
+        };
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_built_in_scenario_reads() {
+        let script = serde_json::from_str(include_str!("wireless/default-scenario.json")).unwrap();
+        let _: crate::wireless::scenario::Scenario<crate::wireless::wifi::WifiEvent> = super::simulated::radio(&script, "wifi");
+        let _: crate::wireless::scenario::Scenario<crate::wireless::bluetooth::BtEvent> = super::simulated::radio(&script, "bluetooth");
     }
 }

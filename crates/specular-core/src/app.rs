@@ -9,14 +9,20 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::device::Battery;
+use crate::device::{Battery, Output};
 use crate::input::{Button, ButtonEvent, Press};
+use crate::keyboard::{KeyOutcome, Keyboard};
 use crate::library::{Game, SystemDecl};
 use crate::list;
-use crate::model::{ImageRef, Layout, Row, RowKind, ScreenId, ScreenView};
+use crate::model::{ImageRef, Layout, Row, RowKind, ScreenId, ScreenView, TextEntry};
 use crate::nav::{NavStack, ScreenState, Transition};
 use crate::repeat::Repeater;
 use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
+use crate::wireless::bluetooth::{BtCmd, BtEvent};
+use crate::wireless::wifi::{WifiCmd, WifiEvent};
+
+mod wireless;
+pub use wireless::{BtState, WifiNeed, WifiState};
 
 /// Something that happened.
 #[derive(Debug)]
@@ -38,6 +44,14 @@ pub enum Msg {
     GameEnded(Option<String>),
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
+    Wifi(WifiEvent),
+    Bluetooth(BtEvent),
+    /// Something needs WiFi (`wanted`) or no longer does, at `time` (on the clock `Tick` uses).
+    /// Only matters while WiFi is on Auto.
+    WifiNeed { need: WifiNeed, wanted: bool, time: Duration },
+    /// Sound couldn't be played on this output (it didn't open): the device's own plays it
+    /// instead, until the Bluetooth device reconnects.
+    SoundFailed(Output),
 }
 
 /// Something the app wants done, in the order given.
@@ -62,9 +76,10 @@ pub enum Effect {
     QuitGame,
     /// Show this short message for a moment.
     Notice(String),
-    /// Show the volume: its level (0 to `builtin::VOLUME_MAX`) and whether the sound is muted.
-    /// Sent on every volume key press (even at an end) and whenever the mute switch moves.
-    ShowVolume { level: i64, muted: bool },
+    /// Show the volume: its level (0 to `builtin::VOLUME_MAX`), whether the sound is muted, and
+    /// whether it is a Bluetooth device's volume. Sent on every volume key press (even at an end)
+    /// and whenever the mute switch moves.
+    ShowVolume { level: i64, muted: bool, bluetooth: bool },
     /// Silence the sound (true) or restore it (false). The volume level is untouched; `Apply`
     /// still carries it.
     Mute(bool),
@@ -74,6 +89,10 @@ pub enum Effect {
     PowerOff,
     /// Restart the device; as `PowerOff`, after `QuitGame` if a game is being played.
     Restart,
+    Wifi(WifiCmd),
+    Bluetooth(BtCmd),
+    /// Sound goes to this output from now on, including a running game's.
+    SoundTo(Output),
 }
 
 /// Holding the power button this long opens the power menu; a shorter press sleeps.
@@ -99,6 +118,9 @@ pub struct Ctx {
     pub card_found: bool,
     pub settings: Settings,
     pub battery: Option<Battery>,
+    /// None on a device without WiFi (or Bluetooth); see `App::has_radios`.
+    pub wifi: Option<WifiState>,
+    pub bluetooth: Option<BtState>,
 }
 
 impl Ctx {
@@ -117,6 +139,11 @@ pub enum Outcome {
     Changed,
     Push(ScreenState),
     Back,
+    /// Go back, then carry these out.
+    BackWith(Vec<Effect>),
+    /// Open the keyboard to type text for this screen, which gets it in `Screen::entered`, with
+    /// `purpose` (say, the network the password is for).
+    Type { prompt: String, masked: bool, purpose: String },
     /// Start playing this game.
     Launch(Game),
     /// Carry these out (include `Effect::Redraw` if the screen changed too).
@@ -130,6 +157,9 @@ pub trait Screen {
     /// cheap, but it may depend only on `ctx.systems`, `ctx.games`, `ctx.settings` and
     /// `state.params` (not on the battery or the focus).
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView;
+    /// Text typed on the keyboard this screen opened (`Outcome::Type`) was confirmed. Ok closes
+    /// the keyboard and carries out the effects; Err keeps it open and shows the message.
+    fn entered(&self, _ctx: &mut Ctx, _state: &mut ScreenState, _purpose: &str, _text: String) -> Result<Vec<Effect>, String> { Ok(vec![]) }
     /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, and in a
     /// grid so do left and right; Menu goes home). Screens never see the power button: the app
     /// handles it (a tap sleeps, holding it opens the power menu). `focused` is the focused row, if
@@ -148,6 +178,13 @@ pub mod screens {
     /// Power off or restart, opened by holding the power button (over the game menu during a
     /// game). Its presses are handled by the app itself (see `App::power_menu`).
     pub const POWER_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("power menu"));
+    pub const WIFI: ScreenId = ScreenId(std::borrow::Cow::Borrowed("wifi"));
+    pub const BLUETOOTH: ScreenId = ScreenId(std::borrow::Cow::Borrowed("bluetooth"));
+    /// "Forget …?", with what to forget in its params (see `app::wireless::Forget`).
+    pub const FORGET: ScreenId = ScreenId(std::borrow::Cow::Borrowed("forget"));
+    /// The on-screen keyboard, for the screen below it. Its presses are handled by the app itself
+    /// (see `App::keyboard`).
+    pub const KEYBOARD: ScreenId = ScreenId(std::borrow::Cow::Borrowed("keyboard"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -177,6 +214,12 @@ pub struct App {
     /// The current screen as last built, and its parent's title; None when they must be built
     /// again.
     cache: RefCell<Option<(Rc<ScreenView>, Option<String>)>>,
+    /// The keyboard while `screens::KEYBOARD` is open, and the purpose it was opened with.
+    keyboard: Option<(Keyboard, String)>,
+    /// The latest time seen (`Tick`, button and `WifiNeed` times).
+    now: Duration,
+    /// What the radios and sound were last told (see `wireless::Radios`).
+    radios: wireless::Radios,
 }
 
 impl App {
@@ -189,8 +232,9 @@ impl App {
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
         screens.insert(screens::POWER_MENU, Box::new(PowerMenu));
+        wireless::register(&mut screens);
         Self {
-            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None },
+            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -200,6 +244,9 @@ impl App {
             grid_columns: 1,
             playing: None,
             cache: RefCell::default(),
+            keyboard: None,
+            now: Duration::ZERO,
+            radios: wireless::Radios::default(),
         }
     }
 
@@ -265,7 +312,11 @@ impl App {
         self.cache.borrow_mut().get_or_insert_with(|| {
             let state = self.nav.top();
             let parent = self.nav.parent().map(|p| self.screens[&p.id].view(&self.ctx, p).title);
-            (Rc::new(self.screens[&state.id].view(&self.ctx, state)), parent)
+            let view = match &self.keyboard {
+                Some((kb, _)) if state.id == screens::KEYBOARD => keyboard_view(kb),
+                _ => self.screens[&state.id].view(&self.ctx, state),
+            };
+            (Rc::new(view), parent)
         }).clone()
     }
 
@@ -273,6 +324,10 @@ impl App {
     /// focusable, else the first focusable row (0 if none).
     pub fn focus(&self) -> usize {
         let v = self.view();
+        if let Some((kb, _)) = &self.keyboard && self.nav.top().id == screens::KEYBOARD {
+            let (line, index) = kb.focus();
+            return kb.lines()[..line].iter().map(Vec::len).sum::<usize>() + index;
+        }
         self.nav.top().focus.as_ref().and_then(|id| v.rows.iter().position(|r| &r.id == id))
             .filter(|&i| v.rows[i].kind.focusable())
             .or_else(|| list::first(&v.rows)).unwrap_or(0)
@@ -283,8 +338,15 @@ impl App {
 
     /// Feeds one message; returns the effects the caller must carry out, in order.
     pub fn handle(&mut self, msg: Msg) -> Vec<Effect> {
+        let mut e = self.handle_msg(msg);
+        e.extend(self.reconcile_radios());
+        e
+    }
+
+    fn handle_msg(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
             Msg::Button(e) => {
+                self.now = self.now.max(e.time);
                 self.idle_since = Some(e.time);
                 // A switch, not a key: it counts as activity but is never repeated.
                 if e.button == Button::Mute { return self.set_muted(e.pressed); }
@@ -292,6 +354,7 @@ impl App {
                 self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default()
             }
             Msg::Tick(now) => {
+                self.now = self.now.max(now);
                 let mut e = self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default();
                 if self.power_down.take_if(|t| now >= *t + POWER_HOLD).is_some() { e.extend(self.open_power_menu()); }
                 e.extend(self.sleep_if_idle(now));
@@ -327,10 +390,15 @@ impl App {
                 self.ctx.settings.set_layer(layer, values);
                 self.changed();
                 let s = &self.ctx.settings;
+                self.radios.settings_loaded = true;
                 std::iter::once(Effect::Redraw(None))
                     .chain(s.decls().iter().filter_map(|d| s.get(d.key, &Layer::Global).map(|(v, _)| Effect::Apply { key: d.key, value: v.clone() })))
                     .collect()
             }
+            Msg::Wifi(e) => self.wifi_event(e),
+            Msg::Bluetooth(e) => self.bluetooth_event(e),
+            Msg::WifiNeed { need, wanted, time } => { self.now = self.now.max(time); self.wifi_need(need, wanted); vec![] }
+            Msg::SoundFailed(output) => self.sound_failed(output),
         }
     }
 
@@ -341,6 +409,8 @@ impl App {
             (InputTarget::Game, _) => return vec![], // the UI gives these to the game
             _ => {}
         }
+        // The keyboard moves its own focus (its lines differ in length).
+        if self.nav.top().id == screens::KEYBOARD && p.button != Button::Menu { return self.keyboard(p); }
         let (view, focus) = (self.view(), self.focus());
         // Focus moves change nothing on the screen itself, so its cache stays. In a grid, left and
         // right move one cell, up and down a row of cells and the shoulder buttons two rows; in a
@@ -371,6 +441,11 @@ impl App {
             Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
             Outcome::Push(s) => self.go(|nav| Some(nav.push(s))),
             Outcome::Back => self.go(|nav| nav.pop()),
+            Outcome::BackWith(mut e) => { e.extend(self.go(|nav| nav.pop())); e }
+            Outcome::Type { prompt, masked, purpose } => {
+                self.keyboard = Some((Keyboard::new(prompt, masked), purpose));
+                self.go(|nav| Some(nav.push(ScreenState::new(screens::KEYBOARD, None))))
+            }
             Outcome::Launch(game) => {
                 self.playing = Some(game.clone());
                 self.repeater.reset();
@@ -380,22 +455,27 @@ impl App {
         }
     }
 
-    /// The volume setting (0 if unset).
-    fn volume(&self) -> i64 {
-        self.ctx.settings.get(builtin::VOLUME, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0)
+    /// The volume setting of the output sound goes to: its key and level (0 if unset).
+    fn volume(&self) -> (&'static str, i64) {
+        let key = if self.radios.output == Output::Builtin { builtin::VOLUME } else { builtin::BLUETOOTH_VOLUME };
+        (key, self.ctx.settings.get(key, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0))
+    }
+
+    fn show_volume(&self, level: i64) -> Effect {
+        Effect::ShowVolume { level, muted: self.muted, bluetooth: self.radios.output != Output::Builtin }
     }
 
     /// The volume keys, on every screen and in games. The level is shown even when it is already
     /// at an end and doesn't change. While muted they still change the level, which is heard once
     /// the sound is switched back on.
     fn step_volume(&mut self, delta: i64) -> Vec<Effect> {
-        let (now, muted) = (self.volume(), self.muted);
+        let (key, now) = self.volume();
         let new = (now + delta).clamp(0, builtin::VOLUME_MAX);
-        let show = Effect::ShowVolume { level: new, muted };
+        let show = self.show_volume(new);
         if new == now { return vec![show]; }
-        let _ = self.ctx.settings.set(builtin::VOLUME, &Layer::Global, new.into());
+        let _ = self.ctx.settings.set(key, &Layer::Global, new.into());
         self.changed(); // the settings screen shows the volume too
-        vec![Effect::Apply { key: builtin::VOLUME, value: new.into() }, Effect::SaveSettings(Layer::Global), show, Effect::Redraw(None)]
+        vec![Effect::Apply { key, value: new.into() }, Effect::SaveSettings(Layer::Global), show, Effect::Redraw(None)]
     }
 
     /// The mute switch. Not saved: the switch holds its own position, and the device reports it at
@@ -403,7 +483,7 @@ impl App {
     fn set_muted(&mut self, muted: bool) -> Vec<Effect> {
         if muted == self.muted { return vec![]; }
         self.muted = muted;
-        vec![Effect::Mute(muted), Effect::ShowVolume { level: self.volume(), muted }]
+        vec![Effect::Mute(muted), self.show_volume(self.volume().1)]
     }
 
     /// The power button, on every screen and in games: a tap (released within `POWER_HOLD`)
@@ -461,9 +541,34 @@ impl App {
         e
     }
 
+    /// A press on the keyboard: B on empty text and Menu leave it; Start (or its done key) gives
+    /// the text to the screen below, which may refuse it with a message.
+    fn keyboard(&mut self, p: Press) -> Vec<Effect> {
+        let Some((kb, _)) = &mut self.keyboard else { return self.go(|nav| nav.pop()) };
+        match kb.press(p) {
+            KeyOutcome::None => vec![],
+            KeyOutcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
+            KeyOutcome::Cancel => self.go(|nav| nav.pop()),
+            KeyOutcome::Done(text) => {
+                let purpose = self.keyboard.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
+                let below = self.nav.parent().cloned();
+                let Some(mut below) = below else { return vec![] };
+                match self.screens[&below.id].entered(&mut self.ctx, &mut below, &purpose, text) {
+                    Err(message) => vec![Effect::Notice(message)],
+                    Ok(mut e) => {
+                        e.extend(self.go(|nav| nav.pop()));
+                        *self.nav.top_mut() = below;
+                        e
+                    }
+                }
+            }
+        }
+    }
+
     /// Changes screen (if `f` does), with a redraw that animates the change.
     fn go(&mut self, f: impl FnOnce(&mut NavStack) -> Option<Transition>) -> Vec<Effect> {
         let Some(t) = f(&mut self.nav) else { return vec![] };
+        if !self.nav.contains(&screens::KEYBOARD) { self.keyboard = None; }
         self.repeater.reset();
         self.changed();
         vec![Effect::Redraw(Some(t))]
@@ -494,7 +599,7 @@ impl Screen for Home {
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));
         rows.push(Row::new("settings", "Settings", RowKind::Action { value: None }));
-        ScreenView { title: "Library".into(), layout: Layout::List, rows, hints: vec![(Button::A, "Open".into())] }
+        ScreenView { title: "Library".into(), layout: Layout::List, rows, hints: vec![(Button::A, "Open".into())], entry: None }
     }
 
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
@@ -527,6 +632,7 @@ impl Screen for Games {
         ScreenView {
             title, layout: if grid { Layout::Grid } else { Layout::ListWithPicture }, rows,
             hints: vec![(Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::B, "Back".into()), (Button::A, "Play".into())],
+            entry: None,
         }
     }
 
@@ -550,16 +656,35 @@ struct SettingsScreen;
 
 impl Screen for SettingsScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
-        ScreenView {
-            title: "Settings".into(), layout: Layout::List, rows: ctx.settings.rows(&Layer::Global, ctx.visibility()),
-            hints: vec![(Button::B, "Back".into())],
-        }
+        let mut rows = wireless::settings_rows(ctx);
+        rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility()));
+        ScreenView { title: "Settings".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         if p.button == Button::B { return Outcome::Back; }
-        let Some((key, value)) = focused.and_then(|row| ctx.settings.press(&row.id.0, &Layer::Global, p)) else { return Outcome::None };
-        Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key, value }])
+        if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
+        focused.map_or(Outcome::None, |row| setting_press(ctx, row, p))
+    }
+}
+
+/// A press on a global setting's row: changes it, saves it and applies it.
+fn setting_press(ctx: &mut Ctx, row: &Row, p: Press) -> Outcome {
+    let Some((key, value)) = ctx.settings.press(&row.id.0, &Layer::Global, p) else { return Outcome::None };
+    Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key, value }])
+}
+
+/// The keyboard's screen: one row per key, line by line (`Layout::Keys`), its text above them.
+/// Keys' row ids are their line and column, so the focus is the keyboard's own.
+fn keyboard_view(kb: &Keyboard) -> ScreenView {
+    let rows = kb.lines().iter().enumerate().flat_map(|(line, keys)| keys.iter().map(move |k| {
+        Row::new(format!("key:{line}:{}", k.column), kb.label(k.key), RowKind::Key { line, column: k.column, span: k.span })
+    })).collect();
+    let (shown, caret) = kb.shown();
+    ScreenView {
+        title: kb.prompt.clone(), layout: Layout::Keys, rows,
+        hints: vec![(Button::Y, "Shift".into()), (Button::X, "Symbols".into()), (Button::B, "Delete".into()), (Button::Start, "Done".into())],
+        entry: Some(TextEntry { text: shown, caret }),
     }
 }
 
@@ -576,6 +701,7 @@ impl Screen for PowerMenu {
             title: "Power".into(), layout: Layout::List,
             rows: vec![action("off", "Power off"), action("restart", "Restart"), action("cancel", "Cancel")],
             hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())],
+            entry: None,
         }
     }
 
@@ -593,6 +719,7 @@ impl Screen for GameMenu {
             rows: vec![action("resume", "Resume"), action("save", "Save state"), action("load", "Load state"),
                        action("reset", "Restart"), action("quit", "Quit game")],
             hints: vec![(Button::B, "Resume".into()), (Button::A, "Select".into())],
+            entry: None,
         }
     }
 

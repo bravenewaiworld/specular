@@ -221,18 +221,18 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
     tap(&mut a, Button::A, 20); // playing
     assert_eq!(level(&tap(&mut a, Button::VolDown, 30)), Some(12));
     for t in 0..30 { tap(&mut a, Button::VolDown, 40 + t); }
-    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume { level: 0, muted: false }]); // nothing changed to save
+    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume { level: 0, muted: false, bluetooth: false }]); // nothing changed to save
 }
 
 #[test]
 fn the_mute_switch_mutes_without_touching_the_volume() {
     let mut a = app();
     let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t) }));
-    assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true }]);
+    assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true, bluetooth: false }]);
     assert_eq!(switch(&mut a, true, 10), vec![]); // already on
     // The volume keys still work, and say the sound is muted.
-    assert!(tap(&mut a, Button::VolUp, 20).contains(&Effect::ShowVolume { level: 13, muted: true }));
-    assert_eq!(switch(&mut a, false, 30), vec![Effect::Mute(false), Effect::ShowVolume { level: 13, muted: false }]);
+    assert!(tap(&mut a, Button::VolUp, 20).contains(&Effect::ShowVolume { level: 13, muted: true, bluetooth: false }));
+    assert_eq!(switch(&mut a, false, 30), vec![Effect::Mute(false), Effect::ShowVolume { level: 13, muted: false, bluetooth: false }]);
 }
 
 #[test]
@@ -285,4 +285,202 @@ fn home_says_where_games_go_when_there_are_none() {
     assert_eq!(tap(&mut a, Button::A, 0), vec![]); // a note does nothing
     a.handle(Msg::Library { games: vec![], card_found: false });
     assert!(labels(&a).contains(&"No SD card".to_string()));
+}
+
+mod wireless {
+    use super::*;
+    use crate::app::wireless::{NEED_TIMEOUT, WIFI_GRACE};
+    use crate::device::Output;
+    use crate::wireless::Secret;
+    use crate::wireless::bluetooth::{BtAddress, BtCmd, BtDevice, BtEvent, BtKind};
+    use crate::wireless::wifi::{Network, WifiCmd, WifiEvent, WifiLink};
+
+    /// An app with both radios and its settings loaded (WiFi on Auto, Bluetooth off).
+    fn radio_app() -> App {
+        let mut a = app();
+        a.has_radios(true, true);
+        assert_eq!(a.handle(Msg::Tick(Duration::ZERO)), vec![]); // nothing before the settings
+        let e = a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+        assert!(e.ends_with(&[Effect::Wifi(WifiCmd::Power(false)), Effect::Bluetooth(BtCmd::Power(false))]), "{e:?}");
+        a
+    }
+
+    fn radio_effects(e: &[Effect]) -> Vec<&Effect> {
+        e.iter().filter(|e| matches!(e, Effect::Wifi(_) | Effect::Bluetooth(_) | Effect::SoundTo(_))).collect()
+    }
+
+    /// Opens Settings, then the row labelled `label` there.
+    fn open(a: &mut App, label: &str, t: u64) {
+        assert_eq!(a.view().title, "Library");
+        tap(a, Button::Up, t); // home wraps to its last row, Settings
+        tap(a, Button::A, t);
+        focus_on(a, label);
+        tap(a, Button::A, t);
+    }
+
+    /// Moves the focus down to the row labelled `label`.
+    fn focus_on(a: &mut App, label: &str) {
+        for _ in 0..a.view().rows.len() {
+            if focused(a) == label { return; }
+            tap(a, Button::Down, 0);
+        }
+        panic!("no row {label}");
+    }
+
+    fn net(ssid: &str, secured: bool, saved: bool) -> Network { Network { ssid: ssid.into(), bars: 3, secured, saved, in_range: true, supported: true } }
+
+    fn connected(ssid: &str) -> Msg { Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: ssid.into(), address: "10.0.0.2".into() })) }
+
+    #[test]
+    fn settings_link_to_the_radios_only_when_the_device_has_them() {
+        let mut a = app();
+        tap(&mut a, Button::Up, 0);
+        tap(&mut a, Button::A, 0);
+        assert!(!a.view().rows.iter().any(|r| r.label == "Wi-Fi"));
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        assert_eq!(a.view().title, "Wi-Fi");
+    }
+
+    #[test]
+    fn auto_wifi_is_on_while_its_screen_is_open_then_for_the_grace() {
+        let mut a = radio_app();
+        tap(&mut a, Button::Up, 1000);
+        tap(&mut a, Button::A, 1000);
+        focus_on(&mut a, "Wi-Fi");
+        let e = tap(&mut a, Button::A, 1000);
+        assert_eq!(radio_effects(&e), [&Effect::Wifi(WifiCmd::Power(true)), &Effect::Wifi(WifiCmd::Scan)]);
+        let e = tap(&mut a, Button::B, 5000);
+        assert_eq!(radio_effects(&e), Vec::<&Effect>::new()); // the grace
+        let off = Duration::from_millis(5000) + WIFI_GRACE;
+        assert_eq!(a.wifi_deadline(), Some(off));
+        assert_eq!(radio_effects(&a.handle(Msg::Tick(off - Duration::from_millis(1)))), Vec::<&Effect>::new());
+        assert_eq!(radio_effects(&a.handle(Msg::Tick(off))), [&Effect::Wifi(WifiCmd::Power(false))]);
+        assert_eq!(a.wifi_deadline(), None);
+    }
+
+    #[test]
+    fn a_need_lapses_unless_wifi_connects() {
+        let mut a = radio_app();
+        let need = |a: &mut App, wanted, ms| a.handle(Msg::WifiNeed { need: WifiNeed::BoxArt, wanted, time: Duration::from_millis(ms) });
+        assert_eq!(radio_effects(&need(&mut a, true, 0)), [&Effect::Wifi(WifiCmd::Power(true))]);
+        assert_eq!(a.wifi_deadline(), Some(NEED_TIMEOUT));
+        // Never connected: off after the timeout and the grace.
+        a.handle(Msg::Tick(NEED_TIMEOUT));
+        assert_eq!(radio_effects(&a.handle(Msg::Tick(NEED_TIMEOUT + WIFI_GRACE))), [&Effect::Wifi(WifiCmd::Power(false))]);
+        // Connected in time: it holds until dropped.
+        let t = (NEED_TIMEOUT + WIFI_GRACE).as_millis() as u64;
+        need(&mut a, true, t);
+        a.handle(connected("Home"));
+        assert_eq!(radio_effects(&a.handle(Msg::Tick(Duration::from_millis(t) + NEED_TIMEOUT * 10))), Vec::<&Effect>::new());
+        need(&mut a, false, t + 1);
+        assert!(a.wifi_deadline().is_some());
+    }
+
+    #[test]
+    fn joining_a_secured_network_asks_for_its_password() {
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
+        a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Office", true, false), net("Cafe", false, false)])));
+        focus_on(&mut a, "Office");
+        tap(&mut a, Button::A, 0);
+        assert_eq!(a.view().title, "Password for Office");
+        assert_eq!(a.view().layout, Layout::Keys);
+        for _ in 0..3 { tap(&mut a, Button::A, 0); } // "qqq": too short
+        assert_eq!(tap(&mut a, Button::Start, 0), vec![Effect::Notice("A Wi-Fi password has 8 to 63 characters".into())]);
+        assert_eq!(a.view().entry.as_ref().unwrap().text, "•••");
+        for _ in 0..5 { tap(&mut a, Button::A, 0); }
+        let e = tap(&mut a, Button::Start, 0);
+        assert_eq!(e[0], Effect::Wifi(WifiCmd::Join { ssid: "Office".into(), password: Some(Secret::new("qqqqqqqq")) }));
+        assert_eq!(a.view().title, "Wi-Fi");
+        assert_eq!(focused(&a), "Office");
+        // An open network joins at once.
+        focus_on(&mut a, "Cafe");
+        assert_eq!(radio_effects(&tap(&mut a, Button::A, 0)), [&Effect::Wifi(WifiCmd::Join { ssid: "Cafe".into(), password: None })]);
+    }
+
+    #[test]
+    fn a_refused_saved_password_is_asked_again_and_unsupported_networks_say_so() {
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        let wpa3 = Network { supported: false, ..net("Lab", true, false) };
+        a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Home", true, true), wpa3])));
+        focus_on(&mut a, "Lab");
+        assert_eq!(a.view().rows[a.focus()].kind, RowKind::Text { detail: Some("Not supported".into()) });
+        assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Notice("Lab uses security this device doesn't support".into())]);
+        focus_on(&mut a, "Home");
+        assert_eq!(radio_effects(&tap(&mut a, Button::A, 0)), [&Effect::Wifi(WifiCmd::Join { ssid: "Home".into(), password: None })]);
+        a.handle(Msg::Wifi(WifiEvent::Failed(crate::wireless::wifi::WifiError::WrongPassword { ssid: "Home".into() })));
+        tap(&mut a, Button::A, 0);
+        assert_eq!(a.view().title, "Password for Home");
+    }
+
+    #[test]
+    fn b_on_an_empty_keyboard_goes_back() {
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Office", true, false)])));
+        focus_on(&mut a, "Office");
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::B, 0); // deletes the letter
+        assert_eq!(a.view().layout, Layout::Keys);
+        tap(&mut a, Button::B, 0);
+        assert_eq!(a.view().title, "Wi-Fi");
+    }
+
+    #[test]
+    fn forgetting_a_network_is_confirmed() {
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Home", true, true)])));
+        focus_on(&mut a, "Home");
+        tap(&mut a, Button::X, 0);
+        assert_eq!(a.view().title, "Forget Home?");
+        assert_eq!(focused(&a), "Cancel");
+        tap(&mut a, Button::Down, 0);
+        let e = tap(&mut a, Button::A, 0);
+        assert_eq!(e[0], Effect::Wifi(WifiCmd::Forget { ssid: "Home".into() }));
+        assert_eq!(a.view().title, "Wi-Fi");
+    }
+
+    #[test]
+    fn bluetooth_searches_on_its_screen_and_routes_sound_to_a_headset() {
+        let mut a = radio_app();
+        open(&mut a, "Bluetooth", 0);
+        assert_eq!(focused(&a), "Bluetooth");
+        let e = tap(&mut a, Button::A, 0);
+        assert_eq!(radio_effects(&e), [&Effect::Bluetooth(BtCmd::Power(true)), &Effect::Bluetooth(BtCmd::Search(true))]);
+        a.handle(Msg::Bluetooth(BtEvent::Powered(true)));
+        let address = BtAddress("00:11:22:33:44:55".into());
+        let headset = BtDevice { address: address.clone(), name: "Buds".into(), kind: BtKind::Headphones, paired: false, connected: false, audio: false };
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![headset.clone()])));
+        tap(&mut a, Button::Down, 0);
+        assert_eq!(focused(&a), "Buds");
+        assert_eq!(radio_effects(&tap(&mut a, Button::A, 0)), [&Effect::Bluetooth(BtCmd::Pair(address.clone()))]);
+        assert_eq!(a.view().rows.iter().find(|r| r.label == "Buds").unwrap().kind, RowKind::Text { detail: Some("Pairing…".into()) });
+        let connected = BtDevice { paired: true, connected: true, audio: true, ..headset };
+        let e = a.handle(Msg::Bluetooth(BtEvent::Devices(vec![connected.clone()])));
+        assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Bluetooth(address.clone()))]);
+        assert_eq!(a.view().rows.iter().find(|r| r.label == "Buds").unwrap().kind, RowKind::Text { detail: Some("Connected · sound".into()) });
+        // The volume keys now set the headset's volume.
+        let e = tap(&mut a, Button::VolUp, 0);
+        assert!(e.contains(&Effect::Apply { key: builtin::BLUETOOTH_VOLUME, value: json!(11) }), "{e:?}");
+        assert!(e.contains(&Effect::ShowVolume { level: 11, muted: false, bluetooth: true }));
+        // A headset whose sound doesn't open is left until it reconnects.
+        let e = a.handle(Msg::SoundFailed(Output::Bluetooth(address.clone())));
+        assert_eq!(e[0], Effect::Notice("Couldn't play sound on Buds".into()));
+        assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Builtin)]);
+        let gone = BtDevice { connected: false, audio: false, ..connected.clone() };
+        assert_eq!(radio_effects(&a.handle(Msg::Bluetooth(BtEvent::Devices(vec![gone])))), Vec::<&Effect>::new());
+        let e = a.handle(Msg::Bluetooth(BtEvent::Devices(vec![connected])));
+        assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Bluetooth(address))]);
+        // Leaving stops the search; turning Bluetooth off brings the sound back.
+        assert_eq!(radio_effects(&tap(&mut a, Button::B, 0)), [&Effect::Bluetooth(BtCmd::Search(false))]);
+        assert_eq!(focused(&a), "Bluetooth"); // its link on the settings screen
+        tap(&mut a, Button::A, 0);
+        let e = tap(&mut a, Button::A, 0);
+        assert_eq!(radio_effects(&e), [&Effect::Bluetooth(BtCmd::Search(false)), &Effect::Bluetooth(BtCmd::Power(false)), &Effect::SoundTo(Output::Builtin)]);
+    }
 }

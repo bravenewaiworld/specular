@@ -135,3 +135,26 @@ fn the_frame_delay_leaves_room_for_the_slowest_runs_and_the_ui() {
     for _ in 0..60 { p.ran(ms(1.0)); }
     assert_eq!(p.delay, Duration::ZERO);
 }
+
+#[test]
+fn the_sound_moves_to_a_new_output_between_frames() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    let rom_path = dir.path().join("loop.gba");
+    std::fs::write(&rom_path, rom(&[0xeaff_fffe /* b . */])).unwrap();
+    let (first, second) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
+    let session = Session::start(
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false },
+        Outputs { sound: Some(Box::new(Count(first.clone()))), vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) },
+    ).unwrap();
+    std::thread::sleep(Duration::from_millis(200)); // frames reach the first output
+    session.set_sound(Some(Box::new(Count(second.clone()))));
+    std::thread::sleep(Duration::from_millis(50)); // the switch lands
+    let played_first = *first.lock().unwrap();
+    std::thread::sleep(Duration::from_millis(200)); // only the second output gets more
+    assert!(played_first > 0);
+    assert_eq!(*first.lock().unwrap(), played_first); // no longer written to
+    assert!(*second.lock().unwrap() > 0);
+    session.quit().unwrap();
+}

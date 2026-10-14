@@ -53,6 +53,7 @@ pub struct LaunchSpec {
 
 /// Where the game's output goes.
 pub struct Outputs {
+    /// Where the sound plays at first (`Session::set_sound` changes it).
     pub sound: Option<Box<dyn SoundOut>>,
     pub vsync: Option<Box<dyn Vsync>>,
     /// The display's refresh rate (Hz).
@@ -145,6 +146,8 @@ enum Cmd {
     LoadState(PathBuf, mpsc::Sender<io::Result<()>>),
     /// Writes the battery save and the autosave now (before sleeping).
     Flush(mpsc::Sender<io::Result<()>>),
+    /// Plays on this output from the next frame (None: silence); see `Session::set_sound`.
+    Sound(Option<Box<dyn SoundOut>>),
     Quit(mpsc::Sender<io::Result<()>>),
 }
 
@@ -206,6 +209,9 @@ impl Session {
 
     pub fn pause(&self, paused: bool) { let _ = self.cmds.send(Cmd::Pause(paused)); }
     pub fn reset(&self) { let _ = self.cmds.send(Cmd::Reset); }
+    /// From the next frame, plays the game's sound on `out` (None: silence), closing the previous
+    /// output. Returns at once: open `out` beforehand, since opening can block.
+    pub fn set_sound(&self, out: Option<Box<dyn SoundOut>>) { let _ = self.cmds.send(Cmd::Sound(out)); }
     /// Saves the game's state to `path` (zstd-compressed); `load_state` also takes uncompressed ones.
     pub fn save_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::SaveState(path.into(), r)) }
     pub fn load_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::LoadState(path.into(), r)) }
@@ -321,6 +327,7 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
                 Cmd::SaveState(path, reply) => game.save_state(path, reply),
                 Cmd::LoadState(path, reply) => { let _ = reply.send(game.load_state(&path)); }
                 Cmd::Flush(reply) => game.save_all(Some(reply)),
+                Cmd::Sound(out) => sound.set_out(out),
                 Cmd::Quit(reply) => { game.save_all(Some(reply)); return; }
             }
             continue;

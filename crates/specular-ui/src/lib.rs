@@ -1,22 +1,24 @@
 //! Specular's UI: draws the core's screens with Slint and carries out the app's effects. All
 //! slow work happens off the UI thread: files on an I/O thread (and the library scan on its
-//! own), hardware on a hardware thread, box art on the art service's threads (`art`); their
-//! results come back as messages to the app, or as calls on the UI thread.
+//! own), hardware on a hardware thread, each radio on a thread of its own (`radio_thread`), box
+//! art on the art service's threads (`art`), and opening sound outputs on short-lived threads;
+//! their results come back as messages to the app, or as calls on the UI thread.
 
 mod art;
 mod game;
+mod keys;
 mod watch;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, VecModel};
-use specular_core::app::{App, Effect, InputTarget, Msg};
-use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Rgb};
+use specular_core::app::{App, Effect, InputTarget, Msg, WifiNeed};
+use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Output, Rgb};
 use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::list;
@@ -24,6 +26,8 @@ use specular_core::list::Rect;
 use specular_core::model::{ImageRef, Layout, Row, RowKind, ScreenView};
 use specular_core::nav::Transition;
 use specular_core::settings::{Layer, builtin, store};
+use specular_core::wireless::Wireless;
+use specular_core::wireless::wifi::WifiLink;
 
 slint::include_modules!();
 
@@ -40,6 +44,19 @@ pub fn now() -> Duration {
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
+/// Makes Slint fall back to Specular's emoji font (Noto Emoji: network and device names have
+/// emoji, which Geist lacks). Slint looks for fallback fonts only among the system's and those in
+/// $SLINT_FONT_PATH, not among fonts built into the UI, so it is a file: `fonts/` next to the
+/// binary, or the source tree's in a development build. Must run before any other thread starts,
+/// since it sets an environment variable; does nothing if $SLINT_FONT_PATH is already set.
+pub fn use_fallback_fonts() {
+    if std::env::var_os("SLINT_FONT_PATH").is_some() { return; }
+    let installed = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("fonts"))).filter(|d| d.is_dir());
+    let path = installed.unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/NotoEmoji.ttf").into());
+    // SAFETY: before any other thread exists (see above).
+    unsafe { std::env::set_var("SLINT_FONT_PATH", path) };
+}
+
 /// Where Specular's data lives: the SD card's folders.
 #[derive(Clone, Debug)]
 pub struct DataRoot(pub PathBuf);
@@ -54,7 +71,8 @@ impl DataRoot {
 
 /// Runs Specular on `device` until the event loop ends. `install` sets up the device's platform;
 /// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`).
-pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatform>) -> Result<(), Error> {
+/// The device is also used from other threads, to open sound outputs (which can block).
+pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, install: Option<InstallPlatform>) -> Result<(), Error> {
     quit_on_signals();
     let profile = device.profile();
     let keyboard = install.is_none();
@@ -68,25 +86,38 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
 
     let (io, io_thread) = io_thread(data.clone());
     let systems = playable_systems();
-    let art_worker = art::worker(data.roms(), data.cache(), systems.clone(), vec![Box::new(art::LibretroThumbnails::new())],
-        |rom| on_ui(move |r| r.art_stored(rom)));
+    // The radios get threads of their own; the rest of the hardware goes to the hardware thread.
+    let mut hardware = device.hardware();
+    let (wifi, bluetooth) = (hardware.wifi.take(), hardware.bluetooth.take());
+    let mut app = App::new(systems.clone(), builtin::settings());
+    app.has_radios(wifi.is_some(), bluetooth.is_some());
+    // Without WiFi, the network (if any) is assumed to be there.
+    let online = wifi.is_none();
+    let art_worker = art::worker(data.roms(), data.cache(), systems, vec![Box::new(art::LibretroThumbnails::new())], online,
+        |rom| on_ui(move |r| r.art_stored(rom)),
+        |wanted| post(Msg::WifiNeed { need: WifiNeed::BoxArt, wanted, time: now() }));
     let art_loader = art::loader(data.roms(), data.cache(),
         |rom, picture| on_ui(move |r| r.art_loaded(rom, picture.map(slint::Image::from_rgba8))));
     let runner = Rc::new(Runner {
-        app: RefCell::new(App::new(systems, builtin::settings())),
+        app: RefCell::new(app),
         window: window.as_weak(),
         rows: Rc::new(VecModel::default()),
         hints: Rc::new(VecModel::default()),
         profile,
-        hardware: hardware_thread(device.hardware()),
+        hardware: hardware_thread(hardware),
+        wifi: wifi.map(|s| radio_thread("wifi", s, Msg::Wifi)),
+        bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
         io,
         configs: data.configs(),
         data,
-        device,
+        device: Arc::from(device),
+        output: RefCell::new(Output::Builtin),
+        sound_requests: Cell::new(0),
         playing: RefCell::default(),
         game_screen: RefCell::default(),
         repeat: slint::Timer::default(),
         sleep_timer: slint::Timer::default(),
+        wifi_timer: slint::Timer::default(),
         launches: Cell::new(0),
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
@@ -99,6 +130,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         volume_timer: slint::Timer::default(),
         stats_timer: slint::Timer::default(),
         art_worker,
+        art_online: Cell::new(online),
         art_loader,
         on_screen: RefCell::default(),
         requested: RefCell::default(),
@@ -190,7 +222,31 @@ fn on_ui(f: impl FnOnce(&Rc<Runner>) + Send + 'static) {
 /// Delivers a message to the app on the UI thread, from any thread.
 fn post(msg: Msg) { on_ui(move |r| r.handle(msg)); }
 
-enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Volume(u8), Muted(bool), Sleep, PowerOff, Restart }
+enum HwCmd {
+    Brightness(u8),
+    Lights(Vec<Rgb>),
+    /// Sets the level of the device's own output, or of Bluetooth outputs when `bluetooth`.
+    Volume { bluetooth: bool, level: u8 },
+    Muted(bool),
+    /// Sound goes to this output now: its level (or silence, if muted) is applied to it.
+    Output(Output),
+    Sleep,
+    PowerOff,
+    Restart,
+}
+
+/// The volume as the hardware thread keeps it. Muting sets the current output's volume to 0, so
+/// the levels and the mute state are kept apart. Every output other than `Output::Builtin` is a
+/// Bluetooth one, and they all share one level.
+struct Volume { builtin: u8, bluetooth: u8, output: Output, muted: bool }
+
+impl Volume {
+    /// Sets the current output's volume to what it should be now.
+    fn apply(&self, audio: &dyn specular_core::device::Audio) -> std::io::Result<()> {
+        let level = if self.output == Output::Builtin { self.builtin } else { self.bluetooth };
+        audio.set_volume(&self.output, if self.muted { 0 } else { level })
+    }
+}
 
 /// How often the battery is read (on some devices each read is a slow bus transfer).
 const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
@@ -200,8 +256,7 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut next_battery = Instant::now();
-        // Muting sets the device's volume to 0, so the level and the mute state are kept apart.
-        let (mut volume, mut muted) = (0, false);
+        let mut volume = Volume { builtin: 0, bluetooth: 0, output: Output::Builtin, muted: false };
         loop {
             if Instant::now() >= next_battery {
                 if let Ok(b) = hw.power.battery() { post(Msg::Battery(b)); }
@@ -210,8 +265,13 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
             let result = match rx.recv_timeout(next_battery.saturating_duration_since(Instant::now())) {
                 Ok(HwCmd::Brightness(l)) => hw.display.set_brightness(l),
                 Ok(HwCmd::Lights(c)) => hw.lights.show(&c),
-                Ok(HwCmd::Volume(l)) => { volume = l; hw.audio.set_volume(if muted { 0 } else { volume }) }
-                Ok(HwCmd::Muted(m)) => { muted = m; hw.audio.set_volume(if muted { 0 } else { volume }) }
+                Ok(HwCmd::Volume { bluetooth, level }) => {
+                    *(if bluetooth { &mut volume.bluetooth } else { &mut volume.builtin }) = level;
+                    // The other output's level is applied when sound moves to it.
+                    if bluetooth == (volume.output != Output::Builtin) { volume.apply(&*hw.audio) } else { Ok(()) }
+                }
+                Ok(HwCmd::Muted(m)) => { volume.muted = m; volume.apply(&*hw.audio) }
+                Ok(HwCmd::Output(o)) => { volume.output = o; volume.apply(&*hw.audio) }
                 Ok(HwCmd::Sleep) => {
                     let r = hw.power.sleep();
                     post(Msg::Woke);
@@ -226,6 +286,19 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
             if let Err(e) = result { eprintln!("hardware: {e}"); }
         }
     });
+    tx
+}
+
+/// A radio's thread: it owns the radio's service, starts it (its events become messages to the
+/// app, `msg`), then carries out the commands sent, in order. Commands can block for seconds
+/// (loading a driver), which holds up only the commands after them.
+fn radio_thread<C: Send + 'static, E: Send + 'static>(name: &str, mut service: Box<dyn Wireless<C, E>>, msg: fn(E) -> Msg) -> mpsc::Sender<C> {
+    let (tx, rx) = mpsc::channel();
+    let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
+        service.start(Box::new(move |e| post(msg(e))));
+        for cmd in rx { service.send(cmd); }
+    });
+    if let Err(e) = spawned { eprintln!("{name}: can't start its thread: {e}"); }
     tx
 }
 
@@ -282,10 +355,19 @@ struct Runner {
     hints: Rc<VecModel<Hint>>,
     profile: DeviceProfile,
     hardware: mpsc::Sender<HwCmd>,
+    /// The radios' threads (None for a radio the device doesn't have).
+    wifi: Option<mpsc::Sender<specular_core::wireless::wifi::WifiCmd>>,
+    bluetooth: Option<mpsc::Sender<specular_core::wireless::bluetooth::BtCmd>>,
     io: mpsc::Sender<Save>,
     configs: PathBuf,
     data: DataRoot,
-    device: Box<dyn Device>,
+    device: game::SharedDevice,
+    /// Where sound goes: what the app last asked for (`Effect::SoundTo`). Games launched later
+    /// open it; a running game is moved to it (`route_sound`).
+    output: RefCell<Output>,
+    /// Counts requests to move a running game's sound: an output opened for an older one is
+    /// stale (`sound_opened`).
+    sound_requests: Cell<u32>,
     /// The game being played (also while its menu is open).
     playing: RefCell<Option<game::Playing>>,
     game_screen: RefCell<game::Screen>,
@@ -293,6 +375,9 @@ struct Runner {
     repeat: slint::Timer,
     /// Fires when the device is due to sleep from being left alone.
     sleep_timer: slint::Timer,
+    /// Fires when WiFi on Auto (on only while something needs the network) may be due to turn
+    /// off (`App::wifi_deadline`).
+    wifi_timer: slint::Timer,
     /// How many games have been launched: a game that finishes loading after another launch is
     /// stale (`started`).
     launches: Cell<u32>,
@@ -314,6 +399,8 @@ struct Runner {
     /// Updates the frame statistics each second while they are on.
     stats_timer: slint::Timer,
     art_worker: mpsc::Sender<art::ArtCmd>,
+    /// Whether the art worker was last told the network is there.
+    art_online: Cell<bool>,
     art_loader: mpsc::Sender<Vec<PathBuf>>,
     /// What the art worker and loader were last told (less the pictures loaded since), so
     /// unchanged lists aren't sent again.
@@ -359,8 +446,19 @@ impl Runner {
         // wake (the tick this sends must see its idle time reset). After a game ends the idle count
         // restarts from this tick.
         if needs_clock { self.tick_clock(); }
-        self.schedule_repeat();
-        self.schedule_sleep();
+        self.tell_art_online();
+        let app = self.app.borrow();
+        let (repeat, sleep, wifi) = (app.next_deadline(), app.sleep_deadline(), app.wifi_deadline());
+        drop(app);
+        self.tick_at(&self.repeat, repeat);
+        self.tick_at(&self.sleep_timer, sleep);
+        self.tick_at(&self.wifi_timer, wifi);
+    }
+
+    /// Tells the art worker whether WiFi is connected, when that changes: it downloads only then.
+    fn tell_art_online(&self) {
+        let online = self.app.borrow().ctx().wifi.as_ref().is_none_or(|w| matches!(w.link, WifiLink::Connected { .. }));
+        if online != self.art_online.replace(online) { let _ = self.art_worker.send(art::ArtCmd::Online(online)); }
     }
 
     fn apply(self: &Rc<Self>, e: Effect) {
@@ -378,11 +476,12 @@ impl Runner {
             Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok("") }),
             Effect::Notice(text) => self.toast(&text),
             Effect::Mute(muted) => { let _ = self.hardware.send(HwCmd::Muted(muted)); }
-            Effect::ShowVolume { level, muted } => {
+            Effect::ShowVolume { level, muted, bluetooth } => {
                 let Some(w) = self.window.upgrade() else { return };
                 w.set_volume(level as f32 / builtin::VOLUME_MAX as f32);
                 w.set_volume_text(level.to_string().into());
                 w.set_volume_muted(muted);
+                w.set_volume_bluetooth(bluetooth);
                 w.set_volume_shown(true);
                 let weak = self.window.clone();
                 self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
@@ -403,6 +502,9 @@ impl Runner {
             // on its way down (SIGTERM ends the event loop; `run` then waits for the I/O thread).
             Effect::PowerOff => { let _ = self.hardware.send(HwCmd::PowerOff); }
             Effect::Restart => { let _ = self.hardware.send(HwCmd::Restart); }
+            Effect::Wifi(cmd) => if let Some(t) = &self.wifi { let _ = t.send(cmd); },
+            Effect::Bluetooth(cmd) => if let Some(t) = &self.bluetooth { let _ = t.send(cmd); },
+            Effect::SoundTo(output) => self.set_output(output),
         }
     }
 
@@ -415,6 +517,42 @@ impl Runner {
             Ok(done) => self.toast(done),
             Err(e) => { eprintln!("game: {e}"); self.toast(&format!("That didn't work: {e}")); }
         }
+    }
+
+    /// Sends sound to `output` from now on: its volume, the next game, and the game being played.
+    fn set_output(&self, output: Output) {
+        let _ = self.hardware.send(HwCmd::Output(output.clone()));
+        *self.output.borrow_mut() = output;
+        self.route_sound();
+    }
+
+    /// Moves the running game's sound to `self.output` if it plays elsewhere. The output is opened
+    /// on a thread of its own (a Bluetooth one can take a second), then handed over by
+    /// `sound_opened`. Each call makes any earlier open still in progress stale.
+    fn route_sound(&self) {
+        let request = self.sound_requests.get() + 1;
+        self.sound_requests.set(request);
+        let wanted = self.output.borrow().clone();
+        if self.playing.borrow().as_ref().is_none_or(|p| *p.output.borrow() == wanted) { return; }
+        let device = self.device.clone();
+        std::thread::spawn(move || {
+            let sound = game::open_sound(device.as_ref(), &wanted);
+            on_ui(move |r| r.sound_opened(request, wanted, sound));
+        });
+    }
+
+    /// `output` was opened (`sound`, None if it couldn't be) for move request `request`. Unless a
+    /// newer request or another game came since (each launch calls `route_sound` in `started`,
+    /// which makes this request stale), the game plays on it; otherwise it is dropped. A
+    /// Bluetooth output that failed is reported to the app, which picks another output.
+    fn sound_opened(&self, request: u32, output: Output, sound: Option<Box<dyn specular_core::device::SoundOut>>) {
+        if request != self.sound_requests.get() { return; }
+        let playing = self.playing.borrow();
+        let Some(p) = playing.as_ref() else { return };
+        if sound.is_none() && output != Output::Builtin { return post(Msg::SoundFailed(output)); }
+        eprintln!("sound: the game's sound goes to {output:?}{}", if sound.is_none() { ", which didn't open: silence" } else { "" });
+        p.session.set_sound(sound);
+        *p.output.borrow_mut() = output;
     }
 
     /// Starts or stops the frame statistics shown over games.
@@ -460,7 +598,8 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
-        game::Playing::start(game, &system, &self.data, self.device.as_ref(), self.window.clone(), move |r| on_ui(move |me| me.started(launch, r)));
+        game::Playing::start(game, &system, &self.data, &self.device, self.output.borrow().clone(), self.window.clone(),
+            move |r| on_ui(move |me| me.started(launch, r)));
     }
 
     /// Launch number `launch` (see `launches`) is running, or couldn't start.
@@ -476,7 +615,12 @@ impl Runner {
         match result {
             Ok(p) => {
                 watch_game(&p);
+                // The output may have failed to open (the app then picks another), or changed while
+                // the game loaded.
+                let failed = p.sound_failed && *p.output.borrow() == *self.output.borrow();
+                if failed { post(Msg::SoundFailed(self.output.borrow().clone())); }
                 *self.playing.borrow_mut() = Some(p);
+                self.route_sound();
                 // (Kept until now: the list shows under the flying cover.)
                 self.art.borrow_mut().clear();
                 self.requested.borrow_mut().clear();
@@ -503,7 +647,8 @@ impl Runner {
         let level = value.as_i64().unwrap_or(0);
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
-            builtin::VOLUME => HwCmd::Volume(level as u8),
+            builtin::VOLUME => HwCmd::Volume { bluetooth: false, level: level as u8 },
+            builtin::BLUETOOTH_VOLUME => HwCmd::Volume { bluetooth: true, level: level as u8 },
             builtin::FRAME_STATS => { self.show_frame_stats(value.as_bool().unwrap_or(false)); return; }
             builtin::SCALING => {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
@@ -545,19 +690,12 @@ impl Runner {
         theme.set_focus(colour(second));
     }
 
-    fn schedule_repeat(self: &Rc<Self>) {
-        let Some(due) = self.app.borrow().next_deadline() else { self.repeat.stop(); return };
+    /// Arms `timer` to give the app a `Tick` at `due`, or stops it if nothing is due. Re-armed
+    /// after every message, as the app's deadlines change.
+    fn tick_at(self: &Rc<Self>, timer: &slint::Timer, due: Option<Duration>) {
+        let Some(due) = due else { timer.stop(); return };
         let me = Rc::downgrade(self);
-        self.repeat.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), move || {
-            if let Some(r) = me.upgrade() { r.handle(Msg::Tick(now())); }
-        });
-    }
-
-    /// Re-armed after every message; stopped when no sleep is due.
-    fn schedule_sleep(self: &Rc<Self>) {
-        let Some(due) = self.app.borrow().sleep_deadline() else { self.sleep_timer.stop(); return };
-        let me = Rc::downgrade(self);
-        self.sleep_timer.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), move || {
+        timer.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), move || {
             if let Some(r) = me.upgrade() { r.handle(Msg::Tick(now())); }
         });
     }
@@ -567,15 +705,17 @@ impl Runner {
         let Some(w) = self.window.upgrade() else { return };
         let app = self.app.borrow();
         let (view, focus) = (app.view(), app.focus());
-        let grid = view.layout == Layout::Grid;
-        w.set_layout(match view.layout { Layout::List => ScreenLayout::List, Layout::ListWithPicture => ScreenLayout::ListWithPicture, Layout::Grid => ScreenLayout::Grid });
-        let (width, height) = (if grid { w.get_grid_width() } else { w.get_list_width() }, w.get_list_height());
-        let layout = list::layout(&view.rows, focus, width, height, grid);
+        let (grid, keys) = (view.layout == Layout::Grid, view.layout == Layout::Keys);
+        w.set_layout(match view.layout { Layout::List => ScreenLayout::List, Layout::ListWithPicture => ScreenLayout::ListWithPicture, Layout::Grid => ScreenLayout::Grid, Layout::Keys => ScreenLayout::Keys });
+        // Grids and the keyboard sit between the gutters; a list's rows reach the edges.
+        let (width, height) = (if grid || keys { w.get_grid_width() } else { w.get_list_width() }, w.get_list_height());
+        let layout = if keys { keys::layout(&view.rows, width, height) } else { list::layout(&view.rows, focus, width, height, grid) };
         // Rows are drawn from a fixed set of slots, enough for every row near the view; a row
         // always uses slot `index % slots`, so while the list scrolls a row keeps its slot and
         // only the slots of rows coming into view change. A new screen or layout gets fresh
         // slots, so the old one's rows don't animate into the new one.
-        let slots = list::max_drawn(width, height, grid);
+        // The keyboard draws every key at once, so it needs a slot per key.
+        let slots = if keys { view.rows.len() } else { list::max_drawn(width, height, grid) };
         debug_assert!(layout.drawn.len() <= slots, "two drawn rows would share a slot");
         let empty = RowData { index: -1, ..Default::default() };
         let mut wanted = vec![empty; slots];
@@ -593,6 +733,13 @@ impl Runner {
         w.set_playing(app.playing().is_some());
         w.set_game_menu(app.playing().is_some() && app.input_target() == InputTarget::App);
         w.set_screen_title(view.title.as_str().into());
+        if let Some(entry) = &view.entry {
+            // `entry.caret` counts characters; slicing needs a byte offset.
+            let caret = entry.text.char_indices().nth(entry.caret).map_or(entry.text.len(), |(i, _)| i);
+            w.set_entry_before(entry.text[..caret].into());
+            w.set_entry_after(entry.text[caret..].into());
+            w.set_entry_height(keys::ENTRY_HEIGHT);
+        }
         w.set_crumb(app.parent_title().unwrap_or_default().into());
         w.set_focused_row(focus as i32);
         let plate = layout.rects.get(focus).copied().unwrap_or_default();
@@ -630,6 +777,7 @@ impl Runner {
             *self.on_screen.borrow_mut() = on_screen;
         }
         let wanted: Vec<PathBuf> = match view.layout {
+            Layout::Keys => Vec::new(),
             Layout::Grid => {
                 let mut near: Vec<usize> = drawn.clone().collect();
                 near.sort_by_key(|&i| i.abs_diff(focus));
@@ -703,6 +851,7 @@ impl Runner {
             RowKind::Choice { options, selected, .. } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
             RowKind::Number { value, min, max, unit, .. } => (Kind::Number, format!("{value}{unit}"), false, (value - min) as f32 / (max - min).max(1) as f32),
             RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
+            RowKind::Key { .. } => (Kind::Key, String::new(), false, 0.0),
         };
         RowData {
             shown: true, index: index as i32, kind, label: r.label.as_str().into(), value: value.into(), on, fraction,

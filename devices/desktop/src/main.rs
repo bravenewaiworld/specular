@@ -7,7 +7,7 @@
 
 use std::io;
 
-use specular_core::device::{Device, DeviceProfile, Hardware, SoundOut, Vsync, simulated};
+use specular_core::device::{Device, DeviceProfile, Hardware, Output, SoundOut, Vsync, simulated};
 use specular_core::input::Button;
 use specular_ui::DataRoot;
 
@@ -24,7 +24,12 @@ impl Device for Desktop {
         }
     }
     fn hardware(&self) -> Hardware { simulated::hardware() }
-    fn open_sound(&self) -> io::Result<Box<dyn SoundOut>> { Ok(Box::new(specular_linux::sound::Alsa::open("default")?)) }
+    /// Bluetooth outputs through bluez-alsa, if the computer has it (the simulated Bluetooth's
+    /// addresses only open if they happen to be real).
+    fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>> {
+        use specular_linux::sound::Alsa;
+        Ok(Box::new(match output { Output::Builtin => Alsa::open("default")?, Output::Bluetooth(address) => Alsa::bluetooth(address)? }))
+    }
     fn open_vsync(&self) -> Option<Box<dyn Vsync>> { None }
 }
 
@@ -32,6 +37,7 @@ fn main() -> Result<(), specular_ui::Error> {
     // One window pixel per panel pixel, whatever the desktop's scaling.
     // SAFETY: before any other thread exists.
     unsafe { std::env::set_var("SLINT_SCALE_FACTOR", "1") };
+    specular_ui::use_fallback_fonts();
     let data = std::env::args().nth(1).unwrap_or_else(|| "sdcard".into());
     specular_ui::run(Box::new(Desktop), DataRoot(data.into()), None)
 }

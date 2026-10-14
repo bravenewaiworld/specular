@@ -57,6 +57,10 @@ impl Sound {
         Self { out, resampler: Resampler::default(), in_rate: sample_rate * speed, buf: Vec::new() }
     }
 
+    /// Replaces (and closes) the output. A fresh output reports nothing queued, so the next `play`
+    /// first fills it with silence, as after an underrun.
+    pub fn set_out(&mut self, out: Option<Box<dyn SoundOut>>) { self.out = out; }
+
     /// Queues one frame's samples. Returns how much sound was queued before them (None without
     /// an output).
     pub fn play(&mut self, samples: &[[i16; 2]]) -> Option<std::time::Duration> {
@@ -65,7 +69,7 @@ impl Sound {
         let queued_time = std::time::Duration::from_secs_f64(queued as f64 / out.rate() as f64);
         self.buf.clear();
         if queued == 0 {
-            // Starting, or after an underrun (the game was paused or slow): fill half the queue
+            // Starting, on a new output, or after an underrun (the game was paused or slow): fill half the queue
             // with silence, so jitter doesn't starve it again at once.
             self.buf.resize(target, [0, 0]);
         }
@@ -74,7 +78,7 @@ impl Sound {
         self.resampler.process(samples, ratio, &mut self.buf);
         // A full queue drops the rest: better than waiting, which would delay the next frame.
         if let Err(e) = out.write(&self.buf) {
-            eprintln!("sound: {e}; no sound for the rest of this game");
+            eprintln!("sound: {e}; no sound until the output changes");
             self.out = None;
         }
         Some(queued_time)
@@ -120,5 +124,14 @@ mod tests {
         s.play(&[[100, 100]; 800]);
         let added = s.out.as_mut().unwrap().queued() - before;
         assert!(added < 800, "{added}");
+    }
+
+    #[test]
+    fn a_new_output_is_primed_again() {
+        let mut s = Sound::new(Some(Box::new(Queue { queued: 2000, written: Vec::new() })), 48_000.0, 1.0);
+        s.set_out(Some(Box::new(Queue { queued: 0, written: Vec::new() })));
+        s.play(&[[100, 100]; 800]);
+        // Half the queue (3072 frames) of silence, plus about 800 resampled samples.
+        assert!(s.out.as_mut().unwrap().queued() >= 1536 + 790);
     }
 }

@@ -1,0 +1,705 @@
+{
+ "wifi": {
+  "start": [
+   {
+    "after_ms": 0,
+    "event": {
+     "Link": "Off"
+    }
+   }
+  ],
+  "answers": [
+   {
+    "to": {
+     "Power": true
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": "Idle"
+      }
+     },
+     {
+      "after_ms": 300,
+      "event": {
+       "Networks": [
+        {
+         "ssid": "Home",
+         "bars": 4,
+         "secured": true,
+         "saved": true,
+         "in_range": true
+        },
+        {
+         "ssid": "Office",
+         "bars": 2,
+         "secured": true,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "CafeFree",
+         "bars": 1,
+         "secured": false,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "Old Flat",
+         "bars": 0,
+         "secured": true,
+         "saved": true,
+         "in_range": false
+        }
+       ]
+      }
+     },
+     {
+      "after_ms": 600,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Home",
+         "step": "Associating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1000,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Home",
+         "step": "Authenticating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1400,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Home",
+         "step": "GettingAddress"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1800,
+      "event": {
+       "Link": {
+        "Connected": {
+         "ssid": "Home",
+         "address": "192.168.1.42"
+        }
+       }
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Power": false
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": "Off"
+      }
+     }
+    ]
+   },
+   {
+    "to": "Scan",
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 700,
+      "event": {
+       "Networks": [
+        {
+         "ssid": "Home",
+         "bars": 4,
+         "secured": true,
+         "saved": true,
+         "in_range": true
+        },
+        {
+         "ssid": "Office",
+         "bars": 2,
+         "secured": true,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "CafeFree",
+         "bars": 1,
+         "secured": false,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "Old Flat",
+         "bars": 0,
+         "secured": true,
+         "saved": true,
+         "in_range": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Join": {
+      "ssid": "Office"
+     }
+    },
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Office",
+         "step": "Associating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 500,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Office",
+         "step": "Authenticating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1500,
+      "event": {
+       "Failed": {
+        "WrongPassword": {
+         "ssid": "Office"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1500,
+      "event": {
+       "Link": "Idle"
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Join": {
+      "ssid": "Office"
+     }
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Office",
+         "step": "Associating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 400,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Office",
+         "step": "Authenticating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 800,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Office",
+         "step": "GettingAddress"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1200,
+      "event": {
+       "Link": {
+        "Connected": {
+         "ssid": "Office",
+         "address": "192.168.1.42"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1200,
+      "event": {
+       "Networks": [
+        {
+         "ssid": "Home",
+         "bars": 4,
+         "secured": true,
+         "saved": true,
+         "in_range": true
+        },
+        {
+         "ssid": "Office",
+         "bars": 2,
+         "secured": true,
+         "saved": true,
+         "in_range": true
+        },
+        {
+         "ssid": "CafeFree",
+         "bars": 1,
+         "secured": false,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "Old Flat",
+         "bars": 0,
+         "secured": true,
+         "saved": true,
+         "in_range": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Forget": {
+      "ssid": "Home"
+     }
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": "Idle"
+      }
+     },
+     {
+      "after_ms": 0,
+      "event": {
+       "Networks": [
+        {
+         "ssid": "Home",
+         "bars": 4,
+         "secured": true,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "Office",
+         "bars": 2,
+         "secured": true,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "CafeFree",
+         "bars": 1,
+         "secured": false,
+         "saved": false,
+         "in_range": true
+        },
+        {
+         "ssid": "Old Flat",
+         "bars": 0,
+         "secured": true,
+         "saved": true,
+         "in_range": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Join": {
+      "ssid": "Home"
+     }
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Home",
+         "step": "Associating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 400,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Home",
+         "step": "Authenticating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 800,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "Home",
+         "step": "GettingAddress"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1200,
+      "event": {
+       "Link": {
+        "Connected": {
+         "ssid": "Home",
+         "address": "192.168.1.42"
+        }
+       }
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Join": {
+      "ssid": "CafeFree"
+     }
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "CafeFree",
+         "step": "Associating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 400,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "CafeFree",
+         "step": "Authenticating"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 800,
+      "event": {
+       "Link": {
+        "Connecting": {
+         "ssid": "CafeFree",
+         "step": "GettingAddress"
+        }
+       }
+      }
+     },
+     {
+      "after_ms": 1200,
+      "event": {
+       "Link": {
+        "Connected": {
+         "ssid": "CafeFree",
+         "address": "192.168.1.42"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "bluetooth": {
+  "start": [
+   {
+    "after_ms": 0,
+    "event": {
+     "Powered": false
+    }
+   },
+   {
+    "after_ms": 0,
+    "event": {
+     "Devices": [
+      {
+       "address": "00:1B:66:A1:B2:C3",
+       "name": "WH-1000XM4",
+       "kind": "Headphones",
+       "paired": true,
+       "connected": false,
+       "audio": false
+      }
+     ]
+    }
+   }
+  ],
+  "answers": [
+   {
+    "to": {
+     "Power": true
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Powered": true
+      }
+     },
+     {
+      "after_ms": 1500,
+      "event": {
+       "Devices": [
+        {
+         "address": "00:1B:66:A1:B2:C3",
+         "name": "WH-1000XM4",
+         "kind": "Headphones",
+         "paired": true,
+         "connected": true,
+         "audio": true
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Power": false
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Powered": false
+      }
+     },
+     {
+      "after_ms": 0,
+      "event": {
+       "Devices": [
+        {
+         "address": "00:1B:66:A1:B2:C3",
+         "name": "WH-1000XM4",
+         "kind": "Headphones",
+         "paired": true,
+         "connected": false,
+         "audio": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Search": true
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Searching": true
+      }
+     },
+     {
+      "after_ms": 1000,
+      "event": {
+       "Devices": [
+        {
+         "address": "00:1B:66:A1:B2:C3",
+         "name": "WH-1000XM4",
+         "kind": "Headphones",
+         "paired": true,
+         "connected": true,
+         "audio": true
+        },
+        {
+         "address": "20:74:CF:11:22:33",
+         "name": "JBL Flip 5",
+         "kind": "Speaker",
+         "paired": false,
+         "connected": false,
+         "audio": false
+        },
+        {
+         "address": "E4:17:D8:44:55:66",
+         "name": "8BitDo Lite 2",
+         "kind": "Controller",
+         "paired": false,
+         "connected": false,
+         "audio": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Search": false
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 0,
+      "event": {
+       "Searching": false
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Pair": "20:74:CF:11:22:33"
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 2000,
+      "event": {
+       "Devices": [
+        {
+         "address": "00:1B:66:A1:B2:C3",
+         "name": "WH-1000XM4",
+         "kind": "Headphones",
+         "paired": true,
+         "connected": false,
+         "audio": false
+        },
+        {
+         "address": "20:74:CF:11:22:33",
+         "name": "JBL Flip 5",
+         "kind": "Speaker",
+         "paired": true,
+         "connected": true,
+         "audio": true
+        },
+        {
+         "address": "E4:17:D8:44:55:66",
+         "name": "8BitDo Lite 2",
+         "kind": "Controller",
+         "paired": false,
+         "connected": false,
+         "audio": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Pair": "E4:17:D8:44:55:66"
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 3000,
+      "event": {
+       "Failed": {
+        "PairingFailed": {
+         "name": "8BitDo Lite 2",
+         "detail": "org.bluez.Error.AuthenticationRejected"
+        }
+       }
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Disconnect": "00:1B:66:A1:B2:C3"
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 300,
+      "event": {
+       "Devices": [
+        {
+         "address": "00:1B:66:A1:B2:C3",
+         "name": "WH-1000XM4",
+         "kind": "Headphones",
+         "paired": true,
+         "connected": false,
+         "audio": false
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "to": {
+     "Connect": "00:1B:66:A1:B2:C3"
+    },
+    "repeat": true,
+    "then": [
+     {
+      "after_ms": 1500,
+      "event": {
+       "Devices": [
+        {
+         "address": "00:1B:66:A1:B2:C3",
+         "name": "WH-1000XM4",
+         "kind": "Headphones",
+         "paired": true,
+         "connected": true,
+         "audio": true
+        }
+       ]
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -106,6 +106,10 @@ pub enum ArtCmd {
     OnScreen(Vec<PathBuf>),
     /// While paused (a game is running), the worker reads and downloads nothing.
     Paused(bool),
+    /// Whether the network is there (WiFi connected). Without it, the worker stops at the first
+    /// game that needs a download, reports that it needs the network (through `worker`'s
+    /// `need_network` callback), and waits for it.
+    Online(bool),
 }
 
 /// After every source said it has no image, they aren't asked again for this long.
@@ -114,13 +118,16 @@ const RETRY_MISSING: Duration = Duration::from_secs(30 * 24 * 3600);
 /// trying again.
 const RETRY_LATER: Duration = Duration::from_secs(60);
 
-/// Starts the worker. It calls `stored` (on its own thread) with a game's ROM path whenever it
-/// stores a new picture. Games that already have a picture, the user's or a cached one, are
-/// skipped, so the user's own are never replaced.
-pub fn worker(roms: PathBuf, cache: PathBuf, systems: Vec<SystemDecl>, sources: Vec<Box<dyn ArtSource>>,
-              stored: impl Fn(PathBuf) + Send + 'static) -> mpsc::Sender<ArtCmd> {
+/// Starts the worker, `online` or not (see `ArtCmd::Online`). It calls `stored` (on its own
+/// thread) with a game's ROM path whenever it stores a new picture. Games that already have a
+/// picture, the user's or a cached one, are skipped, so the user's own are never replaced. It
+/// calls `need_network(true)` when it has a download waiting for the network, and
+/// `need_network(false)` once it has nothing left to do (or is paused).
+pub fn worker(roms: PathBuf, cache: PathBuf, systems: Vec<SystemDecl>, sources: Vec<Box<dyn ArtSource>>, online: bool,
+              stored: impl Fn(PathBuf) + Send + 'static, need_network: impl Fn(bool) + Send + 'static) -> mpsc::Sender<ArtCmd> {
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || Worker { roms, cache, systems, sources, tables: HashMap::new() }.run(rx, stored));
+    let queue = Queue { online, ..Queue::default() };
+    std::thread::spawn(move || Worker { roms, cache, systems, sources, tables: HashMap::new() }.run(rx, queue, stored, need_network));
     tx
 }
 
@@ -142,11 +149,15 @@ enum Outcome {
     Nothing,
     /// The network is down, or the card couldn't be written: try again after `RETRY_LATER`.
     Later,
+    /// It needs a download, and the worker was told the network isn't there.
+    Offline,
 }
 
 /// The worker's to-do list. `done` holds the games dealt with since the last `ArtCmd::Library`.
+/// `waiting_for_network` is set when a game needed a download while offline, and cleared once
+/// nothing is left to process (or while paused).
 #[derive(Default)]
-struct Queue { games: Vec<Game>, on_screen: Vec<PathBuf>, done: HashSet<PathBuf>, paused: bool }
+struct Queue { games: Vec<Game>, on_screen: Vec<PathBuf>, done: HashSet<PathBuf>, paused: bool, online: bool, waiting_for_network: bool }
 
 impl Queue {
     fn apply(&mut self, cmd: ArtCmd) {
@@ -155,6 +166,7 @@ impl Queue {
             ArtCmd::Library(g) => { self.games = g; self.done.clear(); }
             ArtCmd::OnScreen(p) => self.on_screen = p,
             ArtCmd::Paused(p) => self.paused = p,
+            ArtCmd::Online(o) => self.online = o,
         }
     }
 
@@ -167,11 +179,17 @@ impl Queue {
 }
 
 impl Worker {
-    fn run(mut self, rx: mpsc::Receiver<ArtCmd>, stored: impl Fn(PathBuf)) {
-        let mut queue = Queue::default();
+    fn run(mut self, rx: mpsc::Receiver<ArtCmd>, mut queue: Queue, stored: impl Fn(PathBuf), need_network: impl Fn(bool)) {
         let mut retry_at = None::<Instant>;
+        let mut needs_network = false;
         loop {
-            let waiting = retry_at.is_some_and(|t| Instant::now() < t);
+            if queue.next().is_none() { queue.waiting_for_network = false; }
+            if queue.waiting_for_network != needs_network {
+                needs_network = queue.waiting_for_network;
+                eprintln!("art: {}", if needs_network { "waiting for the network" } else { "done with the network" });
+                need_network(needs_network);
+            }
+            let waiting = retry_at.is_some_and(|t| Instant::now() < t) || (queue.waiting_for_network && !queue.online);
             let Some(game) = queue.next().filter(|_| !waiting) else {
                 // Nothing to do until told something, or until it's time to try again (never
                 // while paused). The tables are kept while a retry is due.
@@ -182,16 +200,19 @@ impl Worker {
                     None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
                 };
                 match cmd {
+                    // The network is back: no need to wait out a retry.
+                    Ok(ArtCmd::Online(true)) => { queue.online = true; retry_at = None; }
                     Ok(cmd) => queue.apply(cmd),
                     Err(mpsc::RecvTimeoutError::Timeout) => retry_at = None,
                     Err(mpsc::RecvTimeoutError::Disconnected) => return,
                 }
                 continue;
             };
-            match self.process(&game) {
+            match self.process(&game, queue.online) {
                 Outcome::Stored => { queue.done.insert(game.path.clone()); stored(game.path); }
                 Outcome::Nothing => { queue.done.insert(game.path); }
                 Outcome::Later => retry_at = Some(Instant::now() + RETRY_LATER),
+                Outcome::Offline => queue.waiting_for_network = true,
             }
             for cmd in rx.try_iter() { queue.apply(cmd); }
         }
@@ -204,8 +225,9 @@ impl Worker {
     }
 
     /// Finds and stores art for `game` unless it has a picture, identifying the ROM first if its
-    /// index entry is missing or out of date.
-    fn process(&mut self, game: &Game) -> Outcome {
+    /// index entry is missing or out of date. Without the network (not `online`), it stops short
+    /// of asking the sources.
+    fn process(&mut self, game: &Game, online: bool) -> Outcome {
         if art::user_image(&self.roms, &game.path).exists() || art::cached_image(&self.cache, &game.path).exists() { return Outcome::Nothing; }
         let Some(system) = self.systems.iter().find(|s| s.id == game.system).cloned() else { return Outcome::Nothing };
         let rom = self.roms.join(&game.path);
@@ -225,6 +247,7 @@ impl Worker {
         });
         let now = unix_secs(SystemTime::now());
         if entry.missing_since.is_some_and(|t| now.saturating_sub(t) < RETRY_MISSING.as_secs()) { return Outcome::Nothing; }
+        if !online { return Outcome::Offline; }
         for source in &self.sources {
             match source.find(game, entry.identity.as_ref(), &system) {
                 Ok(Some(bytes)) => {

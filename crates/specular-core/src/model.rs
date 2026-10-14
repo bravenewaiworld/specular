@@ -42,6 +42,9 @@ pub enum RowKind {
     Number { value: i64, min: i64, max: i64, step: i64, unit: &'static str },
     /// Does something or opens a screen when A is pressed; may show its current value.
     Action { value: Option<String> },
+    /// A key of the on-screen keyboard (`Layout::Keys`): its line, and its first column and width
+    /// in columns, out of `keyboard::WIDTH`.
+    Key { line: usize, column: usize, span: usize },
 }
 
 impl RowKind {
@@ -76,6 +79,8 @@ pub enum Layout {
     ListWithPicture,
     /// Pictures in a grid, each with its label underneath; see `list::grid_columns`.
     Grid,
+    /// The on-screen keyboard: rows are keys (`RowKind::Key`) under the screen's text entry.
+    Keys,
 }
 
 /// Everything the UI needs to draw one screen.
@@ -86,4 +91,10 @@ pub struct ScreenView {
     pub rows: Vec<Row>,
     /// Button hints for the bottom bar. The UI shows only buttons the device has.
     pub hints: Vec<(Button, String)>,
+    /// Text being typed, shown above the rows (the keyboard's).
+    pub entry: Option<TextEntry>,
 }
+
+/// Text being typed: as shown (masked text as dots), and the caret's place in characters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextEntry { pub text: String, pub caret: usize }

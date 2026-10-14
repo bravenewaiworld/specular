@@ -6,10 +6,14 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
-use specular_core::device::{Accent, Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb, SoundOut, Vsync};
+use specular_core::device::{Accent, Audio, Device, DeviceProfile, Display, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
+use specular_core::wireless::trace::Traced;
+use specular_linux::bluez::Bluez;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
+use specular_linux::sound::Alsa;
+use specular_linux::wpa::WpaSupplicant;
 
 /// Every LED, in chain order (LED-class names "sunxi_led0r" … "sunxi_led13b"): the 8 along the top
 /// show the first accent; F2 and F1 on the front, then the 4 under the shoulder buttons, the second.
@@ -42,12 +46,17 @@ impl Device for Brick {
             power: Box::new(BrickPower(PowerSupply::find(Path::new("/sys/class/power_supply")))),
             display: Box::new(Disp),
             lights: Box::new(BrickLights(RgbLeds::new(Path::new("/sys/class/leds"), &names))),
-            audio: Box::new(DacVolume),
+            audio: Box::new(Volume),
+            wifi: Some(Box::new(Traced::new("wifi", WpaSupplicant::new(crate::wifi::SOCKET, Box::new(crate::wifi::BrickWifi))))),
+            bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
         }
     }
 
-    fn open_sound(&self) -> io::Result<Box<dyn SoundOut>> {
-        Ok(Box::new(specular_linux::sound::Alsa::open("default")?))
+    fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>> {
+        Ok(Box::new(match output {
+            Output::Builtin => Alsa::open("default")?,
+            Output::Bluetooth(address) => Alsa::bluetooth(address)?,
+        }))
     }
 
     /// The wait for the display's refresh on /dev/fb0 (our kernel's; TrimUI's returns at once).
@@ -110,15 +119,16 @@ impl Lights for BrickLights {
     fn show(&self, colours: &[Rgb]) -> io::Result<()> { self.0.show(colours, LED_LIMIT) }
 }
 
-/// The volume, as the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), set
+/// The volume: the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), set
 /// with amixer. Specular's levels are 2 dB apart, the top one at 0 dB (louder only clips); 0 is
 /// the control's lowest, -119 dB. (TrimUI's ALSA set-up also has a software volume, "Soft Volume
-/// Master", but the driver refuses writes to it.) One level for the speaker and headphones alike,
-/// for now.
-struct DacVolume;
+/// Master", but the driver refuses writes to it.) One level for the speaker and headphones alike;
+/// Bluetooth headphones and speakers have their own (through bluez-alsa).
+struct Volume;
 
-impl Audio for DacVolume {
-    fn set_volume(&self, level: u8) -> io::Result<()> {
+impl Audio for Volume {
+    fn set_volume(&self, output: &Output, level: u8) -> io::Result<()> {
+        if let Output::Bluetooth(address) = output { return specular_linux::sound::set_bluetooth_volume(address, level); }
         // 2 dB per level below the top is 8/3 of the control's steps. Never above 159: the
         // control goes up to +72 dB.
         let below_top = (specular_core::settings::builtin::VOLUME_MAX - level as i64).max(0) as f64;

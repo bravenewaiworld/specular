@@ -4,3 +4,4 @@ pub mod device;
 pub mod egl;
 pub mod fonts;
 pub mod platform;
+pub mod wifi;

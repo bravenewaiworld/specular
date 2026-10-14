@@ -21,9 +21,10 @@ use crate::model::{Row, RowKind};
 use crate::palette::{self, PALETTE};
 
 /// Who a setting is for. Settings screens show user settings, and developer ones too while the
-/// "Developer details" setting is on.
+/// "Developer details" setting is on. `OwnScreen` settings are never listed: a screen of their
+/// own shows them (as the Wi-Fi screen shows the Wi-Fi setting).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Visibility { User, Developer }
+pub enum Visibility { User, Developer, OwnScreen }
 
 /// How specific a layer is; also how deep a setting may be overridden.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -186,22 +187,30 @@ impl Settings {
                 section = d.section;
                 rows.push(Row::new(format!("section:{section}"), section, RowKind::Header));
             }
-            let (v, from) = self.get(d.key, at).unwrap();
-            let kind = match d.kind {
-                SettingKind::Bool => RowKind::Toggle { on: v.as_bool().unwrap_or(false) },
-                SettingKind::Choice(options) => choice_row(options.iter().map(|(o, label)| (*o, label.to_string())), v, None),
-                SettingKind::Colour { same_as } => {
-                    let same = same_as.and_then(|k| self.decl(k)).map(|f| (SAME, format!("Same as {}", f.label.to_lowercase())));
-                    let colours = PALETTE.iter().map(|c| (c.id, c.label.to_string()));
-                    choice_row(same.into_iter().chain(colours), v, self.colour(d.key, at))
-                }
-                SettingKind::Int { min, max, step, unit } => RowKind::Number { value: v.as_i64().unwrap_or(min), min, max, step, unit },
-            };
-            let mut row = Row::new(d.key, d.label, kind);
-            row.overridden = at.scope() > Scope::Global && from.as_ref() == Some(at);
-            rows.push(row);
+            rows.push(self.row_of(d, at));
         }
         rows
+    }
+
+    /// One setting's row at `at` (for screens that show a setting of their own); None if no such
+    /// setting is declared.
+    pub fn row(&self, key: &str, at: &Layer) -> Option<Row> { self.decl(key).map(|d| self.row_of(d, at)) }
+
+    fn row_of(&self, d: &SettingDecl, at: &Layer) -> Row {
+        let (v, from) = self.get(d.key, at).unwrap();
+        let kind = match d.kind {
+            SettingKind::Bool => RowKind::Toggle { on: v.as_bool().unwrap_or(false) },
+            SettingKind::Choice(options) => choice_row(options.iter().map(|(o, label)| (*o, label.to_string())), v, None),
+            SettingKind::Colour { same_as } => {
+                let same = same_as.and_then(|k| self.decl(k)).map(|f| (SAME, format!("Same as {}", f.label.to_lowercase())));
+                let colours = PALETTE.iter().map(|c| (c.id, c.label.to_string()));
+                choice_row(same.into_iter().chain(colours), v, self.colour(d.key, at))
+            }
+            SettingKind::Int { min, max, step, unit } => RowKind::Number { value: v.as_i64().unwrap_or(min), min, max, step, unit },
+        };
+        let mut row = Row::new(d.key, d.label, kind);
+        row.overridden = at.scope() > Scope::Global && from.as_ref() == Some(at);
+        row
     }
 
     /// The colour a Colour setting shows at `at`, following `SAME`; None for other settings.

@@ -3927,6 +3927,7 @@ name = "specular-core"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "serde",
  "serde_json",
  "tempfile",
 ]
@@ -3946,8 +3947,10 @@ name = "specular-linux"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde",
  "specular-core",
  "tempfile",
+ "zbus",
 ]
 
 [[package]]

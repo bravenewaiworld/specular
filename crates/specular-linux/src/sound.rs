@@ -1,15 +1,21 @@
 //! Game sound through ALSA's standard library, libasound.so.2, loaded when a game starts (as the
-//! GPU libraries are), so Specular doesn't link to it and runs without it (silently).
+//! GPU libraries are), so Specular doesn't link to it and runs without it (silently). Bluetooth
+//! headphones and speakers play through bluez-alsa's ALSA plugin.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::io;
 
 use specular_core::device::SoundOut;
+use specular_core::settings::builtin::VOLUME_MAX;
+use specular_core::wireless::bluetooth::BtAddress;
 
 /// The rate every game's sound is resampled to.
 pub const RATE: u32 = 48_000;
 /// How much sound ALSA queues (and so the most that can be waiting to play).
 const LATENCY_US: c_uint = 64_000;
+/// The same for Bluetooth: more, as bluez-alsa takes sound in chunks of 10 ms or more, behind a
+/// rate converter. Next to Bluetooth's own delay (150 ms and more) the difference hardly matters.
+const BLUETOOTH_LATENCY_US: c_uint = 100_000;
 
 const SND_PCM_STREAM_PLAYBACK: c_int = 0;
 const SND_PCM_NONBLOCK: c_int = 1;
@@ -86,7 +92,15 @@ unsafe impl Send for Alsa {}
 
 impl Alsa {
     /// Opens the ALSA device `name` ("default" for the system's choice).
-    pub fn open(name: &str) -> io::Result<Self> {
+    pub fn open(name: &str) -> io::Result<Self> { Self::open_with(name, LATENCY_US) }
+
+    /// Opens the Bluetooth headphones or speaker at `address`, through bluez-alsa (A2DP). Fails
+    /// until bluez-alsa has an audio connection to it (BlueZ shows one as a MediaTransport1).
+    pub fn bluetooth(address: &BtAddress) -> io::Result<Self> {
+        Self::open_with(&format!("bluealsa:DEV={},PROFILE=a2dp", address.0), BLUETOOTH_LATENCY_US)
+    }
+
+    fn open_with(name: &str, latency_us: c_uint) -> io::Result<Self> {
         let lib = Lib::load()?;
         let name = CString::new(name).map_err(io::Error::other)?;
         let mut pcm = std::ptr::null_mut();
@@ -94,7 +108,7 @@ impl Alsa {
         if r < 0 { return Err(lib.error("open", r)); }
         let mut out = Self { lib, pcm, capacity: 0 };
         // Soft resampling on: if the card can't do RATE itself, ALSA converts.
-        let r = unsafe { (out.lib.set_params)(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, RATE, 1, LATENCY_US) };
+        let r = unsafe { (out.lib.set_params)(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 2, RATE, 1, latency_us) };
         if r < 0 { return Err(out.lib.error("set_params", r)); }
         let (mut buffer, mut period) = (0, 0);
         let r = unsafe { (out.lib.get_params)(pcm, &mut buffer, &mut period) };
@@ -155,4 +169,15 @@ impl SoundOut for Alsa {
 
 impl Drop for Alsa {
     fn drop(&mut self) { unsafe { (self.lib.close)(self.pcm); } }
+}
+
+/// Sets the volume of the Bluetooth headphones or speaker at `address`, 0 (silent) to
+/// `VOLUME_MAX`, with amixer through bluez-alsa's mixer control for it. bluez-alsa passes the volume
+/// on to devices that take volume commands (AVRCP), and otherwise scales the sound itself.
+pub fn set_bluetooth_volume(address: &BtAddress, level: u8) -> io::Result<()> {
+    let percent = (level as i64).min(VOLUME_MAX) * 100 / VOLUME_MAX;
+    let status = std::process::Command::new("amixer")
+        .args(["-q", "-D", &format!("bluealsa:DEV={}", address.0), "cset", "name=A2DP Playback Volume", &format!("{percent}%")])
+        .status()?;
+    if status.success() { Ok(()) } else { Err(io::Error::other(format!("amixer (bluealsa {}): {status}", address.0))) }
 }
