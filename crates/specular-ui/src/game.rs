@@ -28,7 +28,7 @@ fn cores_dir() -> PathBuf {
 pub struct Playing {
     pub session: Session,
     pub frames: Arc<FrameSlot>,
-    /// The save state's file (one slot for now).
+    /// The file of the save state the menu saves and loads (one slot for now).
     pub state: PathBuf,
     /// The buttons held, as libretro joypad bits.
     held: Cell<u16>,
@@ -45,6 +45,7 @@ impl Playing {
             core: cores_dir().join(format!("{}.so", core.library)),
             rom: data.roms().join(&game.path),
             save: game.save_path(&data.saves(), "srm"),
+            autosave: Some(game.state_path(&data.roms(), "autosave")),
             system_dir: data.bios(),
             options: core.options.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
             rom_by_path: core.rom_by_path,
@@ -62,11 +63,12 @@ impl Playing {
             });
         });
         let out = Outputs { sound, vsync: device.open_vsync(), display_hz: device.profile().refresh_hz, frames: frames.clone(), on_frame };
-        let state = game.save_path(&data.saves(), "state1");
+        let state = game.state_path(&data.roms(), "state1");
         let (roms, saves, played) = (data.roms(), data.saves(), game.clone());
         std::thread::spawn(move || {
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
+            if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             started(Session::start(spec, out).map(|session| Self { session, frames, state, held: Cell::new(0) }))
         });
     }

@@ -19,7 +19,7 @@ fn main() -> Result<(), String> {
     let out = args.get(4).cloned().unwrap_or_else(|| "/tmp/play.rgba".into());
     let frames = Arc::new(FrameSlot::default());
     let session = Session::start(
-        LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), system_dir: "/tmp".into(), options: vec![], rom_by_path },
+        LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), autosave: None, system_dir: "/tmp".into(), options: vec![], rom_by_path },
         Outputs {
             sound: None, frames: frames.clone(), on_frame: Box::new(|| {}),
             vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },

@@ -32,8 +32,14 @@ pub struct LaunchSpec {
     /// The core's shared library, e.g. `.../cores/mgba_libretro.so`.
     pub core: PathBuf,
     pub rom: PathBuf,
-    /// The battery save (`.srm`): loaded before the game starts, written as the game changes it.
+    /// The battery save (`.srm`): loaded before the game starts; written when the game has
+    /// written its save memory (or, with a core that doesn't say when, within 10 s of play of it
+    /// changing), on `Session::flush`, and when the game ends.
     pub save: PathBuf,
+    /// The automatic save state, if any: the game resumes from it if it exists (one the core
+    /// can't load is ignored, and replaced by the next), and it is written every 10 s of play
+    /// (time paused doesn't count), on `Session::flush`, and when the game ends.
+    pub autosave: Option<PathBuf>,
     /// Where cores look for BIOS files (`bios/`).
     pub system_dir: PathBuf,
     /// Core options to set, by key (e.g. "mgba_idle_optimization"); the rest keep their defaults.
@@ -136,12 +142,12 @@ enum Cmd {
     Reset,
     SaveState(PathBuf, mpsc::Sender<io::Result<()>>),
     LoadState(PathBuf, mpsc::Sender<io::Result<()>>),
-    /// Writes the battery save now, if it changed (before sleeping).
+    /// Writes the battery save and the autosave now (before sleeping).
     Flush(mpsc::Sender<io::Result<()>>),
     Quit(mpsc::Sender<io::Result<()>>),
 }
 
-/// A running game. Dropping it quits the game (writing its battery save).
+/// A running game. Dropping it quits the game (writing its battery save and autosave).
 pub struct Session {
     cmds: mpsc::Sender<Cmd>,
     buttons: Arc<AtomicU16>,
@@ -201,9 +207,12 @@ impl Session {
     pub fn reset(&self) { let _ = self.cmds.send(Cmd::Reset); }
     pub fn save_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::SaveState(path.into(), r)) }
     pub fn load_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::LoadState(path.into(), r)) }
+    /// Writes the battery save and the autosave (before sleeping, say), returning once they are
+    /// on the card. The error is the first of any write since the last flush or save state,
+    /// including the ones made in the background.
     pub fn flush(&self) -> io::Result<()> { self.ask(Cmd::Flush) }
 
-    /// Ends the game: writes its battery save and unloads the core.
+    /// Ends the game: writes its battery save and autosave, and unloads the core.
     pub fn quit(mut self) -> io::Result<()> { self.stop() }
 
     fn ask(&self, cmd: impl FnOnce(mpsc::Sender<io::Result<()>>) -> Cmd) -> io::Result<()> {
@@ -229,8 +238,9 @@ impl Drop for Session {
 /// The `q`th percentile of `sorted` (zero if it is empty).
 fn percentile(sorted: &[Duration], q: usize) -> Duration { sorted.get(sorted.len() * q / 100).copied().unwrap_or_default() }
 
-/// How often the battery save is checked for changes and written.
-const SAVE_INTERVAL: Duration = Duration::from_secs(10);
+/// How much play passes between autosaves, and between checks for a changed battery save (for
+/// cores that don't say when the game writes it).
+const CHECK_INTERVAL: Duration = Duration::from_secs(10);
 /// The UI's time to draw and present a frame once it has it; the frame delay leaves this much.
 const UI_TIME: Duration = Duration::from_millis(6);
 
@@ -292,22 +302,24 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
     let g = av.geometry;
     let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps }));
 
-    let (mut paused, mut next_save) = (false, Instant::now() + SAVE_INTERVAL);
+    // Counted in frames played, so time paused doesn't count.
+    let check_frames = (CHECK_INTERVAL.as_secs_f64() * fps) as u32;
+    let (mut paused, mut frames_to_check) = (false, check_frames);
     loop {
         let cmd = match if paused { cmds.recv().map_err(|_| mpsc::TryRecvError::Disconnected) } else { cmds.try_recv() } {
             Ok(cmd) => Some(cmd),
             Err(mpsc::TryRecvError::Empty) => None,
             // The session is gone without saying quit: save, and end.
-            Err(mpsc::TryRecvError::Disconnected) => { let _ = game.write_save(); return; }
+            Err(mpsc::TryRecvError::Disconnected) => { game.save_all(None); return; }
         };
         if let Some(cmd) = cmd {
             match cmd {
                 Cmd::Pause(p) => paused = p,
                 Cmd::Reset => unsafe { (game.core.reset)() },
-                Cmd::SaveState(path, reply) => { let _ = reply.send(game.save_state(&path)); }
+                Cmd::SaveState(path, reply) => game.save_state(path, reply),
                 Cmd::LoadState(path, reply) => { let _ = reply.send(game.load_state(&path)); }
-                Cmd::Flush(reply) => { let _ = reply.send(game.write_save()); }
-                Cmd::Quit(reply) => { let _ = reply.send(game.write_save()); return; }
+                Cmd::Flush(reply) => game.save_all(Some(reply)),
+                Cmd::Quit(reply) => { game.save_all(Some(reply)); return; }
             }
             continue;
         }
@@ -326,9 +338,12 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
         }
         let queued = frontend::with(|f| { let q = sound.play(&f.samples); f.samples.clear(); q }).flatten();
         runs.lock().unwrap().sound_queued = queued;
-        if Instant::now() >= next_save {
-            if let Err(e) = game.write_save() { eprintln!("game: battery save: {e}"); }
-            next_save = Instant::now() + SAVE_INTERVAL;
+        if frontend::with(|f| std::mem::take(&mut f.save_ram_written)) == Some(true) { game.write_save(false); }
+        frames_to_check -= 1;
+        if frames_to_check == 0 {
+            game.write_save(false);
+            game.write_autosave();
+            frames_to_check = check_frames;
         }
     }
 }
@@ -343,6 +358,8 @@ struct Game {
     /// The save file exists but couldn't be loaded yet, because the core had no save memory
     /// then: it must not be overwritten until it is.
     save_pending: bool,
+    autosave: Option<PathBuf>,
+    writer: Writer,
     /// Kept for the core, which may hold on to the path. (The ROM's contents are freed once the
     /// core has loaded them: libretro only keeps them valid that long, unless a core asks for
     /// longer with SET_CONTENT_INFO_OVERRIDE, which Specular refuses; so cores copy what they
@@ -371,6 +388,7 @@ impl Game {
             variables: HashMap::new(),
             overrides: spec.options.iter().cloned().collect(),
             system_dir, save_dir,
+            save_ram_written: false,
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
@@ -383,9 +401,15 @@ impl Game {
         }
         let mut av = core::AvInfo::default();
         unsafe { (core.get_system_av_info)(&mut av) };
-        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false, _rom_path: rom_path };
+        let writer = Writer::new().map_err(|e| format!("starting the save writer: {e}"))?;
+        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
+                           autosave: spec.autosave.clone(), writer, _rom_path: rom_path };
         drop(rom);
         g.read_save();
+        if let Some(p) = spec.autosave.as_deref().filter(|p| p.exists()) && let Err(e) = g.load_state(p) {
+            // Starting afresh instead: the next autosave replaces it.
+            eprintln!("game: resuming from {}: {e}", p.display());
+        }
         Ok(g)
     }
 
@@ -400,29 +424,55 @@ impl Game {
         self.saved = ram.to_vec();
     }
 
-    /// Writes the battery save if it changed since last written. The size is read each time:
-    /// some cores (mGBA) only know it once the game has used its save memory.
-    fn write_save(&mut self) -> io::Result<()> {
+    /// Queues the battery save to be written if it changed since last written; with `always`,
+    /// even if it didn't (the last write may have failed: the writer's errors aren't seen here).
+    /// The size is read each time: some cores (mGBA) only know it once the game has used its
+    /// save memory.
+    fn write_save(&mut self, always: bool) {
         // A core that only now has save memory gets the file first.
         if self.save_pending {
             if !self.core.save_ram().is_empty() { self.read_save(); }
-            return Ok(());
+            return;
         }
         let ram = self.core.save_ram();
-        if ram.is_empty() || ram == self.saved.as_slice() { return Ok(()); }
-        let data = ram.to_vec();
-        write_atomically(&self.save, &data)?;
-        self.saved = data;
-        Ok(())
+        if ram.is_empty() || (!always && ram == self.saved.as_slice()) { return; }
+        self.saved = ram.to_vec();
+        self.writer.write(self.save.clone(), self.saved.clone());
     }
 
-    fn save_state(&mut self, path: &Path) -> io::Result<()> {
+    /// Queues the autosave to be written, if there is one.
+    fn write_autosave(&mut self) {
+        let Some(path) = self.autosave.clone() else { return };
+        match self.state() {
+            Ok(data) => self.writer.write(path, data),
+            Err(e) => eprintln!("game: autosave: {e}"),
+        }
+    }
+
+    /// Writes a save state to `path`, then sends `reply` once it is on the card.
+    fn save_state(&mut self, path: PathBuf, reply: mpsc::Sender<io::Result<()>>) {
+        match self.state() {
+            Ok(data) => { self.writer.write(path, data); self.writer.reply(reply); }
+            Err(e) => { let _ = reply.send(Err(e)); }
+        }
+    }
+
+    /// Queues the battery save (even if unchanged) and the autosave, then `reply` (if any), sent
+    /// once they are on the card, with the first error since the writer's last reply.
+    fn save_all(&mut self, reply: Option<mpsc::Sender<io::Result<()>>>) {
+        self.write_save(true);
+        self.write_autosave();
+        if let Some(r) = reply { self.writer.reply(r); }
+    }
+
+    /// The game's state, as a save state's contents.
+    fn state(&mut self) -> io::Result<Vec<u8>> {
         let size = unsafe { (self.core.serialize_size)() };
         let mut data = vec![0u8; size];
         if size == 0 || !unsafe { (self.core.serialize)(data.as_mut_ptr().cast(), size) } {
             return Err(io::Error::other("the core could not save its state"));
         }
-        write_atomically(path, &data)
+        Ok(data)
     }
 
     fn load_state(&mut self, path: &Path) -> io::Result<()> {
@@ -467,6 +517,39 @@ impl MappedFile {
 
 impl Drop for MappedFile {
     fn drop(&mut self) { if self.len > 0 { unsafe { libc::munmap(self.ptr, self.len); } } }
+}
+
+/// Writes files on a thread of its own, in the order queued, so the game's thread never waits
+/// for the card: flushing a write to an SD card can take longer than a frame. Once dropped, its
+/// thread finishes the writes queued, then ends; `Job::Reply` is how to wait for them.
+struct Writer(mpsc::Sender<Job>);
+
+enum Job {
+    Write(PathBuf, Vec<u8>),
+    /// Sends how the writes since the last reply went: the first error, if any failed.
+    Reply(mpsc::Sender<io::Result<()>>),
+}
+
+impl Writer {
+    fn new() -> io::Result<Self> {
+        let (jobs, rx) = mpsc::channel();
+        std::thread::Builder::new().name("game-saves".into()).spawn(move || {
+            let mut failed = None;
+            for job in rx {
+                match job {
+                    Job::Write(path, data) => if let Err(e) = write_atomically(&path, &data) {
+                        eprintln!("game: writing {}: {e}", path.display());
+                        failed.get_or_insert(e);
+                    },
+                    Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); }
+                }
+            }
+        })?;
+        Ok(Self(jobs))
+    }
+
+    fn write(&self, path: PathBuf, data: Vec<u8>) { let _ = self.0.send(Job::Write(path, data)); }
+    fn reply(&self, reply: mpsc::Sender<io::Result<()>>) { let _ = self.0.send(Job::Reply(reply)); }
 }
 
 /// Writes `data` to `path` so a power cut leaves either the old file or the new one (FAT has no

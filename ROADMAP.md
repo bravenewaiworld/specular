@@ -32,9 +32,9 @@ Specular is a retro-gaming frontend: a launcher plus a libretro emulation runtim
 
 | Folder | Contents |
 |---|---|
-| `roms/` | Games, scanned recursively. The system is worked out from the file extension, and from the header where an extension is shared. |
+| `roms/` | Games, scanned recursively. The system is worked out from the file extension, and from the header where an extension is shared. Save states go in a hidden `.states/` folder beside each game, named after its ROM (`roms/gba/.states/Golden Sun.state1`, `.autosave`). |
 | `bios/` | BIOS files |
-| `saves/` | Battery saves (`.srm`) and save states, in a directory tree that mirrors `roms/`, with each file named after its ROM (e.g. `roms/gba/Golden Sun.gba` → `saves/gba/Golden Sun.srm`). Smarter matching can come later. |
+| `saves/` | Battery saves (`.srm`), in a directory tree that mirrors `roms/`, with each file named after its ROM (e.g. `roms/gba/Golden Sun.gba` → `saves/gba/Golden Sun.srm`). Smarter matching can come later. |
 | `configs/` | Every setting and override as plain JSON, layered: built-in defaults < global < per system < per game. Only overrides are stored. Unknown keys are kept. |
 | `cache/` | Things Specular can rebuild: box art, the library index. Safe to delete. |
 
@@ -202,7 +202,7 @@ Long lists (2026-10-12): the core's list layout gives the rows within a screen o
 2. The trimmed libretro-database (`tools/trim-db.py`, `data/db/`), compiled in.
 3. The art sources and the `cache/` layout: the user's PNG next to the ROM, then `cache/art/` (mirroring `roms/`, 400 px), filled from libretro-thumbnails; what is known per ROM is in `cache/identify/`.
 4. The download queue: games on screen first, then the rest, one at a time; it waits a minute after a network error and pauses while a game runs.
-5. Saves in the mirrored `saves/` tree. Saves follow a renamed or moved ROM: `saves/.specular-saves.json` records the size and checksum of each ROM played, and after a scan the saves of a ROM that is gone move to the one game without saves with the same file.
+5. Saves in the mirrored `saves/` tree. Saves follow a renamed or moved ROM: `saves/.specular-saves.json` records the size and checksum of each ROM played, and after a scan the saves of a ROM that is gone (battery saves and states) move to the one game without battery saves with the same file.
 
 ### 5. Runtime
 
@@ -211,8 +211,9 @@ Long lists (2026-10-12): the core's list layout gives the rows within a screen o
 3. 3D-capable cores with a shared GL context.
 4. Per-system cores and defaults: mGBA for GB, GBC and GBA (`tools/build-cores.sh`). The MVP plays these three (decided 2026-10-13); systems with no core are left out of the library. NES, SNES, Mega Drive and PS1 come after it, each with a licence and speed check: the usual cores are non-commercial (snes9x, Genesis Plus GX, PicoDrive) or possibly GPLv2-only (FCEUmm, PCSX ReARMed); bsnes, BlastEm, QuickNES or Nestopia, and SwanStation are the GPLv3-compatible candidates.
 5. Done: pausing on sleep, writing the battery save first; waking reopens the in-game menu.
-6. Done: battery saves written every 10 s when changed, on quit, on sleep and on a stop signal.
+6. Done: battery saves written when the game has written its save memory (mGBA says when, with our patch `tools/core-patches/mgba/0002`), checked every 10 s of play for other cores, and written on quit, on sleep and on a stop signal. Files are written on a thread of their own, never the game's.
 7. Done: a watchdog: a core that spends 6 s on one frame (stuck in a loop or a deadlock) makes Specular exit, and the service manager restarts it.
+8. Done: an autosave (`.autosave`), written every 10 s of play, on sleep and on quit; a game resumes from it at launch. Measured on the Brick (2026-10-14, pokehns): making the 516 KB state takes 3.5-4.7 ms of the game's thread with our patch `tools/core-patches/mgba/0003`, which has mGBA make it once per save state rather than twice; 6-7 ms without, after which no frame was late.
 
 ### Later
 

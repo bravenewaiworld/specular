@@ -24,6 +24,9 @@ pub struct Frontend {
     pub overrides: HashMap<String, String>,
     pub system_dir: CString,
     pub save_dir: CString,
+    /// Set when the core makes the `ENV_SAVE_RAM_WRITTEN` call; the game's thread clears it after
+    /// each `retro_run`.
+    pub save_ram_written: bool,
 }
 
 thread_local! {
@@ -102,6 +105,7 @@ impl Frontend {
                     if !m.msg.is_null() { eprintln!("core: {}", CStr::from_ptr(m.msg).to_string_lossy()); }
                     true
                 }
+                ENV_SAVE_RAM_WRITTEN => { self.save_ram_written = true; true }
                 ENV_GET_INPUT_BITMASKS | ENV_SET_INPUT_DESCRIPTORS | ENV_SET_CONTROLLER_INFO | ENV_SET_MEMORY_MAPS
                 | ENV_SET_SUPPORT_ACHIEVEMENTS | ENV_SET_SUPPORT_NO_GAME | ENV_SET_PERFORMANCE_LEVEL
                 | ENV_SET_CORE_OPTIONS_DISPLAY | ENV_SET_MINIMUM_AUDIO_LATENCY | ENV_SET_SYSTEM_AV_INFO

@@ -102,10 +102,16 @@ impl Game {
         crate::settings::Layer::Game { system: self.system.to_string(), game: self.path.with_extension("").to_string_lossy().into_owned() }
     }
 
-    /// Where a save of this game goes: `saves/` mirrors `roms/`, with the ROM's name and the
-    /// save's own extension (e.g. "srm", or "state1" for a save state).
+    /// Where a battery save of this game goes: `saves/` mirrors `roms/`, with the ROM's name and
+    /// the save's own extension (e.g. "srm").
     pub fn save_path(&self, saves: &Path, extension: &str) -> PathBuf {
         saves.join(self.path.with_extension(extension))
+    }
+
+    /// Where a save state of this game goes: in the `.states` folder beside its ROM (shared by
+    /// the folder's games), with the ROM's name and the slot's extension (e.g. "state1").
+    pub fn state_path(&self, roms: &Path, extension: &str) -> PathBuf {
+        saves::in_states_folder(&roms.join(self.path.with_extension(extension)))
     }
 }
 
