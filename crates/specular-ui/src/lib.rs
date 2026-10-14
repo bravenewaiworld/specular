@@ -269,8 +269,9 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
     (tx, handle)
 }
 
-/// Ignore power-key presses this long after waking: the press that woke the device arrives once
-/// it is running again and must not send it straight back to sleep.
+/// Power-key presses are ignored from the request to sleep until this long after waking. The
+/// press that woke the device is delivered as it resumes, before the sleep command returns (it
+/// also restarts WiFi), and must not send the device straight back to sleep.
 const WAKE_GRACE: Duration = Duration::from_millis(1500);
 
 struct Runner {
@@ -386,6 +387,7 @@ impl Runner {
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
             }
             Effect::Sleep => {
+                self.ignore_power_until.set(Duration::MAX); // until `Msg::Woke`
                 // A game's battery save is written first: power can fail while asleep.
                 self.with_game(|p| { p.pause(true); p.session.flush().map(|()| "") });
                 let _ = self.hardware.send(HwCmd::Sleep);
