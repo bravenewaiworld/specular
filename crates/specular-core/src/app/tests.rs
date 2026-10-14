@@ -11,7 +11,7 @@ fn game(system: &'static str, title: &str) -> Game {
 
 fn app() -> App {
     let mut app = App::new(builtin_systems(), crate::settings::builtin::settings());
-    app.handle(Msg::Library(vec![game("gba", "Golden Sun"), game("gba", "Mother 3"), game("snes", "Super Metroid")]));
+    app.handle(Msg::Library { games: vec![game("gba", "Golden Sun"), game("gba", "Mother 3"), game("snes", "Super Metroid")], card_found: true });
     app
 }
 
@@ -105,7 +105,7 @@ fn menu_goes_home_and_power_sleeps() {
 #[ignore]
 fn time_focus_moves_in_a_long_list() {
     let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
-    a.handle(Msg::Library((0..3000).map(|i| game("snes", &format!("Game {i:04}"))).collect()));
+    a.handle(Msg::Library { games: (0..3000).map(|i| game("snes", &format!("Game {i:04}"))).collect(), card_found: true });
     tap(&mut a, Button::A, 0);
     let t = std::time::Instant::now();
     for i in 0..1000 {
@@ -119,7 +119,7 @@ fn time_focus_moves_in_a_long_list() {
 #[test]
 fn y_switches_games_to_a_grid_where_left_and_right_move() {
     let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
-    a.handle(Msg::Library((0..7).map(|i| game("gba", &format!("Game {i}"))).collect()));
+    a.handle(Msg::Library { games: (0..7).map(|i| game("gba", &format!("Game {i}"))).collect(), card_found: true });
     a.set_grid_columns(3);
     tap(&mut a, Button::A, 0);
     assert_eq!(a.view().layout, Layout::ListWithPicture);
@@ -192,8 +192,10 @@ fn home_says_where_games_go_when_there_are_none() {
     let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
     let labels = |a: &App| a.view().rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
     assert!(labels(&a).contains(&"Looking for games…".to_string()));
-    a.handle(Msg::Library(vec![]));
+    a.handle(Msg::Library { games: vec![], card_found: true });
     assert!(labels(&a).contains(&"No games found".to_string()));
     assert_eq!(a.view().rows[a.focus()].label, "No games found");
     assert_eq!(tap(&mut a, Button::A, 0), vec![]); // a note does nothing
+    a.handle(Msg::Library { games: vec![], card_found: false });
+    assert!(labels(&a).contains(&"No SD card".to_string()));
 }

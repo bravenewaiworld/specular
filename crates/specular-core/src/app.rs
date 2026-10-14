@@ -26,8 +26,9 @@ pub enum Msg {
     /// the device sleeps if it has been left alone for the "Sleep after" time. Sent when a repeat
     /// is due (`App::next_deadline`) and at least once a minute.
     Tick(Duration),
-    /// A library scan finished.
-    Library(Vec<Game>),
+    /// A library scan finished. `card_found` is false when the data folder is missing or empty,
+    /// which is how a device looks without its SD card.
+    Library { games: Vec<Game>, card_found: bool },
     Battery(Battery),
     /// The device woke from sleep.
     Woke,
@@ -81,6 +82,8 @@ pub struct Ctx {
     pub games: Vec<Game>,
     /// Whether the library has been scanned yet (until then `games` is empty).
     pub scanned: bool,
+    /// Whether the last scan found an SD card (see `Msg::Library`).
+    pub card_found: bool,
     pub settings: Settings,
     pub battery: Option<Battery>,
 }
@@ -160,7 +163,7 @@ impl App {
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
         Self {
-            ctx: Ctx { systems, games: Vec::new(), scanned: false, settings: Settings::new(settings), battery: None },
+            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -245,7 +248,13 @@ impl App {
                 e.extend(self.sleep_if_idle(now));
                 e
             }
-            Msg::Library(games) => { self.ctx.games = games; self.ctx.scanned = true; self.changed(); vec![Effect::Redraw(None)] }
+            Msg::Library { games, card_found } => {
+                self.ctx.games = games;
+                self.ctx.card_found = card_found;
+                self.ctx.scanned = true;
+                self.changed();
+                vec![Effect::Redraw(None)]
+            }
             // A game slept through stays paused, with its menu open.
             Msg::Woke => {
                 self.repeater.reset();
@@ -377,11 +386,14 @@ impl Screen for Home {
         }
         if ctx.games.is_empty() {
             let note = |id: &str, text: &str| Row { enabled: false, ..Row::new(id, text, RowKind::Text { detail: None }) };
-            if ctx.scanned {
+            if !ctx.scanned {
+                rows.push(note("note:scanning", "Looking for games…"));
+            } else if !ctx.card_found {
+                rows.push(note("note:none", "No SD card"));
+                rows.push(note("note:where", "Insert one with your games in roms/"));
+            } else {
                 rows.push(note("note:none", "No games found"));
                 rows.push(note("note:where", "Put them in roms/ on the SD card"));
-            } else {
-                rows.push(note("note:scanning", "Looking for games…"));
             }
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));

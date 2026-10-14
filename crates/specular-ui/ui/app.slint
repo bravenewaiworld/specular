@@ -394,7 +394,7 @@ export component AppWindow inherits Window {
         height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
     }
 
-    // The toast: a short message above the hint bar. A long one wraps, within the gutters.
+    // The toast: a short message above the hint bar. A long one wraps to stay within the gutters.
     property <length> toast-pad: 32px * Theme.u;
     Rectangle {
         y: root.height - Theme.hint-bar - self.height - 24px * Theme.u;

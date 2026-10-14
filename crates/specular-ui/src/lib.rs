@@ -240,10 +240,9 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         // A corrupt file has been moved aside; either way, start from what could be read.
         let values = store::load_layer(&Layer::Global.path(&data.configs())).unwrap_or_else(|e| { eprintln!("settings: {e:?}"); Default::default() });
         post(Msg::SettingsLoaded(Layer::Global, values));
-        let roms = data.roms();
-        let saves = data.saves();
         // The library: scanned now, and again whenever the games on the card change.
         std::thread::spawn(move || {
+            let (roms, saves) = (data.roms(), data.saves());
             let watch = watch::RomsWatch::new().map_err(|e| eprintln!("library: can't watch for new games: {e}")).ok();
             loop {
                 if let Some(w) = &watch { w.watch(&roms); }
@@ -251,7 +250,11 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
                 for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
                     eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
                 }
-                post(Msg::Library(games));
+                // Without its SD card, a device's data folder is an empty (or missing) mount point.
+                // That only holds while nothing is written there: fine on a read-only system,
+                // where Specular's own writes (settings, cache) fail.
+                let card_found = std::fs::read_dir(&data.0).is_ok_and(|mut d| d.next().is_some());
+                post(Msg::Library { games, card_found });
                 let Some(w) = &watch else { return };
                 w.wait_for_change();
             }
@@ -338,7 +341,7 @@ impl Runner {
         match &msg {
             Msg::Button(e) if e.button == Button::Power && e.time < self.ignore_power_until.get() => return,
             Msg::Woke => self.ignore_power_until.set(now() + WAKE_GRACE),
-            Msg::Library(games) => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
+            Msg::Library { games, .. } => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
             _ => {}
         }
         let woke = matches!(msg, Msg::Woke);
