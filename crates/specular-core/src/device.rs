@@ -126,6 +126,8 @@ pub struct Hardware {
     pub wifi: Option<Box<wireless::Wifi>>,
     /// None on devices without Bluetooth.
     pub bluetooth: Option<Box<wireless::Bluetooth>>,
+    /// None on devices without internal storage to install onto.
+    pub installer: Option<Box<dyn crate::install::Installer>>,
 }
 
 /// A device: what it is, and its hardware.
@@ -182,6 +184,7 @@ pub mod simulated {
             power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)),
             wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", radio(&script, "bluetooth")))),
+            installer: Some(Box::new(crate::install::Simulated)),
         }
     }
 

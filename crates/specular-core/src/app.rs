@@ -22,8 +22,10 @@ use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
 mod icons;
+mod install;
 mod wireless;
 pub use wireless::{BtState, WifiNeed, WifiState};
+pub use install::{InstallCmd, InstallState, TaskView};
 
 /// Something that happened.
 #[derive(Debug)]
@@ -53,6 +55,10 @@ pub enum Msg {
     /// Sound couldn't be played on this output (it didn't open): the device's own plays it
     /// instead, until the Bluetooth device reconnects.
     SoundFailed(Output),
+    /// The installer's answer to `InstallCmd::Offer`.
+    InstallOffer(Result<crate::install::Offer, String>),
+    /// The progress of the task started with `InstallCmd::Start`.
+    InstallProgress(crate::install::Progress),
 }
 
 /// Something the app wants done, in the order given.
@@ -94,6 +100,7 @@ pub enum Effect {
     Bluetooth(BtCmd),
     /// Sound goes to this output from now on, including a running game's.
     SoundTo(Output),
+    Installer(InstallCmd),
 }
 
 /// Holding the power button this long opens the power menu; a shorter press sleeps.
@@ -122,6 +129,8 @@ pub struct Ctx {
     /// None on a device without WiFi (or Bluetooth); see `App::has_radios`.
     pub wifi: Option<WifiState>,
     pub bluetooth: Option<BtState>,
+    /// None on a device without an installer; see `App::has_installer`.
+    pub install: Option<InstallState>,
 }
 
 impl Ctx {
@@ -188,6 +197,13 @@ pub mod screens {
     /// The on-screen keyboard, for the screen below it. Its presses are handled by the app itself
     /// (see `App::keyboard`).
     pub const KEYBOARD: ScreenId = ScreenId(std::borrow::Cow::Borrowed("keyboard"));
+    /// "Install to internal storage?", "Restore internal storage" (the backups), "Restore …?",
+    /// and a running task's progress (see `app::install`). Install, restore-confirm and task
+    /// presses are handled by the app itself.
+    pub const INSTALL: ScreenId = ScreenId(std::borrow::Cow::Borrowed("install"));
+    pub const RESTORE: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore"));
+    pub const RESTORE_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore confirm"));
+    pub const TASK: ScreenId = ScreenId(std::borrow::Cow::Borrowed("task"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -237,8 +253,9 @@ impl App {
         screens.insert(screens::POWER_MENU, Box::new(PowerMenu));
         wireless::register(&mut screens);
         icons::register(&mut screens);
+        install::register(&mut screens);
         Self {
-            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None },
+            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -293,7 +310,7 @@ impl App {
     /// When the device will sleep if left alone, so the caller can wake up for it. None if it
     /// won't (a game is running unpaused, sleep is off, or the idle count hasn't started).
     pub fn sleep_deadline(&self) -> Option<Duration> {
-        if self.input_target() == InputTarget::Game { return None; }
+        if self.input_target() == InputTarget::Game || self.task_running() { return None; }
         Some(self.idle_since? + self.sleep_after()?)
     }
 
@@ -306,7 +323,7 @@ impl App {
     /// Sleeps if nothing has been pressed for the "Sleep after" time. The idle count is cleared
     /// when sleeping, so `sleep_deadline` doesn't stay due while the device suspends.
     fn sleep_if_idle(&mut self, now: Duration) -> Vec<Effect> {
-        if self.input_target() == InputTarget::Game { return vec![]; }
+        if self.input_target() == InputTarget::Game || self.task_running() { return vec![]; }
         let since = *self.idle_since.get_or_insert(now);
         match self.sleep_after() {
             Some(after) if now.saturating_sub(since) >= after => {
@@ -411,6 +428,8 @@ impl App {
             Msg::Bluetooth(e) => self.bluetooth_event(e),
             Msg::WifiNeed { need, wanted, time } => { self.now = self.now.max(time); self.wifi_need(need, wanted); vec![] }
             Msg::SoundFailed(output) => self.sound_failed(output),
+            Msg::InstallOffer(offer) => self.install_offer(offer),
+            Msg::InstallProgress(p) => self.install_progress(p),
         }
     }
 
@@ -445,13 +464,22 @@ impl App {
         let row = focused.map(|r| r.id.0.as_str());
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
+        if id == screens::INSTALL { return self.install_screen(p.button, row); }
+        if id == screens::RESTORE_CONFIRM { return self.restore_confirm(p.button, row); }
+        if id == screens::TASK { return self.task_screen(p.button, row); }
         // (A, B and Menu never repeat.)
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
         let outcome = self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p);
         match outcome {
             Outcome::None => vec![],
             Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
-            Outcome::Push(s) => self.go(|nav| Some(nav.push(s))),
+            Outcome::Push(s) => {
+                // Settings shows what the installer can do now.
+                let ask = (s.id == screens::SETTINGS && self.ctx.install.is_some()).then_some(Effect::Installer(InstallCmd::Offer));
+                let mut e = self.go(|nav| Some(nav.push(s)));
+                e.extend(ask);
+                e
+            }
             Outcome::Back => self.go(|nav| nav.pop()),
             Outcome::BackWith(mut e) => { e.extend(self.go(|nav| nav.pop())); e }
             Outcome::Type { prompt, masked, purpose } => {
@@ -501,6 +529,11 @@ impl App {
     /// The power button, on every screen and in games: a tap (released within `POWER_HOLD`)
     /// sleeps; holding it opens the power menu once the hold is due (see `Msg::Tick`).
     fn power_button(&mut self, e: &ButtonEvent) -> Vec<Effect> {
+        // Nothing may interrupt the installer (see app::install).
+        if self.task_running() {
+            self.power_down = None;
+            return if e.pressed { vec![Effect::Notice(self.task_wait_notice().into())] } else { vec![] };
+        }
         if e.pressed {
             self.repeater.reset();
             self.power_down = Some(e.time);
@@ -671,6 +704,7 @@ impl Screen for SettingsScreen {
         let mut rows = wireless::settings_rows(ctx);
         rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility()));
         if ctx.visibility() == Visibility::Developer { rows.push(Row::new("open:icons", "Icons", RowKind::Action { value: None })); }
+        rows.extend(install::settings_rows(ctx));
         ScreenView { title: "Settings".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
     }
 
@@ -678,6 +712,7 @@ impl Screen for SettingsScreen {
         if p.button == Button::B { return Outcome::Back; }
         if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
         if focused.is_some_and(|row| row.id.0 == "open:icons") && p.button == Button::A { return Outcome::Push(ScreenState::new(screens::ICONS, None)); }
+        if let Some(open) = focused.and_then(|row| install::settings_press(ctx, row, p)) { return open; }
         focused.map_or(Outcome::None, |row| setting_press(ctx, row, p))
     }
 }

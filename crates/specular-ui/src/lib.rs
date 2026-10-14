@@ -71,15 +71,15 @@ impl DataRoot {
     pub fn bios(&self) -> PathBuf { self.0.join("bios") }
 }
 
-/// Runs Specular on `device` until the event loop ends. `install` sets up the device's platform;
+/// Runs Specular on `device` until the event loop ends. `platform` sets up the device's platform;
 /// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`).
 /// The device is also used from other threads, to open sound outputs (which can block).
-pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, install: Option<InstallPlatform>) -> Result<(), Error> {
+pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Option<InstallPlatform>) -> Result<(), Error> {
     quit_on_signals();
     let profile = device.profile();
-    let keyboard = install.is_none();
-    if let Some(install) = install {
-        install(Box::new(|e| post(Msg::Button(e))))?;
+    let keyboard = platform.is_none();
+    if let Some(platform) = platform {
+        platform(Box::new(|e| post(Msg::Button(e))))?;
     }
     let window = AppWindow::new()?;
     let theme = window.global::<Theme>();
@@ -90,9 +90,10 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, install: Optio
     let systems = playable_systems();
     // The radios get threads of their own; the rest of the hardware goes to the hardware thread.
     let mut hardware = device.hardware();
-    let (wifi, bluetooth) = (hardware.wifi.take(), hardware.bluetooth.take());
+    let (wifi, bluetooth, installer) = (hardware.wifi.take(), hardware.bluetooth.take(), hardware.installer.take());
     let mut app = App::new(systems.clone(), builtin::settings());
     app.has_radios(wifi.is_some(), bluetooth.is_some());
+    app.has_installer(installer.is_some());
     // Without WiFi, the network (if any) is assumed to be there.
     let online = wifi.is_none();
     let art_worker = art::worker(data.roms(), data.cache(), systems, vec![Box::new(art::LibretroThumbnails::new())], online,
@@ -110,6 +111,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, install: Optio
         hardware: hardware_thread(hardware),
         wifi: wifi.map(|s| radio_thread("wifi", s, Msg::Wifi)),
         bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
+        installer: installer.map(installer_thread),
         io,
         configs: data.configs(),
         data,
@@ -306,6 +308,23 @@ fn radio_thread<C: Send + 'static, E: Send + 'static>(name: &str, mut service: B
     tx
 }
 
+/// The installer's thread: asks it what can be done, and starts its tasks (whose progress it
+/// reports from a thread of its own).
+fn installer_thread(installer: Box<dyn specular_core::install::Installer>) -> mpsc::Sender<specular_core::app::InstallCmd> {
+    use specular_core::app::InstallCmd;
+    let (tx, rx) = mpsc::channel();
+    let spawned = std::thread::Builder::new().name("installer".into()).spawn(move || {
+        for cmd in rx {
+            match cmd {
+                InstallCmd::Offer => post(Msg::InstallOffer(installer.offer())),
+                InstallCmd::Start(task) => installer.start(task, Box::new(|p| post(Msg::InstallProgress(p)))),
+            }
+        }
+    });
+    if let Err(e) = spawned { eprintln!("installer: can't start its thread: {e}"); }
+    tx
+}
+
 /// A settings file to write.
 struct Save(PathBuf, serde_json::Map<String, serde_json::Value>);
 
@@ -363,6 +382,8 @@ struct Runner {
     /// The radios' threads (None for a radio the device doesn't have).
     wifi: Option<mpsc::Sender<specular_core::wireless::wifi::WifiCmd>>,
     bluetooth: Option<mpsc::Sender<specular_core::wireless::bluetooth::BtCmd>>,
+    /// The installer's thread (None on a device without one).
+    installer: Option<mpsc::Sender<specular_core::app::InstallCmd>>,
     io: mpsc::Sender<Save>,
     configs: PathBuf,
     data: DataRoot,
@@ -509,6 +530,7 @@ impl Runner {
             Effect::Restart => { let _ = self.hardware.send(HwCmd::Restart); }
             Effect::Wifi(cmd) => if let Some(t) = &self.wifi { let _ = t.send(cmd); },
             Effect::Bluetooth(cmd) => if let Some(t) = &self.bluetooth { let _ = t.send(cmd); },
+            Effect::Installer(cmd) => if let Some(t) = &self.installer { let _ = t.send(cmd); },
             Effect::SoundTo(output) => self.set_output(output),
         }
     }

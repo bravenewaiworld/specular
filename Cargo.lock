@@ -3916,6 +3916,7 @@ dependencies = [
  "khronos-egl",
  "libc",
  "libloading",
+ "serde_json",
  "slint",
  "specular-core",
  "specular-linux",

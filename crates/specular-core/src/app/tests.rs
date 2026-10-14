@@ -550,3 +550,104 @@ mod wireless {
         assert_eq!(radio_effects(&e), [&Effect::Bluetooth(BtCmd::Search(false)), &Effect::Bluetooth(BtCmd::Power(false)), &Effect::SoundTo(Output::Builtin)]);
     }
 }
+
+mod install {
+    use super::*;
+    use crate::install::{Backup, InstallOffer, Offer, Progress, Task, TaskError};
+
+    /// An app with an installer, at home.
+    fn install_app() -> App {
+        let mut a = app();
+        a.has_installer(true);
+        a
+    }
+
+    fn offer() -> Offer {
+        Offer {
+            install: Some(InstallOffer { bytes: 7_818_182_656, backup_possible: true, free: 20_000_000_000 }), why_not: None,
+            backups: vec![Backup { dir: "/mnt/SDCARD/backups/internal-20261014-232447".into(), created: "20261014-232447".into(), bytes: 7_818_182_656 }],
+        }
+    }
+
+    /// Opens Settings (which asks the installer what it can do) and gives it `offer`.
+    fn settings(a: &mut App, offer: Offer) {
+        tap(a, Button::Up, 0); // home wraps to its last row, Settings
+        let e = tap(a, Button::A, 0);
+        assert!(e.contains(&Effect::Installer(InstallCmd::Offer)), "{e:?}");
+        a.handle(Msg::InstallOffer(Ok(offer)));
+    }
+
+    /// Moves the focus to the row labelled `label` and presses A.
+    fn press(a: &mut App, label: &str) -> Vec<Effect> {
+        for _ in 0..a.view().rows.len() {
+            if focused(a) == label { return tap(a, Button::A, 0); }
+            tap(a, Button::Down, 0);
+        }
+        panic!("no row {label} in {:?}", a.view().rows.iter().map(|r| &r.label).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn settings_offers_installing_and_restoring_only_when_the_installer_can() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
+        assert!(labels.ends_with(&["Internal storage".into(), "Install to internal storage".into(), "Restore internal storage".into()]), "{labels:?}");
+        a.handle(Msg::InstallOffer(Ok(Offer { install: None, why_not: Some("running from the internal storage".into()), backups: vec![] })));
+        assert!(!a.view().rows.iter().any(|r| r.label == "Internal storage"));
+    }
+
+    #[test]
+    fn installing_asks_first_runs_without_interruption_then_restarts() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        press(&mut a, "Install to internal storage");
+        assert_eq!(a.view().title, "Install to internal storage?");
+        assert_eq!(focused(&a), "Cancel"); // it erases: the focus starts on Cancel
+        press(&mut a, "Back up the internal storage first"); // on by default (there's room): now off
+        let e = press(&mut a, "Install");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Install { backup: false, keep_card_bootable: false })));
+        assert_eq!(a.view().title, "Installing…");
+        // Nothing interrupts it: not B, Menu, the power button or sleep.
+        for b in [Button::B, Button::Menu] { assert_eq!(tap(&mut a, b, 0), vec![]); }
+        assert_eq!(tap(&mut a, Button::Power, 0), vec![Effect::Notice("Please wait until installing has finished".into())]);
+        assert_eq!(a.sleep_deadline(), None);
+        a.handle(Msg::InstallProgress(Progress::Step { index: 1, of: 5, label: "Checking".into() }));
+        a.handle(Msg::InstallProgress(Progress::Step { index: 2, of: 5, label: "Partitioning".into() }));
+        a.handle(Msg::InstallProgress(Progress::Fraction(0.5)));
+        let details: Vec<_> = a.view().rows.iter().map(|r| match &r.kind { RowKind::Text { detail } => detail.clone(), _ => None }).collect();
+        assert_eq!(details[..2], [Some("Done".into()), Some("50 %".into())]);
+        let e = a.handle(Msg::InstallProgress(Progress::Done(Ok("Installed.".into()))));
+        assert!(e.contains(&Effect::Installer(InstallCmd::Offer))); // what can be done has changed
+        assert_eq!(a.view().title, "Installed");
+        assert_eq!(press(&mut a, "Restart"), vec![Effect::Restart]);
+    }
+
+    #[test]
+    fn a_failed_install_says_why_and_goes_back() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        press(&mut a, "Install to internal storage");
+        press(&mut a, "Install");
+        let error = TaskError { message: "the battery is at 20 %".into(), hint: "Connect the charger.".into(), log: Some("/mnt/SDCARD/logs/install.log".into()) };
+        a.handle(Msg::InstallProgress(Progress::Done(Err(error))));
+        assert_eq!(a.view().title, "Install failed");
+        let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
+        assert!(labels.contains(&"Connect the charger.".into()) && labels.contains(&"Log: /mnt/SDCARD/logs/install.log".into()), "{labels:?}");
+        assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
+        assert_eq!(a.view().title, "Install to internal storage?");
+        assert!(!a.task_running());
+    }
+
+    #[test]
+    fn restoring_lists_the_backups_and_asks_first() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        press(&mut a, "Restore internal storage");
+        press(&mut a, "2026-10-14 23:24 UTC");
+        assert_eq!(a.view().title, "Restore the internal storage?");
+        let e = press(&mut a, "Restore");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Restore { dir: "/mnt/SDCARD/backups/internal-20261014-232447".into() })));
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("Restored.".into()))));
+        assert_eq!(press(&mut a, "Power off"), vec![Effect::PowerOff]);
+    }
+}

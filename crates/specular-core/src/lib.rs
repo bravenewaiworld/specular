@@ -6,6 +6,7 @@ pub mod app;
 pub mod art;
 pub mod device;
 pub mod input;
+pub mod install;
 pub mod keyboard;
 pub mod library;
 pub mod list;

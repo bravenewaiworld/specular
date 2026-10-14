@@ -49,6 +49,7 @@ impl Device for Brick {
             audio: Box::new(Volume),
             wifi: Some(Box::new(Traced::new("wifi", WpaSupplicant::new(crate::wifi::SOCKET, Box::new(crate::wifi::BrickWifi))))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
+            installer: Some(Box::new(crate::install::BrickInstaller)),
         }
     }
 

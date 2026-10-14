@@ -3,5 +3,6 @@
 pub mod device;
 pub mod egl;
 pub mod fonts;
+pub mod install;
 pub mod platform;
 pub mod wifi;
