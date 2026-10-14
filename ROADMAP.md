@@ -150,7 +150,7 @@ pub trait ArtSource: Send + Sync {
 
 ### 2. Brick spike: done (2026-10-12)
 
-The spike checked the stack on the reference device. It lives in `devices/brick/` (the platform in `src/`, the measurements in `examples/`) and stays as a regression check. Build it with `make specular`; `tools/run-specular.sh <binary> [args]` runs a build on a Brick over adb, with the test card's frontend service stopped.
+The spike checked the stack on the reference device. It lives in `devices/brick/` (the platform in `src/`, the measurements in `examples/`) and stays as a regression check. Build it with `make specular`; `tools/run-specular.sh <binary> [args]` (or `make run-specular`) runs a build on a Brick over SSH, with the frontend service stopped.
 
 Brick facts it builds on: the GPU libraries offer OpenGL ES 3.2 and EGL 1.4 with only PowerVR's NULL window system (drawing goes straight to `/dev/fb0`; no DRM, Wayland or X11), and the display runs at about 60.2 Hz.
 
