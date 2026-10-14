@@ -15,12 +15,16 @@ fn app() -> App {
     app
 }
 
-/// Presses and releases a button at time `t` (ms).
+/// Presses and releases a button at time `t` (ms); returns the effects of both.
 fn tap(app: &mut App, button: Button, t: u64) -> Vec<Effect> {
-    let time = Duration::from_millis(t);
-    let e = app.handle(Msg::Button(ButtonEvent { button, pressed: true, time }));
-    app.handle(Msg::Button(ButtonEvent { button, pressed: false, time }));
+    let mut e = event(app, button, true, t);
+    e.extend(event(app, button, false, t));
     e
+}
+
+/// A press (`pressed`) or release of `button` at time `t` (ms).
+fn event(app: &mut App, button: Button, pressed: bool, t: u64) -> Vec<Effect> {
+    app.handle(Msg::Button(ButtonEvent { button, pressed, time: Duration::from_millis(t) }))
 }
 
 fn focused(app: &App) -> String { app.view().rows[app.focus()].label.clone() }
@@ -97,7 +101,54 @@ fn menu_goes_home_and_power_sleeps() {
     tap(&mut a, Button::A, 0);
     assert_eq!(tap(&mut a, Button::Menu, 10), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(a.view().title, "Library");
-    assert_eq!(tap(&mut a, Button::Power, 20), vec![Effect::Sleep]);
+    // A tap sleeps on its release, if that comes before the hold is due.
+    assert_eq!(event(&mut a, Button::Power, true, 20), vec![]);
+    assert_eq!(a.next_deadline(), Some(Duration::from_millis(1020)));
+    assert_eq!(event(&mut a, Button::Power, false, 900), vec![Effect::Sleep]);
+    assert_eq!(a.next_deadline(), None);
+}
+
+#[test]
+fn holding_power_opens_the_power_menu() {
+    let mut a = app();
+    event(&mut a, Button::Power, true, 0);
+    assert_eq!(a.handle(Msg::Tick(Duration::from_millis(999))), vec![]);
+    assert_eq!(a.handle(Msg::Tick(Duration::from_millis(1000))), vec![Effect::Redraw(Some(Transition::Push))]);
+    assert_eq!(a.view().title, "Power");
+    assert_eq!(event(&mut a, Button::Power, false, 1500), vec![]); // the hold's release doesn't sleep
+    assert_eq!(tap(&mut a, Button::B, 1600), vec![Effect::Redraw(Some(Transition::Pop))]);
+    assert_eq!(a.view().title, "Library");
+    event(&mut a, Button::Power, true, 2000);
+    a.handle(Msg::Tick(Duration::from_millis(3000)));
+    assert_eq!(tap(&mut a, Button::A, 3100), vec![Effect::Notice("Turning off…".into()), Effect::PowerOff]);
+}
+
+#[test]
+fn holding_power_in_a_game_pauses_it_and_restarting_quits_it() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10); // playing
+    event(&mut a, Button::Power, true, 20);
+    assert_eq!(a.handle(Msg::Tick(Duration::from_millis(1020))),
+               vec![Effect::PauseGame(true), Effect::Redraw(Some(Transition::Push)), Effect::Redraw(Some(Transition::Push))]);
+    assert_eq!(a.input_target(), InputTarget::App);
+    // Cancelling leaves the game menu open, the game paused.
+    assert_eq!(tap(&mut a, Button::B, 1100), vec![Effect::Redraw(Some(Transition::Pop))]);
+    assert_eq!(a.view().title, "Paused");
+    event(&mut a, Button::Power, true, 1200);
+    a.handle(Msg::Tick(Duration::from_millis(2200)));
+    tap(&mut a, Button::Down, 2300);
+    assert_eq!(tap(&mut a, Button::A, 2400), vec![Effect::QuitGame, Effect::Notice("Restarting…".into()), Effect::Restart]);
+    assert_eq!(a.playing(), None);
+}
+
+#[test]
+fn the_press_that_woke_the_device_is_neither_a_tap_nor_a_hold() {
+    let mut a = app();
+    event(&mut a, Button::Power, true, 0);
+    a.handle(Msg::Woke);
+    assert_eq!(a.next_deadline(), None);
+    assert_eq!(event(&mut a, Button::Power, false, 100), vec![]);
 }
 
 /// Not a test: how long a focus move takes with 3,000 games (run with --ignored --nocapture).

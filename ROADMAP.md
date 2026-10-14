@@ -188,7 +188,7 @@ Found along the way:
 1. Workspace and core models, navigation and held-direction repeat, with tests.
 2. Settings: declarations, the layered JSON store, generated settings rows.
 3. Library scan and the system table, starting with GB, GBC, GBA, NES, SNES, MD and PS1.
-4. Hardware interfaces with a simulated version and the Brick version: battery, backlight, LEDs, sleep (including ignoring the power key briefly after waking).
+4. Hardware interfaces with a simulated version and the Brick version: battery, backlight, LEDs, sleep (including ignoring the power key briefly after waking). The power button: a tap sleeps (on release); holding it for 1 s opens a power menu (Power off, Restart, Cancel), over the game menu during a game, which is quit (its saves written) before powering off or restarting (2026-10-14).
 5. The Slint theme and prefabs from the Light Bar tokens, and the image loader.
 6. A test-pattern runtime: launch zoom, in-game menu, quit.
 7. The app with desktop and Brick builds. With no SD card (the data folder missing or empty, as a device's unused mount point is), the library says so.

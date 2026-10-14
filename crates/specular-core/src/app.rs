@@ -69,7 +69,15 @@ pub enum Effect {
     /// still carries it.
     Mute(bool),
     Sleep,
+    /// Turn the device off. If a game is being played, the app sends `QuitGame` just before this
+    /// (in the same list), so its saves are written first.
+    PowerOff,
+    /// Restart the device; as `PowerOff`, after `QuitGame` if a game is being played.
+    Restart,
 }
+
+/// Holding the power button this long opens the power menu; a shorter press sleeps.
+pub const POWER_HOLD: Duration = Duration::from_secs(1);
 
 /// Who a button press is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,7 +85,7 @@ pub enum InputTarget {
     /// The app's screens.
     App,
     /// The running game: its joypad's buttons go to it; the app keeps the others (Menu, Power,
-    /// the volume keys).
+    /// the volume keys). Never while the game menu or the power menu is open over the game.
     Game,
 }
 
@@ -123,7 +131,8 @@ pub trait Screen {
     /// `state.params` (not on the battery or the focus).
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView;
     /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, and in a
-    /// grid so do left and right; Menu goes home, Power sleeps). `focused` is the focused row, if
+    /// grid so do left and right; Menu goes home). Screens never see the power button: the app
+    /// handles it (a tap sleeps, holding it opens the power menu). `focused` is the focused row, if
     /// the screen has one that can take presses (never a header or a disabled row).
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome;
 }
@@ -136,6 +145,9 @@ pub mod screens {
     pub const SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("settings"));
     /// Over a paused game. Its presses are handled by the app itself (see `App::game_menu`).
     pub const GAME_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game menu"));
+    /// Power off or restart, opened by holding the power button (over the game menu during a
+    /// game). Its presses are handled by the app itself (see `App::power_menu`).
+    pub const POWER_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("power menu"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -153,6 +165,11 @@ pub struct App {
     idle_since: Option<Duration>,
     /// Whether the mute switch is on. Not saved: the device reports the switch when it opens.
     muted: bool,
+    /// When the power button went down, while that press can still be a tap (a release before
+    /// `POWER_HOLD` sleeps). None once it has been held long enough to open the power menu, so
+    /// its release does nothing; also None for a press the app never saw (the one that woke the
+    /// device is dropped by the UI).
+    power_down: Option<Duration>,
     /// The game being played (whether or not its menu is open).
     playing: Option<Game>,
     /// How many columns a grid has on this display (from the UI; see `list::grid_columns`).
@@ -171,6 +188,7 @@ impl App {
         screens.insert(screens::GAMES, Box::new(Games));
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
+        screens.insert(screens::POWER_MENU, Box::new(PowerMenu));
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None },
             screens,
@@ -178,6 +196,7 @@ impl App {
             repeater: Repeater::default(),
             idle_since: None,
             muted: false,
+            power_down: None,
             grid_columns: 1,
             playing: None,
             cache: RefCell::default(),
@@ -193,9 +212,10 @@ impl App {
     /// The game being played, if any.
     pub fn playing(&self) -> Option<&Game> { self.playing.as_ref() }
 
-    /// Who buttons are for now: the game while one is played and its menu is closed.
+    /// Who buttons are for now: the game while one is played and no menu is open over it.
     pub fn input_target(&self) -> InputTarget {
-        if self.playing.is_some() && self.nav.top().id != screens::GAME_MENU { InputTarget::Game } else { InputTarget::App }
+        let menu = [screens::GAME_MENU, screens::POWER_MENU].contains(&self.nav.top().id);
+        if self.playing.is_some() && !menu { InputTarget::Game } else { InputTarget::App }
     }
 
     /// What the screens see (read-only: changes go through messages, so the cache stays right).
@@ -204,8 +224,12 @@ impl App {
     /// The title of the screen below the current one (for a breadcrumb), if any.
     pub fn parent_title(&self) -> Option<String> { self.built().1 }
 
-    /// When the next button repeat is due, so the caller can wake up for it.
-    pub fn next_deadline(&self) -> Option<Duration> { self.repeater.next_deadline() }
+    /// When the next button repeat, or the power button's hold, is due, so the caller can wake up
+    /// for it.
+    pub fn next_deadline(&self) -> Option<Duration> {
+        let hold = self.power_down.map(|t| t + POWER_HOLD);
+        [self.repeater.next_deadline(), hold].into_iter().flatten().min()
+    }
 
     /// When the device will sleep if left alone, so the caller can wake up for it. None if it
     /// won't (a game is running unpaused, sleep is off, or the idle count hasn't started).
@@ -264,10 +288,12 @@ impl App {
                 self.idle_since = Some(e.time);
                 // A switch, not a key: it counts as activity but is never repeated.
                 if e.button == Button::Mute { return self.set_muted(e.pressed); }
+                if e.button == Button::Power { return self.power_button(&e); }
                 self.repeater.on_event(&e).map(|p| self.press(p)).unwrap_or_default()
             }
             Msg::Tick(now) => {
                 let mut e = self.repeater.poll(now).map(|p| self.press(p)).unwrap_or_default();
+                if self.power_down.take_if(|t| now >= *t + POWER_HOLD).is_some() { e.extend(self.open_power_menu()); }
                 e.extend(self.sleep_if_idle(now));
                 e
             }
@@ -282,6 +308,7 @@ impl App {
             Msg::Woke => {
                 self.repeater.reset();
                 self.idle_since = None;
+                self.power_down = None;
                 if self.input_target() == InputTarget::Game { self.open_game_menu() } else { vec![] }
             }
             Msg::GameEnded(why) => {
@@ -311,7 +338,6 @@ impl App {
         match (self.input_target(), p.button) {
             (_, Button::VolUp | Button::VolDown) => return self.step_volume(if p.button == Button::VolUp { 1 } else { -1 }),
             (InputTarget::Game, Button::Menu) => return self.open_game_menu(),
-            (InputTarget::Game, Button::Power) => return vec![Effect::Sleep],
             (InputTarget::Game, _) => return vec![], // the UI gives these to the game
             _ => {}
         }
@@ -334,13 +360,11 @@ impl App {
         }
         let focused = view.rows.get(focus).filter(|r| r.kind.focusable() && r.enabled);
         let id = self.nav.top().id.clone();
-        if id == screens::GAME_MENU && p.button != Button::Power { return self.game_menu(p.button, focused.map(|r| r.id.0.as_str())); }
-        match p.button {
-            // (A, B, Menu and Power never repeat.)
-            Button::Menu => return self.go(|nav| nav.home()),
-            Button::Power => return vec![Effect::Sleep],
-            _ => {}
-        }
+        let row = focused.map(|r| r.id.0.as_str());
+        if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
+        if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
+        // (A, B and Menu never repeat.)
+        if p.button == Button::Menu { return self.go(|nav| nav.home()); }
         let outcome = self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p);
         match outcome {
             Outcome::None => vec![],
@@ -380,6 +404,40 @@ impl App {
         if muted == self.muted { return vec![]; }
         self.muted = muted;
         vec![Effect::Mute(muted), Effect::ShowVolume { level: self.volume(), muted }]
+    }
+
+    /// The power button, on every screen and in games: a tap (released within `POWER_HOLD`)
+    /// sleeps; holding it opens the power menu once the hold is due (see `Msg::Tick`).
+    fn power_button(&mut self, e: &ButtonEvent) -> Vec<Effect> {
+        if e.pressed {
+            self.repeater.reset();
+            self.power_down = Some(e.time);
+            return vec![];
+        }
+        // None: held into the power menu, or a press the app didn't see.
+        if self.power_down.take().is_some() { vec![Effect::Sleep] } else { vec![] }
+    }
+
+    /// Opens the power menu, over the game menu if a game is running (pausing it).
+    fn open_power_menu(&mut self) -> Vec<Effect> {
+        if self.nav.top().id == screens::POWER_MENU { return vec![]; }
+        let mut e = if self.input_target() == InputTarget::Game { self.open_game_menu() } else { vec![] };
+        e.extend(self.go(|nav| Some(nav.push(ScreenState::new(screens::POWER_MENU, None)))));
+        e
+    }
+
+    /// A press in the power menu: B and Menu close it, A does the focused row's action. Powering
+    /// off or restarting quits a running game first, which writes its saves.
+    fn power_menu(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
+        let (power, notice) = match (button, row) {
+            (Button::B | Button::Menu, _) | (Button::A, Some("cancel")) => return self.go(|nav| nav.pop()),
+            (Button::A, Some("off")) => (Effect::PowerOff, "Turning off…"),
+            (Button::A, Some("restart")) => (Effect::Restart, "Restarting…"),
+            _ => return vec![],
+        };
+        let mut e = if self.playing.take().is_some() { vec![Effect::QuitGame] } else { vec![] };
+        e.extend([Effect::Notice(notice.into()), power]);
+        e
     }
 
     fn open_game_menu(&mut self) -> Vec<Effect> {
@@ -505,13 +563,31 @@ impl Screen for SettingsScreen {
     }
 }
 
+/// A menu row that does something when pressed.
+fn action(id: &str, label: &str) -> Row { Row::new(id, label, RowKind::Action { value: None }) }
+
+/// Power off or restart. The app handles its presses (`App::power_menu`), since they may quit
+/// the game.
+struct PowerMenu;
+
+impl Screen for PowerMenu {
+    fn view(&self, _: &Ctx, _: &ScreenState) -> ScreenView {
+        ScreenView {
+            title: "Power".into(), layout: Layout::List,
+            rows: vec![action("off", "Power off"), action("restart", "Restart"), action("cancel", "Cancel")],
+            hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())],
+        }
+    }
+
+    fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
+}
+
 /// The menu over a paused game. The app handles its presses (`App::game_menu`), since they
 /// control the game itself.
 struct GameMenu;
 
 impl Screen for GameMenu {
     fn view(&self, _: &Ctx, _: &ScreenState) -> ScreenView {
-        let action = |id: &str, label: &str| Row::new(id, label, RowKind::Action { value: None });
         ScreenView {
             title: "Paused".into(), layout: Layout::List,
             rows: vec![action("resume", "Resume"), action("save", "Save state"), action("load", "Load state"),

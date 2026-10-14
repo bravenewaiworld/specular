@@ -190,7 +190,7 @@ fn on_ui(f: impl FnOnce(&Rc<Runner>) + Send + 'static) {
 /// Delivers a message to the app on the UI thread, from any thread.
 fn post(msg: Msg) { on_ui(move |r| r.handle(msg)); }
 
-enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Volume(u8), Muted(bool), Sleep }
+enum HwCmd { Brightness(u8), Lights(Vec<Rgb>), Volume(u8), Muted(bool), Sleep, PowerOff, Restart }
 
 /// How often the battery is read (on some devices each read is a slow bus transfer).
 const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
@@ -218,6 +218,8 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
                     next_battery = Instant::now(); // it may have changed a lot
                     r
                 }
+                Ok(HwCmd::PowerOff) => hw.power.shutdown(),
+                Ok(HwCmd::Restart) => hw.power.restart(),
                 Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             };
@@ -396,6 +398,11 @@ impl Runner {
                 self.with_game(|p| { p.pause(true); p.session.flush().map(|()| "") });
                 let _ = self.hardware.send(HwCmd::Sleep);
             }
+            // A running game was quit by the `QuitGame` just before this, which writes its saves.
+            // Settings still queued for the I/O thread are written when the system stops Specular
+            // on its way down (SIGTERM ends the event loop; `run` then waits for the I/O thread).
+            Effect::PowerOff => { let _ = self.hardware.send(HwCmd::PowerOff); }
+            Effect::Restart => { let _ = self.hardware.send(HwCmd::Restart); }
         }
     }
 

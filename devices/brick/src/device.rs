@@ -69,6 +69,8 @@ impl Power for BrickPower {
     fn sleep(&self) -> io::Result<()> { run("/usr/bin/sleepnow", &[]) }
 
     fn shutdown(&self) -> io::Result<()> { run("/sbin/poweroff", &[]) }
+
+    fn restart(&self) -> io::Result<()> { run("/sbin/reboot", &[]) }
 }
 
 fn run(program: &str, args: &[&str]) -> io::Result<()> {

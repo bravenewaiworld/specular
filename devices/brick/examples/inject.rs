@@ -2,8 +2,9 @@
 //! passes injected events to every reader), skipping padbridge's hop from the real buttons.
 //! Usage: inject <event node of "TRIMUI Player1", e.g. /dev/input/event5> <buttons> [step ms (default 400)]
 //! <buttons> is a comma-separated list of up, down, left, right, a, b, x, y, l1, r1, select, start,
-//! menu, volup, voldown and power, pressed one per step and each held for 50 ms; "wait" leaves a step
-//! empty.
+//! menu, volup, voldown and power, pressed one per step and each held for 50 ms, or for N ms with
+//! a ":N" suffix (e.g. power:1500; a hold longer than the step stretches that step to the hold);
+//! "wait" leaves a step empty.
 
 use std::io::Write;
 use std::time::Duration;
@@ -41,14 +42,15 @@ fn main() -> std::io::Result<()> {
         std::process::exit(2);
     };
     let step = Duration::from_millis(args.get(3).and_then(|s| s.parse().ok()).unwrap_or(400));
-    let hold = Duration::from_millis(50).min(step);
     let mut dev = std::fs::OpenOptions::new().write(true).open(node)?;
-    for name in script.split(',').map(str::trim) {
+    for item in script.split(',').map(str::trim) {
+        let (name, held) = item.split_once(':').unwrap_or((item, ""));
+        let hold = held.parse().map_or(Duration::from_millis(50).min(step), Duration::from_millis);
         if name != "wait" {
             let Some((kind, code, on)) = button(name) else { eprintln!("inject: no button {name:?}"); std::process::exit(2) };
             for value in [on, 0] {
                 dev.write_all(&[event(kind, code, value), event(EV_SYN, SYN_REPORT, 0)].concat())?;
-                std::thread::sleep(if value == on { hold } else { step - hold });
+                std::thread::sleep(if value == on { hold } else { step.saturating_sub(hold) });
             }
         } else {
             std::thread::sleep(step);

@@ -47,8 +47,11 @@ pub trait Power: Send {
     fn battery(&self) -> io::Result<Battery>;
     /// Sleeps until woken (power button), returning once awake again.
     fn sleep(&self) -> io::Result<()>;
-    /// Turns the device off.
+    /// Turns the device off. The system may stop Specular (SIGTERM) before this returns, so
+    /// nothing after the call can be relied on to run.
     fn shutdown(&self) -> io::Result<()>;
+    /// Restarts the device. As with `shutdown`, Specular may be stopped before this returns.
+    fn restart(&self) -> io::Result<()>;
 }
 
 /// The screen's backlight and panel.
@@ -130,6 +133,7 @@ pub mod simulated {
         }
         fn sleep(&self) -> io::Result<()> { eprintln!("simulated: sleep"); std::thread::sleep(Duration::from_millis(500)); Ok(()) }
         fn shutdown(&self) -> io::Result<()> { eprintln!("simulated: shut down"); Ok(()) }
+        fn restart(&self) -> io::Result<()> { eprintln!("simulated: restart"); Ok(()) }
     }
     impl Display for Sim {
         fn set_brightness(&self, level: u8) -> io::Result<()> { eprintln!("simulated: brightness {level}"); Ok(()) }
