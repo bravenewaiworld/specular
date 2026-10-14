@@ -38,7 +38,7 @@ impl Device for Brick {
             power: Box::new(BrickPower(PowerSupply::find(Path::new("/sys/class/power_supply")))),
             display: Box::new(Disp),
             lights: Box::new(BrickLights(RgbLeds::new(Path::new("/sys/class/leds"), &names))),
-            audio: Box::new(SoftVolume),
+            audio: Box::new(DacVolume),
         }
     }
 
@@ -102,16 +102,17 @@ impl Lights for BrickLights {
     fn show(&self, colours: &[Rgb]) -> io::Result<()> { self.0.show(colours, LED_LIMIT) }
 }
 
-/// The volume, as the software volume control in TrimUI's ALSA set-up ("Soft Volume Master" on
-/// the default output, /etc/asound.conf), with amixer. ALSA creates that control when something
-/// first plays after boot, so until then setting it fails (Specular sets it again when a game
-/// starts). One level for the speaker and headphones alike, for now.
-struct SoftVolume;
+/// The volume, as the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), which
+/// both the speaker and the headphones follow, set with amixer. Specular's levels are 2 dB apart,
+/// the top one at 0 dB (louder only clips); 0 is the control's lowest, -119 dB. (TrimUI's ALSA
+/// set-up also has a software volume, "Soft Volume Master", but the driver refuses writes to it.)
+/// One level for the speaker and headphones alike, for now.
+struct DacVolume;
 
-impl Audio for SoftVolume {
+impl Audio for DacVolume {
     fn set_volume(&self, level: u8) -> io::Result<()> {
-        // The control's steps are even in dB (-51 to 0 dB), so percent of it sounds even too.
-        let percent = format!("{}%", level as u32 * 100 / specular_core::settings::builtin::VOLUME_MAX as u32);
-        run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "sset", "Soft Volume Master", &percent])
+        let max = specular_core::settings::builtin::VOLUME_MAX as i32;
+        let value = if level == 0 { 0 } else { ((2 * (level as i32 - max)) as f32 / 0.75 + 159.0).round() as i32 };
+        run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", "name=DAC volume", &format!("{value},{value}")])
     }
 }

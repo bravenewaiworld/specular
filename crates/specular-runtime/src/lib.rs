@@ -64,7 +64,12 @@ pub struct GameInfo {
 /// How long the core took to make its recent frames (the last `STATS_FRAMES`), and how many
 /// frames it has made since the game started.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct Stats { pub frames: u64, pub median: Duration, pub p95: Duration, pub worst: Duration }
+pub struct Stats {
+    pub frames: u64, pub median: Duration, pub p95: Duration, pub worst: Duration,
+    /// How much sound was waiting to play at the last frame (None without sound): rate control
+    /// keeps it near half the output's queue.
+    pub sound_queued: Option<Duration>,
+}
 
 /// How many of the latest frames `Stats` covers.
 const STATS_FRAMES: usize = 600;
@@ -76,6 +81,7 @@ struct Runs {
     recent: VecDeque<Duration>,
     /// When the core's current run began; None between runs (see `Session::watch`).
     running_since: Option<Instant>,
+    sound_queued: Option<Duration>,
 }
 
 /// A picture from the game, 8-bit RGBA.
@@ -167,7 +173,7 @@ impl Session {
         let mut sorted: Vec<Duration> = runs.recent.iter().copied().collect();
         sorted.sort();
         let worst = sorted.last().copied().unwrap_or_default();
-        Stats { frames: runs.count, median: percentile(&sorted, 50), p95: percentile(&sorted, 95), worst }
+        Stats { frames: runs.count, median: percentile(&sorted, 50), p95: percentile(&sorted, 95), worst, sound_queued: runs.sound_queued }
     }
 
     /// Calls `stuck`, once, if one run of the core (one frame, normally milliseconds) goes on for
@@ -314,7 +320,8 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
             r.recent.push_back(took);
             if r.recent.len() > STATS_FRAMES { r.recent.pop_front(); }
         }
-        frontend::with(|f| { sound.play(&f.samples); f.samples.clear(); });
+        let queued = frontend::with(|f| { let q = sound.play(&f.samples); f.samples.clear(); q }).flatten();
+        runs.lock().unwrap().sound_queued = queued;
         if Instant::now() >= next_save {
             if let Err(e) = game.write_save() { eprintln!("game: battery save: {e}"); }
             next_save = Instant::now() + SAVE_INTERVAL;

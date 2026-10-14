@@ -1,6 +1,7 @@
 //! Runs a game headless for a while, then reports how long the core took per frame and saves
 //! the last frame as raw RGBA (for checking a core and a ROM without the UI, on any machine).
-//! Usage: play <core.so> <rom> [seconds (default 5)] [out.rgba (default /tmp/play.rgba)]
+//! Usage: play [--vsync] <core.so> <rom> [seconds (default 5)] [out.rgba (default /tmp/play.rgba)]
+//! --vsync paces the game by /dev/fb0's refresh (as a device does) instead of a timer.
 //! Battery saves go to /tmp/play.srm; no sound.
 
 use std::sync::Arc;
@@ -9,14 +10,19 @@ use std::time::Duration;
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
 fn main() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
+    let mut args: Vec<String> = std::env::args().collect();
+    let vsync = args.iter().position(|a| a == "--vsync").map(|i| args.remove(i)).is_some();
     let [_, core, rom, ..] = &args[..] else { return Err("usage: play <core.so> <rom> [seconds] [out.rgba]".into()) };
     let seconds: f64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5.0);
     let out = args.get(4).cloned().unwrap_or_else(|| "/tmp/play.rgba".into());
     let frames = Arc::new(FrameSlot::default());
     let session = Session::start(
         LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), system_dir: "/tmp".into(), options: vec![] },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}) },
+        Outputs {
+            sound: None, frames: frames.clone(), on_frame: Box::new(|| {}),
+            vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },
+            display_hz: if vsync { 60.2 } else { 60.0 },
+        },
     )?;
     eprintln!("{:?}", session.info());
     std::thread::sleep(Duration::from_secs_f64(seconds));

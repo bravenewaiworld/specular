@@ -164,7 +164,14 @@ fn quit_on_signals() {
         std::thread::spawn(move || loop {
             let mut sig = 0;
             if libc::sigwait(&set, &mut sig) == 0 {
-                eprintln!("specular: signal {sig}, quitting");
+                // A service manager stopping Specular may already have closed the pipe it reads
+                // Specular's messages from, and eprintln! panics when stderr can't be written:
+                // send them to /dev/null instead, so the way out (saving the game) can't panic.
+                use std::io::Write;
+                if writeln!(std::io::stderr(), "specular: signal {sig}, quitting").is_err() {
+                    let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+                    if null >= 0 { libc::dup2(null, 2); libc::close(null); }
+                }
                 let _ = slint::invoke_from_event_loop(|| { let _ = slint::quit_event_loop(); });
             }
         });
@@ -399,7 +406,8 @@ impl Runner {
             let Some(s) = r.playing.borrow().as_ref().map(|p| p.session.stats()) else { last = 0; return w.set_stats("".into()) };
             let fps = s.frames.saturating_sub(last);
             last = s.frames;
-            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
+            let sound = s.sound_queued.map_or("no sound".into(), |q| format!("sound queued {:.0} ms", q.as_secs_f64() * 1e3));
+            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms · {sound}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
         });
     }
 
@@ -448,10 +456,6 @@ impl Runner {
                 // (Kept until now: the list shows under the flying cover.)
                 self.art.borrow_mut().clear();
                 self.requested.borrow_mut().clear();
-                // Some devices can only set the volume once sound has been opened (ALSA's
-                // software volume appears with its first stream).
-                let level = self.app.borrow().ctx().settings.get(builtin::VOLUME, &Layer::Global).map(|(v, _)| v.clone());
-                if let Some(level) = level { self.apply_setting(builtin::VOLUME, &level); }
                 // The game may have been paused (its menu opened) while it loaded.
                 if self.app.borrow().input_target() == InputTarget::App { self.with_game(|p| { p.pause(true); Ok("") }); }
             }

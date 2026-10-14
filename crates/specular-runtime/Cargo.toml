@@ -10,4 +10,5 @@ libc = "0.2"
 specular-core = { path = "../specular-core" }
 
 [dev-dependencies]
+specular-linux = { path = "../specular-linux" }
 tempfile = "3"
