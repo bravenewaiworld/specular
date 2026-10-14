@@ -97,7 +97,7 @@ impl Game {
 }
 
 /// Folders never scanned: hidden ones (including macOS's) and Windows' volume information.
-fn skip_dir(name: &str) -> bool { name.starts_with('.') || name.eq_ignore_ascii_case("System Volume Information") }
+pub fn skip_dir(name: &str) -> bool { name.starts_with('.') || name.eq_ignore_ascii_case("System Volume Information") }
 
 /// Files never listed: hidden ones, including the "._name" files macOS leaves on FAT cards.
 fn skip_file(name: &str) -> bool { name.starts_with('.') }

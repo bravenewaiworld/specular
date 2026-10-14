@@ -3,9 +3,9 @@
 //! (backlight and panel power: this kernel has no /sys/class/backlight).
 
 use std::io;
-use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 
 use specular_core::device::{Audio, Device, DeviceProfile, Display, Hardware, Lights, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
@@ -62,12 +62,11 @@ impl Power for BrickPower {
     fn battery(&self) -> io::Result<specular_core::device::Battery> { self.0.battery() }
 
     /// Through the test card's `sleepnow`, which also stops WiFi around sleep (its driver can't
-    /// suspend while connected).
-    /// The codec's driver resets its volume on waking, so it is set again (see `DacVolume`).
+    /// suspend while connected). The codec's driver resets the volume on waking, so it is set
+    /// again then.
     fn sleep(&self) -> io::Result<()> {
         let slept = run("/usr/bin/sleepnow", &[]);
-        let level = VOLUME.load(Relaxed);
-        if level != u8::MAX && let Err(e) = set_dac_volume(level) { eprintln!("volume after waking: {e}"); }
+        if let Err(e) = restore_volume() { eprintln!("volume after waking: {e}"); }
         slept
     }
 
@@ -116,20 +115,38 @@ impl Lights for BrickLights {
 /// the top one at 0 dB (louder only clips); 0 is the control's lowest, -119 dB. (TrimUI's ALSA
 /// set-up also has a software volume, "Soft Volume Master", but the driver refuses writes to it.)
 /// One level for the speaker and headphones alike, for now.
+///
+/// The codec's driver writes its own default (about 0 dB) over the control whenever playback
+/// starts and on waking, so the last level is kept and set again then (`restore_volume`).
 struct DacVolume;
 
-/// The volume last set (u8::MAX: none yet), for `BrickSound`.
-static VOLUME: AtomicU8 = AtomicU8::new(u8::MAX);
+/// The level last set (None: none yet). Locked while amixer runs, so that setting it again can't
+/// land after, and so undo, a newer level set at the same time.
+static VOLUME: Mutex<Option<u8>> = Mutex::new(None);
 
 impl Audio for DacVolume {
     fn set_volume(&self, level: u8) -> io::Result<()> {
-        VOLUME.store(level, Relaxed);
+        let mut last = VOLUME.lock().unwrap_or_else(PoisonError::into_inner);
+        *last = Some(level);
         set_dac_volume(level)
     }
 }
 
-/// Sound output whose start sets the volume again: the codec's driver puts its DAC volume back
-/// to its default whenever playback starts (and on waking; see `BrickPower::sleep`).
+/// Sets the last level again, if one was set.
+fn restore_volume() -> io::Result<()> {
+    let last = VOLUME.lock().unwrap_or_else(PoisonError::into_inner);
+    last.map_or(Ok(()), set_dac_volume)
+}
+
+fn set_dac_volume(level: u8) -> io::Result<()> {
+    // 2 dB per level below the top is 8/3 of the control's steps. Never above 159: the control
+    // goes up to +72 dB.
+    let below_top = (specular_core::settings::builtin::VOLUME_MAX - level as i64).max(0) as f64;
+    let value = if level == 0 { 0 } else { (159.0 - below_top * 2.0 / 0.75).round() as i32 };
+    run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", "name=DAC volume", &format!("{value},{value}")])
+}
+
+/// Sound output that sets the volume again once its playback has started (see `DacVolume`).
 struct BrickSound { alsa: specular_linux::sound::Alsa, started: bool }
 
 impl SoundOut for BrickSound {
@@ -138,18 +155,13 @@ impl SoundOut for BrickSound {
         let n = self.alsa.write(frames)?;
         if n > 0 && !self.started {
             self.started = true;
-            // On a thread of its own: amixer takes longer than a game frame may wait.
-            let level = VOLUME.load(Relaxed);
-            if level != u8::MAX { std::thread::spawn(move || { let _ = set_dac_volume(level); }); }
+            // On a thread of its own, so the game's frame doesn't wait for amixer. (Through
+            // TrimUI's dmix the codec's stream keeps running while the game's underruns, so later
+            // writes don't restart it.)
+            std::thread::spawn(|| { if let Err(e) = restore_volume() { eprintln!("volume at playback start: {e}"); } });
         }
         Ok(n)
     }
     fn queued(&mut self) -> usize { self.alsa.queued() }
     fn capacity(&self) -> usize { self.alsa.capacity() }
-}
-
-fn set_dac_volume(level: u8) -> io::Result<()> {
-    let max = specular_core::settings::builtin::VOLUME_MAX as i32;
-    let value = if level == 0 { 0 } else { ((2 * (level as i32 - max)) as f32 / 0.75 + 159.0).round() as i32 };
-    run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", "name=DAC volume", &format!("{value},{value}")])
 }

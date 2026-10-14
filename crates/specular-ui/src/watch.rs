@@ -10,20 +10,28 @@ use std::time::Duration;
 /// large file) leads to one scan, not one per file.
 const QUIET: Duration = Duration::from_secs(2);
 
-/// What counts as a change: files and folders appearing, disappearing or finished writing.
-const EVENTS: u32 = libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE | libc::IN_DELETE_SELF;
+/// What counts as a change: files and folders appearing, disappearing or finished writing, and a
+/// watched folder deleted or moved away (for `roms/` itself: the folder holding it is watched only
+/// for it appearing).
+const EVENTS: u32 = libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE
+    | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
 
+/// An inotify instance; `watch` adds the folders, `wait_for_change` waits for their changes.
 pub struct RomsWatch(OwnedFd);
 
 impl RomsWatch {
+    /// A watch with no folders yet.
     pub fn new() -> std::io::Result<Self> {
         let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
         if fd < 0 { return Err(std::io::Error::last_os_error()); }
         Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
     }
 
-    /// Watches `roms` and its folders (as deep as the scan goes), and the folder holding it, so a
-    /// `roms/` made later is noticed too. Folders already watched are skipped by the kernel.
+    /// Watches `roms` and the folders the scan follows under it, and the folder holding it, so a
+    /// `roms/` made later is noticed too. Call it again after each change, for new folders:
+    /// adding a folder already watched keeps its one watch, and the kernel drops the watch of a
+    /// deleted folder. Folders that can't be watched (e.g. past the kernel's limit on watches)
+    /// are skipped.
     pub fn watch(&self, roms: &Path) {
         if let Some(parent) = roms.parent() { self.add(parent, libc::IN_CREATE | libc::IN_MOVED_TO); }
         self.add_tree(roms, 0);
@@ -31,10 +39,11 @@ impl RomsWatch {
 
     fn add_tree(&self, dir: &Path, depth: usize) {
         self.add(dir, EVENTS);
+        if depth == specular_core::library::MAX_DEPTH { return; }
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for e in entries.flatten() {
-            let hidden = e.file_name().to_str().is_none_or(|n| n.starts_with('.'));
-            if !hidden && depth < specular_core::library::MAX_DEPTH && e.file_type().is_ok_and(|t| t.is_dir()) { self.add_tree(&e.path(), depth + 1); }
+            let followed = e.file_name().to_str().is_some_and(|n| !specular_core::library::skip_dir(n));
+            if followed && e.file_type().is_ok_and(|t| t.is_dir()) { self.add_tree(&e.path(), depth + 1); }
         }
     }
 
@@ -43,7 +52,8 @@ impl RomsWatch {
         unsafe { libc::inotify_add_watch(self.0.as_raw_fd(), path.as_ptr(), mask) };
     }
 
-    /// Waits for a change, then until changes have stopped for `QUIET`.
+    /// Waits for a change, then until changes have stopped for `QUIET`. (The events are read
+    /// only to clear them: any change leads to a whole scan.)
     pub fn wait_for_change(&self) {
         let mut buf = [0u8; 4096];
         let mut timeout = -1; // the first change: wait as long as it takes

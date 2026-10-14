@@ -62,6 +62,7 @@ impl Sound {
     pub fn play(&mut self, samples: &[[i16; 2]]) -> Option<std::time::Duration> {
         let out = self.out.as_mut()?;
         let (queued, target) = (out.queued(), out.capacity() / 2);
+        let queued_time = std::time::Duration::from_secs_f64(queued as f64 / out.rate() as f64);
         self.buf.clear();
         if queued == 0 {
             // Starting, or after an underrun (the game was paused or slow): fill half the queue
@@ -72,7 +73,6 @@ impl Sound {
         let ratio = out.rate() as f64 * (1.0 + MAX_ADJUST * fill.clamp(-1.0, 1.0)) / self.in_rate;
         self.resampler.process(samples, ratio, &mut self.buf);
         // A full queue drops the rest: better than waiting, which would delay the next frame.
-        let queued_time = std::time::Duration::from_secs_f64(queued as f64 / out.rate() as f64);
         if let Err(e) = out.write(&self.buf) {
             eprintln!("sound: {e}; no sound for the rest of this game");
             self.out = None;
