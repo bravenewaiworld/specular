@@ -54,6 +54,14 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let state = dir.path().join("saves/blank.state1");
     session.save_state(&state).unwrap();
     session.load_state(&state).unwrap();
+    // Written compressed; an uncompressed state, as earlier builds wrote, still loads.
+    let written = std::fs::read(&state).unwrap();
+    assert!(written.starts_with(&ZSTD_MAGIC));
+    let raw = zstd::decode_all(written.as_slice()).unwrap();
+    // Loose: this blank game's state shrinks far more than a real game's (about 11 times).
+    assert!(written.len() * 4 < raw.len(), "{} bytes compressed from {}", written.len(), raw.len());
+    std::fs::write(&state, raw).unwrap();
+    session.load_state(&state).unwrap();
     session.quit().unwrap();
     assert_eq!(std::fs::metadata(&save).unwrap().len(), 128 << 10); // mGBA before detecting the save type
 }

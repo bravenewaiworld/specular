@@ -38,7 +38,8 @@ pub struct LaunchSpec {
     pub save: PathBuf,
     /// The automatic save state, if any: the game resumes from it if it exists (one the core
     /// can't load is ignored, and replaced by the next), and it is written every 10 s of play
-    /// (time paused doesn't count), on `Session::flush`, and when the game ends.
+    /// (time paused doesn't count), on `Session::flush`, and when the game ends. Written
+    /// zstd-compressed, like every save state, so other frontends can't read it as it is.
     pub autosave: Option<PathBuf>,
     /// Where cores look for BIOS files (`bios/`).
     pub system_dir: PathBuf,
@@ -205,6 +206,7 @@ impl Session {
 
     pub fn pause(&self, paused: bool) { let _ = self.cmds.send(Cmd::Pause(paused)); }
     pub fn reset(&self) { let _ = self.cmds.send(Cmd::Reset); }
+    /// Saves the game's state to `path` (zstd-compressed); `load_state` also takes uncompressed ones.
     pub fn save_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::SaveState(path.into(), r)) }
     pub fn load_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::LoadState(path.into(), r)) }
     /// Writes the battery save and the autosave (before sleeping, say), returning once they are
@@ -444,7 +446,7 @@ impl Game {
     fn write_autosave(&mut self) {
         let Some(path) = self.autosave.clone() else { return };
         match self.state() {
-            Ok(data) => self.writer.write(path, data),
+            Ok(data) => self.writer.write_state(path, data),
             Err(e) => eprintln!("game: autosave: {e}"),
         }
     }
@@ -452,7 +454,7 @@ impl Game {
     /// Writes a save state to `path`, then sends `reply` once it is on the card.
     fn save_state(&mut self, path: PathBuf, reply: mpsc::Sender<io::Result<()>>) {
         match self.state() {
-            Ok(data) => { self.writer.write(path, data); self.writer.reply(reply); }
+            Ok(data) => { self.writer.write_state(path, data); self.writer.reply(reply); }
             Err(e) => { let _ = reply.send(Err(e)); }
         }
     }
@@ -475,8 +477,11 @@ impl Game {
         Ok(data)
     }
 
+    /// Loads a save state written by `Writer::write_state`, or an uncompressed one (as earlier
+    /// builds wrote them).
     fn load_state(&mut self, path: &Path) -> io::Result<()> {
-        let data = std::fs::read(path)?;
+        let mut data = std::fs::read(path)?;
+        if data.starts_with(&ZSTD_MAGIC) { data = zstd::decode_all(data.as_slice())?; }
         if !unsafe { (self.core.unserialize)(data.as_ptr().cast(), data.len()) } {
             return Err(io::Error::other("the core could not load this state"));
         }
@@ -525,7 +530,8 @@ impl Drop for MappedFile {
 struct Writer(mpsc::Sender<Job>);
 
 enum Job {
-    Write(PathBuf, Vec<u8>),
+    /// Writes the data to the path, compressed first if `compress` is set.
+    Write { path: PathBuf, data: Vec<u8>, compress: bool },
     /// Sends how the writes since the last reply went: the first error, if any failed.
     Reply(mpsc::Sender<io::Result<()>>),
 }
@@ -537,10 +543,15 @@ impl Writer {
             let mut failed = None;
             for job in rx {
                 match job {
-                    Job::Write(path, data) => if let Err(e) = write_atomically(&path, &data) {
-                        eprintln!("game: writing {}: {e}", path.display());
-                        failed.get_or_insert(e);
-                    },
+                    Job::Write { path, data, compress } => {
+                        // Level 1, the fastest of zstd's usual levels: higher ones shrink a GBA
+                        // state only about 4 % more.
+                        let data = if compress { zstd::bulk::compress(&data, 1) } else { Ok(data) };
+                        if let Err(e) = data.and_then(|data| write_atomically(&path, &data)) {
+                            eprintln!("game: writing {}: {e}", path.display());
+                            failed.get_or_insert(e);
+                        }
+                    }
                     Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); }
                 }
             }
@@ -548,9 +559,18 @@ impl Writer {
         Ok(Self(jobs))
     }
 
-    fn write(&self, path: PathBuf, data: Vec<u8>) { let _ = self.0.send(Job::Write(path, data)); }
+    /// Writes uncompressed: for battery saves, which other emulators and tools must be able to read.
+    fn write(&self, path: PathBuf, data: Vec<u8>) { let _ = self.0.send(Job::Write { path, data, compress: false }); }
+    /// Writes a save state, zstd-compressed, to wear the storage less (an autosave is written
+    /// every 10 s of play): a Pokémon Emerald state shrinks about 11 times, 516 KiB to 45 KiB.
+    fn write_state(&self, path: PathBuf, data: Vec<u8>) { let _ = self.0.send(Job::Write { path, data, compress: true }); }
     fn reply(&self, reply: mpsc::Sender<io::Result<()>>) { let _ = self.0.send(Job::Reply(reply)); }
 }
+
+/// The first bytes of every zstd frame. A core's own state format starting with them by chance
+/// would be taken for compressed, fail to decompress and not load; mGBA's states don't start
+/// with them.
+const ZSTD_MAGIC: [u8; 4] = zstd::zstd_safe::MAGICNUMBER.to_le_bytes();
 
 /// Writes `data` to `path` so a power cut leaves either the old file or the new one (FAT has no
 /// journal): to `<path>.tmp`, flushed, renamed over `path`, and the rename itself flushed.
