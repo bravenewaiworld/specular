@@ -174,17 +174,42 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
 }
 
 #[test]
-fn sleeps_after_minutes_without_a_press() {
-    let mut a = app(); // the default is 5 minutes
-    let min = |m: u64| Duration::from_secs(m * 60);
+fn sleeps_after_30_seconds_without_a_press_outside_a_game() {
+    let mut a = app(); // the default is 30 seconds
+    let sec = |n: u64| Duration::from_secs(n);
+    assert_eq!(a.sleep_deadline(), None); // the clock hasn't been read yet
     tap(&mut a, Button::Down, 0);
-    assert_eq!(a.handle(Msg::Tick(min(4))), vec![]);
-    a.note_input(min(4)); // a game's button
-    assert_eq!(a.handle(Msg::Tick(min(8))), vec![]);
-    assert_eq!(a.handle(Msg::Tick(min(9))), vec![Effect::Sleep]);
+    assert_eq!(a.sleep_deadline(), Some(sec(30)));
+    assert_eq!(a.handle(Msg::Tick(sec(29))), vec![]);
+    tap(&mut a, Button::Down, 29_000);
+    assert_eq!(a.handle(Msg::Tick(sec(58))), vec![]);
+    assert_eq!(a.handle(Msg::Tick(sec(59))), vec![Effect::Sleep]);
     a.handle(Msg::Woke);
-    assert_eq!(a.handle(Msg::Tick(min(10))), vec![]); // counting starts again
-    assert_eq!(a.handle(Msg::Tick(min(15))), vec![Effect::Sleep]);
+    assert_eq!(a.sleep_deadline(), None);
+    assert_eq!(a.handle(Msg::Tick(sec(60))), vec![]); // counting starts again
+    assert_eq!(a.handle(Msg::Tick(sec(90))), vec![Effect::Sleep]);
+}
+
+#[test]
+fn a_running_game_is_not_idle_but_its_menu_is() {
+    let mut a = app();
+    let sec = |n: u64| Duration::from_secs(n);
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10); // playing
+    assert_eq!(a.sleep_deadline(), None);
+    assert_eq!(a.handle(Msg::Tick(sec(600))), vec![]);
+    tap(&mut a, Button::Menu, 600_000); // the game menu pauses
+    assert_eq!(a.sleep_deadline(), Some(sec(630)));
+    assert!(a.handle(Msg::Tick(sec(630))).contains(&Effect::Sleep));
+    a.handle(Msg::Woke);
+    a.handle(Msg::Tick(sec(640)));
+    tap(&mut a, Button::B, 641_000); // resume
+    assert_eq!(a.handle(Msg::Tick(sec(1000))), vec![]);
+    // A game that ends by itself starts the count from the next reading of the clock.
+    a.handle(Msg::GameEnded(None));
+    assert_eq!(a.sleep_deadline(), None);
+    assert_eq!(a.handle(Msg::Tick(sec(1001))), vec![]);
+    assert_eq!(a.sleep_deadline(), Some(sec(1031)));
 }
 
 #[test]

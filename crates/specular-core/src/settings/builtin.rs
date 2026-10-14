@@ -15,8 +15,9 @@ pub const VOLUME_MAX: i64 = 20;
 pub const LIGHT_BAR: &str = "lights.brightness";
 /// The light bar's brightness steps (0 = off).
 pub const LIGHT_BAR_MAX: i64 = 5;
-/// Sleep after this many minutes without a button press ("never" for never).
-pub const SLEEP_AFTER: &str = "power.sleep_after";
+/// Sleep after this many seconds without a button press, outside a running game ("never" for
+/// never).
+pub const SLEEP_AFTER: &str = "power.sleep_after_seconds";
 /// How a system's games are shown: "list" (beside the focused game's box art) or "grid".
 pub const LIBRARY_VIEW: &str = "library.view";
 /// Shows the game's frame rate and the core's time per frame over the game (a developer setting).
@@ -42,7 +43,7 @@ pub fn settings() -> Vec<SettingDecl> {
             kind: SettingKind::Choice(&[("list", "List"), ("grid", "Grid")]), default: json!("list"),
             visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: SLEEP_AFTER, section: "Power", label: "Sleep after",
-            kind: SettingKind::Choice(&[("never", "Never"), ("1", "1 min"), ("3", "3 min"), ("5", "5 min"), ("10", "10 min")]), default: json!("5"),
+            kind: SettingKind::Choice(&[("never", "Never"), ("30", "30 sec"), ("60", "1 min"), ("180", "3 min"), ("300", "5 min"), ("600", "10 min")]), default: json!("30"),
             visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: DEVELOPER_DETAILS, section: "System", label: "Developer details",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global },

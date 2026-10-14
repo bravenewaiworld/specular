@@ -92,6 +92,7 @@ pub fn run(device: Box<dyn Device>, data: DataRoot, install: Option<InstallPlatf
         playing: RefCell::default(),
         game_screen: RefCell::default(),
         repeat: slint::Timer::default(),
+        sleep_timer: slint::Timer::default(),
         launches: Cell::new(0),
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
@@ -290,6 +291,8 @@ struct Runner {
     game_screen: RefCell<game::Screen>,
     /// Fires when the next held-button repeat is due.
     repeat: slint::Timer,
+    /// Fires when the device is due to sleep from being left alone.
+    sleep_timer: slint::Timer,
     /// How many games have been launched: a game that finishes loading after another launch is
     /// stale (`started`).
     launches: Cell<u32>,
@@ -336,7 +339,6 @@ impl Runner {
         // While a game is played, its buttons go straight to it.
         if let Msg::Button(e) = &msg && game::for_game(e.button) && self.app.borrow().input_target() == InputTarget::Game {
             if let Some(p) = self.playing.borrow().as_ref() { p.button(e); }
-            self.app.borrow_mut().note_input(e.time);
             return;
         }
         match &msg {
@@ -345,7 +347,7 @@ impl Runner {
             Msg::Library { games, .. } => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
             _ => {}
         }
-        let woke = matches!(msg, Msg::Woke);
+        let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_));
         // The window can be resized (on a desktop), changing how many columns a grid has.
         if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
         // A tick while a button is held makes its repeats. (The flag stays set until the next
@@ -354,9 +356,11 @@ impl Runner {
         let effects = self.app.borrow_mut().handle(msg);
         for e in effects { self.apply(e); }
         // Timers stood still while asleep: catch the clock up, now that the app has handled the
-        // wake (the tick this sends must see its idle time reset).
-        if woke { self.tick_clock(); }
+        // wake (the tick this sends must see its idle time reset). After a game ends the idle count
+        // restarts from this tick.
+        if needs_clock { self.tick_clock(); }
         self.schedule_repeat();
+        self.schedule_sleep();
     }
 
     fn apply(self: &Rc<Self>, e: Effect) {
@@ -512,6 +516,15 @@ impl Runner {
         let Some(due) = self.app.borrow().next_deadline() else { self.repeat.stop(); return };
         let me = Rc::downgrade(self);
         self.repeat.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), move || {
+            if let Some(r) = me.upgrade() { r.handle(Msg::Tick(now())); }
+        });
+    }
+
+    /// Re-armed after every message; stopped when no sleep is due.
+    fn schedule_sleep(self: &Rc<Self>) {
+        let Some(due) = self.app.borrow().sleep_deadline() else { self.sleep_timer.stop(); return };
+        let me = Rc::downgrade(self);
+        self.sleep_timer.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), move || {
             if let Some(r) = me.upgrade() { r.handle(Msg::Tick(now())); }
         });
     }
@@ -672,11 +685,9 @@ impl Runner {
     }
 
     /// Shows the time, and wakes again at the start of the next minute (not every second).
-    /// Also tells the app the time each minute (for "Sleep after").
+    /// Also gives the app a reading of the clock each minute, which starts its idle count (for
+    /// "Sleep after") after startup, waking and the end of a game.
     fn tick_clock(self: &Rc<Self>) {
-        // A button held down in a game counts as use: the app hears of game buttons only as they
-        // are pressed and released.
-        if self.playing.borrow().as_ref().is_some_and(|p| p.holding()) { self.app.borrow_mut().note_input(now()); }
         self.handle(Msg::Tick(now()));
         let mut next = Duration::from_secs(60);
         if let (Some(w), Some((h, m, s))) = (self.window.upgrade(), local_time()) {

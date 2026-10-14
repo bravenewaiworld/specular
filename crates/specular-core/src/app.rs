@@ -24,7 +24,8 @@ pub enum Msg {
     Button(ButtonEvent),
     /// The current time, on the clock button times use: due button repeats are generated, and
     /// the device sleeps if it has been left alone for the "Sleep after" time. Sent when a repeat
-    /// is due (`App::next_deadline`) and at least once a minute.
+    /// or the sleep is due (`App::next_deadline`, `App::sleep_deadline`), and after `Woke`,
+    /// `GameEnded` and at startup: the idle count starts from the first tick after those.
     Tick(Duration),
     /// A library scan finished. `card_found` is false when the data folder is missing or empty,
     /// which is how a device looks without its SD card.
@@ -142,7 +143,9 @@ pub struct App {
     screens: HashMap<ScreenId, Box<dyn Screen>>,
     nav: NavStack,
     repeater: Repeater,
-    /// When the buttons were last used (or the clock first seen since waking), for "Sleep after".
+    /// When the buttons were last used, for "Sleep after". None means the idle count hasn't
+    /// started: the next `Tick` starts it. Not consulted while a game is running (its buttons
+    /// never reach the app); the game menu counts as idle.
     idle_since: Option<Duration>,
     /// The game being played (whether or not its menu is open).
     playing: Option<Game>,
@@ -197,15 +200,26 @@ impl App {
     /// When the next button repeat is due, so the caller can wake up for it.
     pub fn next_deadline(&self) -> Option<Duration> { self.repeater.next_deadline() }
 
-    /// A button was used outside the app (in a game): the device isn't idle.
-    pub fn note_input(&mut self, time: Duration) { self.idle_since = Some(time); }
+    /// When the device will sleep if left alone, so the caller can wake up for it. None if it
+    /// won't (a game is running unpaused, sleep is off, or the idle count hasn't started).
+    pub fn sleep_deadline(&self) -> Option<Duration> {
+        if self.input_target() == InputTarget::Game { return None; }
+        Some(self.idle_since? + self.sleep_after()?)
+    }
 
-    /// Sleeps if nothing has been pressed for the "Sleep after" time.
+    /// The "Sleep after" time; None for "never" (not a number).
+    fn sleep_after(&self) -> Option<Duration> {
+        let (v, _) = self.ctx.settings.get(builtin::SLEEP_AFTER, &Layer::Global)?;
+        Some(Duration::from_secs(v.as_str()?.parse().ok()?))
+    }
+
+    /// Sleeps if nothing has been pressed for the "Sleep after" time. The idle count is cleared
+    /// when sleeping, so `sleep_deadline` doesn't stay due while the device suspends.
     fn sleep_if_idle(&mut self, now: Duration) -> Vec<Effect> {
+        if self.input_target() == InputTarget::Game { return vec![]; }
         let since = *self.idle_since.get_or_insert(now);
-        let after = self.ctx.settings.get(builtin::SLEEP_AFTER, &Layer::Global).and_then(|(v, _)| v.as_str()?.parse::<u64>().ok());
-        match after {
-            Some(minutes) if now.saturating_sub(since) >= Duration::from_secs(minutes * 60) => {
+        match self.sleep_after() {
+            Some(after) if now.saturating_sub(since) >= after => {
                 self.idle_since = None;
                 vec![Effect::Sleep]
             }
@@ -263,6 +277,7 @@ impl App {
             }
             Msg::GameEnded(why) => {
                 if self.playing.take().is_none() { return vec![]; }
+                self.idle_since = None;
                 if self.nav.top().id == screens::GAME_MENU { self.nav.pop(); }
                 self.changed();
                 why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()

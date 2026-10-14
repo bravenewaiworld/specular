@@ -71,9 +71,6 @@ impl Playing {
         });
     }
 
-    /// Whether any of the game's buttons is held down.
-    pub fn holding(&self) -> bool { self.held.get() != 0 }
-
     /// A button for the game.
     pub fn button(&self, e: &ButtonEvent) {
         let Some(bit) = specular_runtime::joypad_bit(e.button) else { return };
