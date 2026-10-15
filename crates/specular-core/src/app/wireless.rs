@@ -280,8 +280,6 @@ pub(super) fn settings_press(row: &Row, p: Press) -> Option<Outcome> {
     Some(Outcome::Push(ScreenState::new(id, None)))
 }
 
-/// A line of explanation in a list (never focused).
-fn note(id: &str, text: &str) -> Row { Row { enabled: false, ..Row::new(id, text, RowKind::Text { detail: None }) } }
 
 /// The Wi-Fi screen: the setting, then the networks (the current one first, then by signal,
 /// then saved ones out of range). A network's row id is "net:" and its name.
@@ -325,12 +323,12 @@ impl Screen for WifiScreen {
         let mut rows: Vec<Row> = ctx.settings.row(builtin::WIFI, &Layer::Global).into_iter().collect();
         let mode = wifi_mode(ctx);
         if let Some(w) = ctx.wifi.as_ref().filter(|_| mode != "off") {
-            if mode == "auto" { rows.push(note("note:auto", "On only while needed")); }
+            if mode == "auto" { rows.push(Row::note("note:auto", "On only while needed")); }
             rows.push(Row::new("section:networks", "Networks", RowKind::Header));
             if w.link == WifiLink::Off {
-                rows.push(note("note:starting", "Starting…"));
+                rows.push(Row::note("note:starting", "Starting…"));
             } else if w.networks.is_empty() {
-                rows.push(note("note:looking", "Looking for networks…"));
+                rows.push(Row::note("note:looking", "Looking for networks…"));
             }
             let current = match &w.link { WifiLink::Connected { ssid, .. } | WifiLink::Connecting { ssid, .. } => Some(ssid), _ => None };
             let mut networks: Vec<&Network> = w.networks.iter().collect();
@@ -411,7 +409,7 @@ impl Screen for BluetoothScreen {
                     .icon(Icon::Bluetooth { kind: d.kind, lit: d.connected })
             };
             if !b.powered {
-                rows.push(note("note:starting", "Starting…"));
+                rows.push(Row::note("note:starting", "Starting…"));
             } else {
                 let (paired, others): (Vec<&BtDevice>, Vec<&BtDevice>) = b.devices.iter().partition(|d| d.paired);
                 if !paired.is_empty() {
@@ -419,7 +417,7 @@ impl Screen for BluetoothScreen {
                     rows.extend(paired.into_iter().map(row));
                 }
                 rows.push(Row::new("section:others", "Other devices", RowKind::Header));
-                if others.is_empty() { rows.push(note("note:looking", if b.searching { "Looking for devices…" } else { "None found" })); }
+                if others.is_empty() { rows.push(Row::note("note:looking", if b.searching { "Looking for devices…" } else { "None found" })); }
                 rows.extend(others.into_iter().map(row));
             }
         }

@@ -459,7 +459,7 @@ impl App {
             self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
             return vec![Effect::Redraw(None)];
         }
-        let focused = view.rows.get(focus).filter(|r| r.kind.focusable() && r.enabled);
+        let focused = view.rows.get(focus).filter(|r| r.kind.focusable());
         let id = self.nav.top().id.clone();
         let row = focused.map(|r| r.id.0.as_str());
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
@@ -631,15 +631,14 @@ impl Screen for Home {
             if n > 0 { rows.push(Row::new(format!("system:{}", s.id), s.name, RowKind::Text { detail: Some(n.to_string()) })); }
         }
         if ctx.games.is_empty() {
-            let note = |id: &str, text: &str| Row { enabled: false, ..Row::new(id, text, RowKind::Text { detail: None }) };
             if !ctx.scanned {
-                rows.push(note("note:scanning", "Looking for games…"));
+                rows.push(Row::note("note:scanning", "Looking for games…"));
             } else if !ctx.card_found {
-                rows.push(note("note:none", "No SD card"));
-                rows.push(note("note:where", "Insert one with your games in roms/"));
+                rows.push(Row::note("note:none", "No SD card"));
+                rows.push(Row::note("note:where", "Insert one with your games in roms/"));
             } else {
-                rows.push(note("note:none", "No games found"));
-                rows.push(note("note:where", "Put them in roms/ on the SD card"));
+                rows.push(Row::note("note:none", "No games found"));
+                rows.push(Row::note("note:where", "Put them in roms/ on the SD card"));
             }
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));

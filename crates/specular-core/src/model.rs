@@ -44,6 +44,9 @@ pub enum Icon {
 pub enum RowKind {
     /// A section title; never focused.
     Header,
+    /// Text that explains something, with an optional detail on the right (a step's status);
+    /// never focused, and as many lines tall as its text needs (see `list::note_lines`).
+    Note { detail: Option<String> },
     /// A label, with optional detail on the right (a count, a status).
     Text { detail: Option<String> },
     /// A row with a picture (a game with its box art).
@@ -64,7 +67,7 @@ pub enum RowKind {
 
 impl RowKind {
     /// Whether the focus can land on the row.
-    pub fn focusable(&self) -> bool { !matches!(self, RowKind::Header) }
+    pub fn focusable(&self) -> bool { !matches!(self, RowKind::Header | RowKind::Note { .. }) }
 }
 
 /// One row of a screen.
@@ -73,8 +76,6 @@ pub struct Row {
     pub id: RowId,
     pub label: String,
     pub kind: RowKind,
-    /// Shown dimmed, and ignoring presses, when false.
-    pub enabled: bool,
     /// Its value overrides the layer below (e.g. a per-game setting); the UI marks it.
     pub overridden: bool,
     /// Drawn before the label.
@@ -82,10 +83,13 @@ pub struct Row {
 }
 
 impl Row {
-    /// An enabled row that overrides nothing.
+    /// A row that overrides nothing.
     pub fn new(id: impl Into<String>, label: impl Into<String>, kind: RowKind) -> Self {
-        Self { id: RowId(id.into()), label: label.into(), kind, enabled: true, overridden: false, icon: None }
+        Self { id: RowId(id.into()), label: label.into(), kind, overridden: false, icon: None }
     }
+
+    /// A note: text that explains something (see `RowKind::Note`).
+    pub fn note(id: impl Into<String>, text: impl Into<String>) -> Self { Self::new(id, text, RowKind::Note { detail: None }) }
 
     /// This row with `icon` drawn before its label.
     pub fn icon(mut self, icon: Icon) -> Self { self.icon = Some(icon); self }

@@ -4,12 +4,13 @@
 //!
 //! While a task runs its screen can't be left, and the device neither sleeps nor powers off: an
 //! interrupted install leaves the internal storage unable to start (an SD card still starts the
-//! device).
+//! device). A task that an earlier run of Specular started (before a crash) is shown the same way
+//! once the installer reports it (`Installer::follow`).
 
 use std::collections::HashMap;
 
 use super::*;
-use crate::install::{Offer, Progress, Task, TaskError, size};
+use crate::install::{Internal, Offer, Progress, Task, TaskError, size};
 
 /// What the app knows of the installer.
 #[derive(Default)]
@@ -77,9 +78,16 @@ impl App {
     }
 
     pub(super) fn install_progress(&mut self, p: Progress) -> Vec<Effect> {
-        let Some(task) = self.ctx.install.as_mut().and_then(|i| i.task.as_mut()) else { return vec![] };
+        let Some(state) = &mut self.ctx.install else { return vec![] };
+        if let Progress::Task { restore } = p {
+            // Every task reports `Task` first. If this run started none, it is one left running by
+            // an earlier run (`Installer::follow`): show it.
+            return if state.task.is_some() { vec![] } else { self.show_task(restore) };
+        }
+        let Some(task) = state.task.as_mut() else { return vec![] };
         let done = matches!(p, Progress::Done(_));
         match p {
+            Progress::Task { .. } => {} // handled above
             Progress::Step { index, of, label } => { task.steps.truncate(index.saturating_sub(1)); task.steps.push(label); task.of = of; task.fraction = 0.0; }
             Progress::Fraction(f) => task.fraction = f,
             Progress::Done(end) => task.end = Some(end),
@@ -93,11 +101,18 @@ impl App {
 
     /// Starts `task`, with its progress screen over the screen that asked.
     fn start_task(&mut self, task: Task) -> Vec<Effect> {
-        let Some(state) = &mut self.ctx.install else { return vec![] };
-        state.task = Some(TaskView { restore: matches!(task, Task::Restore { .. }), steps: vec![], of: 0, fraction: 0.0, end: None });
+        let restore = matches!(task, Task::Restore { .. });
         let mut e = vec![Effect::Installer(InstallCmd::Start(task))];
-        e.extend(self.go(|nav| Some(nav.push(ScreenState::new(screens::TASK, None)))));
+        e.extend(self.show_task(restore));
         e
+    }
+
+    /// Opens a task's progress screen (one this run started, or one left running by an earlier
+    /// run), over the screen shown.
+    fn show_task(&mut self, restore: bool) -> Vec<Effect> {
+        let Some(state) = &mut self.ctx.install else { return vec![] };
+        state.task = Some(TaskView { restore, steps: vec![], of: 0, fraction: 0.0, end: None });
+        self.go(|nav| Some(nav.push(ScreenState::new(screens::TASK, None))))
     }
 
     /// A press on the install screen: A switches its options, installs, or cancels; B cancels.
@@ -149,11 +164,16 @@ pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
     let mut rows = vec![];
     match &state.offer {
         Some(Ok(o)) => {
+            match o.internal {
+                Internal::UnfinishedInstall => rows.push(Row::note("install:unfinished", "The last install didn't finish, so the internal storage can't start the device. Install again, or restore a backup.")),
+                Internal::UnfinishedRestore => rows.push(Row::note("install:unfinished", "The last restore didn't finish, so the internal storage can't start the device. Restore again.")),
+                _ => {}
+            }
             if o.install.is_some() { rows.push(action("install:open", "Install to internal storage")); }
             if !o.backups.is_empty() { rows.push(action("install:restore", "Restore internal storage")); }
-            if let (None, Some(why), true) = (&o.install, &o.why_not, developer) { rows.push(note("install:why", &format!("Install: {why}"))); }
+            if let (None, Some(why), true) = (&o.install, &o.why_not, developer) { rows.push(Row::note("install:why", format!("Install: {why}"))); }
         }
-        Some(Err(e)) if developer => rows.push(note("install:why", &format!("Installer: {e}"))),
+        Some(Err(e)) if developer => rows.push(Row::note("install:why", format!("Installer: {e}"))),
         _ => {}
     }
     if !rows.is_empty() { rows.insert(0, Row::new("header:install", "Internal storage", RowKind::Header)); }
@@ -164,32 +184,15 @@ pub(super) fn settings_press(ctx: &Ctx, row: &Row, p: Press) -> Option<Outcome> 
     if p.button != Button::A { return None; }
     match row.id.0.as_str() {
         "install:open" => {
-            let backup = offer(ctx).and_then(|o| o.install.as_ref()).is_some_and(|i| i.backup_possible);
+            // Off to start with when the internal storage holds an unfinished install or restore
+            // (nothing worth keeping); it can still be turned on.
+            let backup = offer(ctx).is_some_and(|o| !o.internal.unfinished() && o.install.as_ref().is_some_and(|i| i.backup_possible));
             Some(Outcome::Push(on_cancel(ScreenState::new(screens::INSTALL, Some(InstallScreen::param(backup, false))))))
         }
         "install:restore" => Some(Outcome::Push(ScreenState::new(screens::RESTORE, None))),
         _ => None,
     }
 }
-
-/// A line of explanation (never focused).
-fn note(id: &str, text: &str) -> Row { Row { enabled: false, ..Row::new(id, text, RowKind::Text { detail: None }) } }
-
-/// An explanation as lines of at most `NOTE_WIDTH` characters (a row shows one line), split
-/// between words; their ids are `id` followed by the line's number.
-fn notes(id: &str, text: &str) -> Vec<Row> {
-    let mut lines: Vec<String> = vec![];
-    for word in text.split(' ') {
-        match lines.last_mut() {
-            Some(l) if l.chars().count() + 1 + word.chars().count() <= NOTE_WIDTH => { l.push(' '); l.push_str(word); }
-            _ => lines.push(word.into()),
-        }
-    }
-    lines.iter().enumerate().map(|(i, l)| note(&format!("{id}:{i}"), l)).collect()
-}
-
-/// About the most characters a list row's label shows on the Brick's panel.
-const NOTE_WIDTH: usize = 44;
 
 /// A screen that asks before erasing something starts with the focus on Cancel.
 fn on_cancel(mut state: ScreenState) -> ScreenState {
@@ -199,9 +202,10 @@ fn on_cancel(mut state: ScreenState) -> ScreenState {
 
 fn offer(ctx: &Ctx) -> Option<&Offer> { ctx.install.as_ref()?.offer.as_ref()?.as_ref().ok() }
 
-/// "Install to internal storage?": what it erases, whether to back up first (offered, and on to
-/// start with, if the card has room), and (for developers) whether the card stays bootable. Its
-/// params hold the options: "backup=<0|1>,keep=<0|1>".
+/// "Install to internal storage?": what it erases, whether to back up first (offered if the card
+/// has room; on to start with, unless the internal storage holds an unfinished install or
+/// restore), and (for developers) whether the card stays bootable. Its params hold the options:
+/// "backup=<0|1>,keep=<0|1>".
 struct InstallScreen;
 
 impl InstallScreen {
@@ -215,14 +219,20 @@ impl InstallScreen {
 impl Screen for InstallScreen {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let (backup, keep) = Self::options(state);
-        let mut rows = notes("note:erase", "Erases everything on the internal storage, including TrimUI's original system.");
-        rows.extend(notes("note:card", "Games and saves stay on the SD card."));
+        let erase = match offer(ctx).map_or(Internal::Unknown, |o| o.internal) {
+            Internal::TrimUi => "Erases everything on the internal storage, including TrimUI's original system.",
+            Internal::ThisSystem => "Erases everything on the internal storage, including the system installed on it.",
+            Internal::UnfinishedInstall => "Erases everything on the internal storage, including what the unfinished install left.",
+            Internal::UnfinishedRestore => "Erases everything on the internal storage, including what the unfinished restore left.",
+            Internal::Unknown => "Erases everything on the internal storage.",
+        };
+        let mut rows = vec![Row::note("note:erase", erase), Row::note("note:card", "Games and saves stay on the SD card.")];
         match offer(ctx).and_then(|o| o.install.as_ref()) {
             Some(i) if i.backup_possible => {
                 rows.push(Row::new("backup", "Back up the internal storage first", RowKind::Toggle { on: backup }));
-                if !backup { rows.extend(notes("note:backup", "Without a backup, it can't be put back.")); }
+                if !backup { rows.push(Row::note("note:backup", "Without a backup, it can't be put back.")); }
             }
-            Some(i) => rows.extend(notes("note:backup", &format!("No room for a backup ({} needed, {} free on the SD card): it can't be put back.", size(i.bytes), size(i.free)))),
+            Some(i) => rows.push(Row::note("note:backup", format!("No room for a backup ({} needed, {} free on the SD card): it can't be put back.", size(i.bytes), size(i.free)))),
             None => {}
         }
         if ctx.visibility() == Visibility::Developer {
@@ -236,13 +246,15 @@ impl Screen for InstallScreen {
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
 }
 
-/// The backups on the SD card, newest first; A asks before restoring one.
+/// The backups on the SD card, newest first, each with what it holds (when known) and when it was
+/// made; A asks before restoring one.
 struct RestoreScreen;
 
 impl Screen for RestoreScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let rows = offer(ctx).map(|o| o.backups.iter().map(|b| {
-            Row::new(format!("backup:{}", b.dir), when(&b.created), RowKind::Action { value: Some(size(b.bytes)) })
+            let label = match b.holds.and_then(Internal::name) { Some(what) => format!("{what} · {}", when(&b.created)), None => when(&b.created) };
+            Row::new(format!("backup:{}", b.dir), label, RowKind::Action { value: Some(size(b.bytes)) })
         }).collect()).unwrap_or_default();
         ScreenView { title: "Restore internal storage".into(), layout: Layout::List, rows,
                      hints: vec![(Button::B, "Back".into()), (Button::A, "Restore".into())], entry: None }
@@ -266,8 +278,8 @@ impl Screen for RestoreConfirmScreen {
         let created = offer(ctx).and_then(|o| o.backups.iter().find(|b| b.dir == dir)).map_or(String::new(), |b| when(&b.created));
         ScreenView {
             title: "Restore the internal storage?".into(), layout: Layout::List,
-            rows: notes("note:replace", &format!("Everything on the internal storage is replaced by the backup from {created}."))
-                .into_iter().chain([action("restore", "Restore"), action("cancel", "Cancel")]).collect(),
+            rows: vec![Row::note("note:replace", format!("Everything on the internal storage is replaced by the backup from {created}.")),
+                       action("restore", "Restore"), action("cancel", "Cancel")],
             hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())], entry: None,
         }
     }
@@ -289,22 +301,22 @@ impl Screen for TaskScreen {
                 (Some(Err(_)), true) => "Failed".into(),
                 _ => "Done".into(),
             };
-            Row { enabled: false, ..Row::new(format!("step:{i}"), label, RowKind::Text { detail: Some(detail) }) }
+            Row::new(format!("step:{i}"), label, RowKind::Note { detail: Some(detail) })
         }).collect();
         let (title, hints) = match &t.end {
             None => {
-                rows.extend(notes("note:wait", &format!("Step {} of {}. Keep the device on and the SD card in.", t.steps.len(), t.of.max(1))));
+                rows.push(Row::note("note:wait", format!("Step {} of {}. Keep the device on and the SD card in.", t.steps.len(), t.of.max(1))));
                 (if t.restore { "Restoring…" } else { "Installing…" }, vec![])
             }
             Some(Ok(message)) => {
-                rows.extend(notes("note:done", message));
+                rows.push(Row::note("note:done", message.as_str()));
                 rows.push(if t.restore { action("off", "Power off") } else { action("restart", "Restart") });
                 (if t.restore { "Restored" } else { "Installed" }, vec![(Button::A, "Select".into())])
             }
             Some(Err(e)) => {
-                rows.extend(notes("note:error", &e.message));
-                rows.extend(notes("note:hint", &e.hint));
-                if let Some(log) = &e.log { rows.extend(notes("note:log", &format!("Log: {log}"))); }
+                rows.push(Row::note("note:error", e.message.as_str()));
+                rows.push(Row::note("note:hint", e.hint.as_str()));
+                if let Some(log) = &e.log { rows.push(Row::note("note:log", format!("Log: {log}"))); }
                 rows.push(action("back", "Back"));
                 (if t.restore { "Restore failed" } else { "Install failed" }, vec![(Button::B, "Back".into()), (Button::A, "Select".into())])
             }

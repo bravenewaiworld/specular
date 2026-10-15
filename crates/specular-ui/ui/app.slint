@@ -6,7 +6,7 @@ import { Icon, IconData, IconKind, BluetoothMark } from "icons.slint";
 export { Theme, IconData, IconKind }
 
 // What a row is (the core's row kinds; a row with a picture is drawn as text in a list).
-export enum Kind { header, text, toggle, choice, number, action, key }
+export enum Kind { header, note, text, toggle, choice, number, action, key }
 
 // How the screen's rows are arranged (the core's layouts).
 export enum ScreenLayout { list, list-with-picture, grid, keys }
@@ -37,7 +37,6 @@ export struct RowData {
     on: bool,
     // A number's position in its range, 0–1, for its gauge.
     fraction: float,
-    enabled: bool,
     overridden: bool,
     // From the core's list layout, in u.
     x: float,
@@ -153,13 +152,24 @@ component RowView inherits Rectangle {
     width: data.width * 1px * Theme.u;
     y: data.top * 1px * Theme.u;
     height: data.height * 1px * Theme.u;
-    opacity: data.enabled ? 1 : 0.4;
 
     if data.kind == Kind.header : Text {
         x: Theme.gutter; y: parent.height - self.height - 12px * Theme.u;
         text: data.label; font-size: Theme.caption; font-weight: 500; color: Theme.dim;
     }
-    if data.kind != Kind.header : HorizontalLayout {
+    // The core breaks a note's text into lines (list::note_lines), so it is drawn as it is.
+    if data.kind == Kind.note : HorizontalLayout {
+        padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 20px * Theme.u;
+        padding-top: 16px * Theme.u; padding-bottom: 16px * Theme.u;
+        Text {
+            text: data.label; vertical-alignment: center; horizontal-stretch: 1; overflow: elide;
+            font-size: Theme.secondary; color: Theme.dim;
+        }
+        if data.value != "" : Text {
+            text: data.value; vertical-alignment: center; font-family: Theme.mono; font-size: Theme.secondary; color: Theme.dim;
+        }
+    }
+    if data.kind != Kind.header && data.kind != Kind.note : HorizontalLayout {
         padding-left: Theme.gutter; padding-right: Theme.gutter; spacing: 20px * Theme.u;
         if data.icon.kind != IconKind.none : Icon {
             data: data.icon; paint: focused ? Theme.focus : Theme.accent; y: (parent.height - self.height) / 2;
@@ -291,7 +301,13 @@ export component AppWindow inherits Window {
     in property <float> plate-width;
     in property <float> plate-top;
     in property <float> plate-height;
+    // False while no row can take the focus (a screen of notes): no plate is drawn.
+    in property <bool> plate-shown;
     in property <float> scroll;
+    // Whether the list goes on above or below the view: the soft edges show only then, so they
+    // never fade a row of a list that fits.
+    in property <bool> more-above;
+    in property <bool> more-below;
     // Set with each new `scroll`: true makes that change a jump instead of an animation.
     in property <bool> scroll-jumps;
     // The keyboard's text entry (layout `keys`): the text before and after the caret, and the
@@ -435,7 +451,7 @@ export component AppWindow inherits Window {
                 y: -root.scroll * 1px * Theme.u;
                 animate y { duration: root.scroll-jumps ? 0ms : Motion.scroll; easing: Motion.decelerate; }
                 if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle {
-                    FocusPlate {
+                    if root.plate-shown : FocusPlate {
                         x: Theme.gutter - 20px * Theme.u; width: list.width - 2 * (Theme.gutter - 20px * Theme.u);
                         y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
                         animate y, height { duration: Motion.focus; easing: Motion.focus-easing; }
@@ -460,8 +476,14 @@ export component AppWindow inherits Window {
                 }
             }
             // Soft edges where list rows scroll under the title and the hint bar.
-            if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle { y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
-            if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle { y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%); }
+            if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle {
+                y: 0; height: 56px * Theme.u; background: @linear-gradient(180deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%);
+                opacity: root.more-above ? 1 : 0; animate opacity { duration: Motion.fade; }
+            }
+            if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle {
+                y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%);
+                opacity: root.more-below ? 1 : 0; animate opacity { duration: Motion.fade; }
+            }
         }
         if root.layout == ScreenLayout.list-with-picture : Rectangle {
             x: list.width + 16px * Theme.u; y: 24px * Theme.u;

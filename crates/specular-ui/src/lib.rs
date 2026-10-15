@@ -308,12 +308,14 @@ fn radio_thread<C: Send + 'static, E: Send + 'static>(name: &str, mut service: B
     tx
 }
 
-/// The installer's thread: asks it what can be done, and starts its tasks (whose progress it
-/// reports from a thread of its own).
+/// The installer's thread: first has it follow a task an earlier run of Specular left running,
+/// then asks it what can be done and starts its tasks (whose progress it reports from a thread of
+/// its own).
 fn installer_thread(installer: Box<dyn specular_core::install::Installer>) -> mpsc::Sender<specular_core::app::InstallCmd> {
     use specular_core::app::InstallCmd;
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new().name("installer".into()).spawn(move || {
+        installer.follow(Box::new(|p| post(Msg::InstallProgress(p))));
         for cmd in rx {
             match cmd {
                 InstallCmd::Offer => post(Msg::InstallOffer(installer.offer())),
@@ -769,7 +771,10 @@ impl Runner {
             w.set_entry_height(keys::ENTRY_HEIGHT);
         }
         w.set_crumb(app.parent_title().unwrap_or_default().into());
-        w.set_focused_row(focus as i32);
+        // `focus` is 0 on a screen where no row can take the focus: nothing is focused then.
+        let focusable = view.rows.get(focus).is_some_and(|r| r.kind.focusable());
+        w.set_focused_row(if focusable { focus as i32 } else { -1 });
+        w.set_plate_shown(focusable);
         let plate = layout.rects.get(focus).copied().unwrap_or_default();
         w.set_plate_x(plate.x);
         w.set_plate_width(plate.width);
@@ -779,6 +784,9 @@ impl Runner {
         // animating them would pass rows that aren't drawn.
         w.set_scroll_jumps((layout.scroll - w.get_scroll()).abs() > height);
         w.set_scroll(layout.scroll);
+        let end = layout.rects.last().map_or(0.0, |r| r.y + r.height);
+        w.set_more_above(layout.scroll > 0.5);
+        w.set_more_below(end - layout.scroll > height + 0.5);
         let status: Vec<IconData> = app.status().iter().map(icon_data).collect();
         if self.status_icons.iter().ne(status.iter().cloned()) { self.status_icons.set_vec(status); }
         if let Some(t) = t {
@@ -872,6 +880,7 @@ impl Runner {
     fn row_data(&self, r: &Row, index: usize, rect: Rect) -> RowData {
         let (kind, value, on, fraction) = match &r.kind {
             RowKind::Header => (Kind::Header, String::new(), false, 0.0),
+            RowKind::Note { detail } => (Kind::Note, detail.clone().unwrap_or_default(), false, 0.0),
             RowKind::Text { detail } | RowKind::Image { detail, .. } => (Kind::Text, detail.clone().unwrap_or_default(), false, 0.0),
             RowKind::Toggle { on } => (Kind::Toggle, String::new(), *on, 0.0),
             RowKind::Choice { options, selected, .. } => (Kind::Choice, options.get(*selected).cloned().unwrap_or_default(), false, 0.0),
@@ -879,9 +888,14 @@ impl Runner {
             RowKind::Action { value } => (Kind::Action, value.clone().unwrap_or_default(), false, 0.0),
             RowKind::Key { .. } => (Kind::Key, String::new(), false, 0.0),
         };
+        // A note is drawn in the lines the layout made room for.
+        let label = match &r.kind {
+            RowKind::Note { detail } => list::note_lines(&r.label, detail.as_deref(), rect.width).join("\n"),
+            _ => r.label.clone(),
+        };
         RowData {
-            shown: true, index: index as i32, kind, label: r.label.as_str().into(), value: value.into(), on, fraction,
-            enabled: r.enabled, overridden: r.overridden, x: rect.x, top: rect.y, width: rect.width, height: rect.height,
+            shown: true, index: index as i32, kind, label: label.into(), value: value.into(), on, fraction,
+            overridden: r.overridden, x: rect.x, top: rect.y, width: rect.width, height: rect.height,
             cover: self.cover(r),
             // Transparent (not drawn) for rows without one.
             swatch: match r.kind { RowKind::Choice { swatch: Some(Rgb(r, g, b)), .. } => slint::Color::from_rgb_u8(r, g, b), _ => Default::default() },

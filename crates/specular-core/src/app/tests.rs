@@ -281,8 +281,7 @@ fn home_says_where_games_go_when_there_are_none() {
     assert!(labels(&a).contains(&"Looking for games…".to_string()));
     a.handle(Msg::Library { games: vec![], card_found: true });
     assert!(labels(&a).contains(&"No games found".to_string()));
-    assert_eq!(a.view().rows[a.focus()].label, "No games found");
-    assert_eq!(tap(&mut a, Button::A, 0), vec![]); // a note does nothing
+    assert_eq!(a.view().rows[a.focus()].label, "Settings"); // notes are never focused
     a.handle(Msg::Library { games: vec![], card_found: false });
     assert!(labels(&a).contains(&"No SD card".to_string()));
 }
@@ -553,7 +552,7 @@ mod wireless {
 
 mod install {
     use super::*;
-    use crate::install::{Backup, InstallOffer, Offer, Progress, Task, TaskError};
+    use crate::install::{Backup, InstallOffer, Internal, Offer, Progress, Task, TaskError};
 
     /// An app with an installer, at home.
     fn install_app() -> App {
@@ -564,8 +563,8 @@ mod install {
 
     fn offer() -> Offer {
         Offer {
-            install: Some(InstallOffer { bytes: 7_818_182_656, backup_possible: true, free: 20_000_000_000 }), why_not: None,
-            backups: vec![Backup { dir: "/mnt/SDCARD/backups/internal-20261014-232447".into(), created: "20261014-232447".into(), bytes: 7_818_182_656 }],
+            install: Some(InstallOffer { bytes: 7_818_182_656, backup_possible: true, free: 20_000_000_000 }), why_not: None, internal: Internal::TrimUi,
+            backups: vec![Backup { dir: "/mnt/SDCARD/backups/internal-20261014-232447".into(), created: "20261014-232447".into(), bytes: 7_818_182_656, holds: Some(Internal::TrimUi) }],
         }
     }
 
@@ -592,7 +591,7 @@ mod install {
         settings(&mut a, offer());
         let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
         assert!(labels.ends_with(&["Internal storage".into(), "Install to internal storage".into(), "Restore internal storage".into()]), "{labels:?}");
-        a.handle(Msg::InstallOffer(Ok(Offer { install: None, why_not: Some("running from the internal storage".into()), backups: vec![] })));
+        a.handle(Msg::InstallOffer(Ok(Offer { install: None, why_not: Some("running from the internal storage".into()), internal: Internal::Unknown, backups: vec![] })));
         assert!(!a.view().rows.iter().any(|r| r.label == "Internal storage"));
     }
 
@@ -614,12 +613,13 @@ mod install {
         a.handle(Msg::InstallProgress(Progress::Step { index: 1, of: 5, label: "Checking".into() }));
         a.handle(Msg::InstallProgress(Progress::Step { index: 2, of: 5, label: "Partitioning".into() }));
         a.handle(Msg::InstallProgress(Progress::Fraction(0.5)));
-        let details: Vec<_> = a.view().rows.iter().map(|r| match &r.kind { RowKind::Text { detail } => detail.clone(), _ => None }).collect();
+        let details: Vec<_> = a.view().rows.iter().map(|r| match &r.kind { RowKind::Note { detail } => detail.clone(), _ => None }).collect();
         assert_eq!(details[..2], [Some("Done".into()), Some("50 %".into())]);
         let e = a.handle(Msg::InstallProgress(Progress::Done(Ok("Installed.".into()))));
         assert!(e.contains(&Effect::Installer(InstallCmd::Offer))); // what can be done has changed
         assert_eq!(a.view().title, "Installed");
-        assert_eq!(press(&mut a, "Restart"), vec![Effect::Restart]);
+        assert_eq!(focused(&a), "Restart"); // the steps and the message are notes: never focused
+        assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Restart]);
     }
 
     #[test]
@@ -643,11 +643,38 @@ mod install {
         let mut a = install_app();
         settings(&mut a, offer());
         press(&mut a, "Restore internal storage");
-        press(&mut a, "2026-10-14 23:24 UTC");
+        press(&mut a, "TrimUI's system · 2026-10-14 23:24 UTC");
         assert_eq!(a.view().title, "Restore the internal storage?");
         let e = press(&mut a, "Restore");
         assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Restore { dir: "/mnt/SDCARD/backups/internal-20261014-232447".into() })));
         a.handle(Msg::InstallProgress(Progress::Done(Ok("Restored.".into()))));
         assert_eq!(press(&mut a, "Power off"), vec![Effect::PowerOff]);
+    }
+
+    #[test]
+    fn a_task_left_running_by_an_earlier_run_is_shown_and_not_interrupted() {
+        let mut a = install_app();
+        // The installer, following it (Installer::follow), reports it from its start.
+        a.handle(Msg::InstallProgress(Progress::Task { restore: true }));
+        a.handle(Msg::InstallProgress(Progress::Step { index: 1, of: 3, label: "Checking the backup".into() }));
+        assert_eq!(a.view().title, "Restoring…");
+        assert!(a.task_running());
+        assert_eq!(a.sleep_deadline(), None);
+        assert_eq!(tap(&mut a, Button::Power, 0), vec![Effect::Notice("Please wait until restoring has finished".into())]);
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("Restored.".into()))));
+        assert_eq!(focused(&a), "Power off");
+        // A task this run started also reports which it is first: nothing changes.
+        assert_eq!(a.handle(Msg::InstallProgress(Progress::Task { restore: false })), vec![]);
+    }
+
+    #[test]
+    fn an_unfinished_install_is_pointed_out_and_not_backed_up_by_default() {
+        let mut a = install_app();
+        settings(&mut a, Offer { internal: Internal::UnfinishedInstall, ..offer() });
+        assert!(a.view().rows.iter().any(|r| r.label.starts_with("The last install didn't finish")));
+        press(&mut a, "Install to internal storage");
+        let rows = a.view().rows.clone();
+        assert!(rows.iter().any(|r| r.label == "Erases everything on the internal storage, including what the unfinished install left."));
+        assert!(rows.iter().any(|r| r.label == "Back up the internal storage first" && r.kind == RowKind::Toggle { on: false }));
     }
 }
