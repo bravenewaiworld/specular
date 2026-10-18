@@ -117,6 +117,55 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
     assert_ne!(std::fs::read(&autosave).unwrap(), b"not a state"); // replaced on quitting
 }
 
+/// A zip of these files, deflated.
+fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let (mut out, mut dir) = (Vec::new(), Vec::new());
+    for (name, data) in files {
+        let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(data).unwrap();
+        let body = e.finish().unwrap();
+        // From the method on, the local header and the directory entry share these fields.
+        let common = [&8u16.to_le_bytes()[..], &[0; 4], &crc32fast::hash(data).to_le_bytes(), &(body.len() as u32).to_le_bytes(),
+                      &(data.len() as u32).to_le_bytes(), &(name.len() as u16).to_le_bytes()].concat();
+        dir.extend([&b"PK\x01\x02"[..], &[0; 6], &common, &[0; 12], &(out.len() as u32).to_le_bytes(), name.as_bytes()].concat());
+        out.extend([&b"PK\x03\x04"[..], &[0; 4], &common, &[0; 2], name.as_bytes(), &body].concat());
+    }
+    let n = (files.len() as u16).to_le_bytes();
+    let end = [&b"PK\x05\x06"[..], &[0; 4], &n, &n, &(dir.len() as u32).to_le_bytes(), &(out.len() as u32).to_le_bytes(), &[0; 2]].concat();
+    [out, dir, end].concat()
+}
+
+#[test]
+fn a_zipped_game_is_unzipped_into_memory() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    let spec = |rom: PathBuf| LaunchSpec { core: core.clone(), rom, save: dir.path().join("game.srm"), autosave: None,
+                                           system_dir: dir.path().into(), options: vec![], rom_by_path: true };
+    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::new(FrameSlot::default()), on_frame: Box::new(|| {}) };
+    let write = |name: &str, data: &[u8]| { let p = dir.path().join(name); std::fs::write(&p, data).unwrap(); p };
+    // mGBA is given the unzipped ROM's path, which has no extension: it tells a GBA ROM by its contents.
+    let game = write("game.zip", &zip(&[("readme.txt", b"hello"), ("game.gba", &rom(&[0xeaff_fffe /* b . */]))]));
+    let o = out();
+    let frames = o.frames.clone();
+    let session = Session::start(spec(game.clone()), o).unwrap();
+    assert_eq!((session.info().width, session.info().height), (240, 160));
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(frames.take().is_some());
+    session.quit().unwrap();
+    assert!(dir.path().join("game.srm").exists());
+    let none = write("none.zip", &zip(&[("readme.txt", b"hello")]));
+    assert_eq!(Session::start(spec(none), out()).err().unwrap(), "the zip holds no game mGBA plays");
+    let zipped = std::fs::read(&game).unwrap();
+    let cut = write("cut.zip", &zipped[..zipped.len() - 30]); // the directory's end is gone
+    assert_eq!(Session::start(spec(cut), out()).err().unwrap(), "the zip can't be read (not a zip)");
+    // A byte of the ROM's compressed data, which ends where the directory starts.
+    let mut damaged = zipped.clone();
+    damaged[zipped.windows(4).position(|w| w == b"PK\x01\x02").unwrap() - 4] ^= 0xff;
+    let damaged = write("damaged.zip", &damaged);
+    assert!(Session::start(spec(damaged), out()).err().unwrap().starts_with("the zip is damaged"));
+}
+
 struct Instant0;
 impl Vsync for Instant0 { fn wait(&mut self) -> io::Result<()> { Ok(()) } }
 

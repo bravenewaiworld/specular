@@ -85,6 +85,44 @@ fn index_letters() {
     }
 }
 
+/// A zip holding one file, `data`, deflated or stored as it is.
+fn zip_with(name: &str, data: &[u8], deflate: bool) -> Vec<u8> {
+    let body = if deflate {
+        let mut e = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    } else { data.to_vec() };
+    let (crc, n) = (crc32fast::hash(data).to_le_bytes(), (name.len() as u16).to_le_bytes());
+    let method = (if deflate { 8u16 } else { 0 }).to_le_bytes();
+    let sizes = [(body.len() as u32).to_le_bytes(), (data.len() as u32).to_le_bytes()].concat();
+    let mut out = [&b"PK\x03\x04"[..], &[0; 4], &method, &[0; 4], &crc, &sizes, &n, &[0; 2], name.as_bytes(), &body].concat();
+    let start = out.len() as u32;
+    let dir = [&b"PK\x01\x02"[..], &[0; 6], &method, &[0; 4], &crc, &sizes, &n, &[0; 12], &[0; 4], name.as_bytes()].concat();
+    out.extend(&dir);
+    out.extend([&b"PK\x05\x06"[..], &[0; 4], &[1, 0, 1, 0], &(dir.len() as u32).to_le_bytes(), &start.to_le_bytes(), &[0; 2]].concat());
+    out
+}
+
+#[test]
+fn unpacks_a_file_from_a_zip_checking_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    for deflate in [false, true] {
+        let p = tmp.path().join("a.zip");
+        std::fs::write(&p, zip_with("game.gba", &data, deflate)).unwrap();
+        let entries = zip::entries(&p).unwrap();
+        assert_eq!((entries[0].name.as_str(), entries[0].size), ("game.gba", data.len() as u64));
+        let mut out = Vec::new();
+        zip::unpack(&p, &entries[0], &mut out).unwrap();
+        assert!(out == data, "deflate: {deflate}");
+        // A damaged byte is caught by the checksum (stored) or the decoder (deflated).
+        let mut zip = std::fs::read(&p).unwrap();
+        zip[30 + 8 + 100] ^= 0xff;
+        std::fs::write(&p, zip).unwrap();
+        assert!(zip::unpack(&p, &entries[0], &mut Vec::new()).is_err());
+    }
+}
+
 #[test]
 fn reads_zip_directories() {
     let tmp = tempfile::tempdir().unwrap();

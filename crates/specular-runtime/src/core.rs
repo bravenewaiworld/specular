@@ -54,6 +54,18 @@ pub struct SystemInfo {
     pub block_extract: bool,
 }
 
+impl SystemInfo {
+    /// What the core calls itself, e.g. "mGBA".
+    pub fn name(&self) -> String { text(self.library_name).unwrap_or_else(|| "the core".into()) }
+    /// The extensions of the files it plays, in lower case.
+    pub fn extensions(&self) -> Vec<String> {
+        text(self.valid_extensions).map_or(vec![], |e| e.split('|').map(str::to_ascii_lowercase).collect())
+    }
+}
+
+/// A C string from a core, if it isn't null.
+fn text(p: *const c_char) -> Option<String> { (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()) }
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Geometry { pub base_width: c_uint, pub base_height: c_uint, pub max_width: c_uint, pub max_height: c_uint, pub aspect_ratio: f32 }

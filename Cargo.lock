@@ -3929,6 +3929,7 @@ name = "specular-core"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "flate2",
  "serde",
  "serde_json",
  "tempfile",
@@ -3967,6 +3968,8 @@ dependencies = [
 name = "specular-runtime"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "flate2",
  "libc",
  "specular-core",
  "specular-linux",

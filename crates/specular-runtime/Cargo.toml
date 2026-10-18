@@ -13,3 +13,5 @@ specular-core = { path = "../specular-core" }
 [dev-dependencies]
 specular-linux = { path = "../specular-linux" }
 tempfile = "3"
+crc32fast = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

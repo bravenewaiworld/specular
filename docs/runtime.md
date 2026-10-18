@@ -18,6 +18,7 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 - **Save states live in a hidden `.states/` folder beside the ROM** (2026-10-13), named after it. Battery saves stay in `saves/`.
 - **Save states are zstd-compressed (level 1)** (2026-10-14), about 11 times less wear on the card or internal storage, as the autosave is written every 10 s. Battery saves stay uncompressed, so other emulators and tools can read them. Rejected: uncompressed states (readable by other frontends, but far more writes).
 - **mGBA gets only the ROM's path, and maps the file** (2026-10-13). Rejected: handing it the contents, as libretro allows (it copies them, and copies a GBA ROM again on the first write to its cartridge area, as Pokémon games' clock does: 64 MB for a 32 MB ROM).
+- **A zipped ROM is unzipped into memory, and the core given its `/proc/self/fd/<n>` path** (2026-10-18). A memfd holds it, so nothing is written to the card and mGBA still maps the file (its pages are shared, not copied). Only for a core that can't open zips (none among its `valid_extensions`, and no `block_extract`), as libretro has frontends do; the file inside is the first with one of the core's extensions. A ROM that would leave less than 64 MB of memory available (`MemAvailable`) is refused. Saves stay named after the zip. Rejected: building mGBA with zip support (every core would need its own, and our mapping patch works on files); unzipping to a file on the card (writes, and a leftover file after a crash); a temporary file under `/tmp` (tmpfs: the same memory, plus a file to clean up).
 - **A watchdog ends Specular if a core spends 6 s on one frame** (2026-10-13). A stuck core's thread can't be stopped; the service manager restarts Specular. The battery save is then as the game last wrote it, at most about 10 s old.
 
 ## Design
@@ -29,7 +30,7 @@ One game runs at a time, on a thread of its own: a core keeps its state in globa
 ```rust
 pub struct LaunchSpec {
     pub core: PathBuf,                  // e.g. cores/mgba_libretro.so
-    pub rom: PathBuf,
+    pub rom: PathBuf,                   // a zip is unzipped into memory first (see Decisions)
     pub save: PathBuf,                  // battery save (.srm)
     pub autosave: Option<PathBuf>,      // resumed from at launch
     pub system_dir: PathBuf,            // bios/
@@ -55,6 +56,8 @@ impl Session {
     pub fn quit(self) -> io::Result<()>;     // dropping a Session quits too
 }
 ```
+
+A zip that can't be unzipped fails the start with a message for the player ("the zip can't be read", "the zip holds no game mGBA plays", "the zip is damaged", "the game is too large to unzip"), shown as "The game couldn't start: …"; the log has the zip's path, what it holds and the sizes. A ROM unzipped is logged with its size and how long unzipping took.
 
 Frames are handed over in a `FrameSlot` holding the newest frame: neither side waits, and a frame the UI hasn't taken is replaced by a newer one. The UI uploads it on its own thread just before Slint draws (the only time its GL context is sure to be current), into one texture the window shows. 3D cores will need a GL context shared with the UI's instead.
 
@@ -105,6 +108,7 @@ mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-w
 - (2026-10-14, device) Before the mapping patch, mGBA held two 32 MB copies of a ROM. Mapped, most of a 32 MB ROM is file pages the kernel can drop. Source: Brick measurements.
 - (2026-10-14, device) Making a 516 KB mGBA state (pokehns) takes 3.5–4.7 ms of the game's thread with patch `0003`, 6–7 ms without; no frame was late either way. Source: Brick measurements.
 - (2026-10-14, device) zstd level 1 shrinks that state to about 45 KB, in about 6 ms on the writer's thread; decompressing at launch takes about 4 ms. Source: Brick measurements.
+- (2026-10-18, desktop) mGBA plays a ROM given as `/proc/self/fd/<n>`, a path without an extension: it tells GB, GBC and GBA games apart by their contents. Source: `crates/specular-runtime/src/tests.rs`.
 - (2026-10-13, upstream) mGBA detects Pokémon Emerald hacks itself (128 KiB flash and the cartridge clock). Source: mGBA.
 - (2026-10-13, upstream) libretro keeps the ROM contents it hands a core valid only until loading returns, unless the core asks for longer with `SET_CONTENT_INFO_OVERRIDE` (Specular refuses it). So cores copy what they need, and Specular frees its copy once the core has loaded. Source: libretro.h.
 - (2026-10-13, upstream) The usual NES, SNES and Mega Drive cores are non-commercial (snes9x, Genesis Plus GX, PicoDrive) or possibly GPLv2-only (FCEUmm, and PCSX ReARMed for PS1). GPLv3-compatible candidates: bsnes, BlastEm, QuickNES or Nestopia, and SwanStation. Source: the cores' licences.

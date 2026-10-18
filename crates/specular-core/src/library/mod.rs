@@ -8,7 +8,7 @@
 mod names;
 pub mod saves;
 mod search;
-pub(crate) mod zip;
+pub mod zip;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -158,7 +158,8 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
-pub(crate) fn extension(p: &Path) -> Option<String> { p.extension()?.to_str().map(str::to_ascii_lowercase) }
+/// A file's extension, in lower case.
+pub fn extension(p: &Path) -> Option<String> { p.extension()?.to_str().map(str::to_ascii_lowercase) }
 
 /// The system a file belongs to: by its extension, or for a zip, by the first file inside it
 /// with a known extension.

@@ -12,6 +12,7 @@
 mod core;
 mod frontend;
 mod sound;
+mod unzip;
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
@@ -31,6 +32,7 @@ use crate::frontend::Frontend;
 pub struct LaunchSpec {
     /// The core's shared library, e.g. `.../cores/mgba_libretro.so`.
     pub core: PathBuf,
+    /// A zip is unzipped into memory first, unless the core opens zips itself (see `unzip`).
     pub rom: PathBuf,
     /// The battery save (`.srm`): loaded before the game starts; written when the game has
     /// written its save memory (or, with a core that doesn't say when, within 10 s of play of it
@@ -369,25 +371,28 @@ struct Game {
     save_pending: bool,
     autosave: Option<PathBuf>,
     writer: Writer,
-    /// Kept for the core, which may hold on to the path. (The ROM's contents are freed once the
-    /// core has loaded them: libretro only keeps them valid that long, unless a core asks for
-    /// longer with SET_CONTENT_INFO_OVERRIDE, which Specular refuses; so cores copy what they
-    /// need, and keeping our copy would only double the game's memory.)
-    _rom_path: CString,
+    /// Kept for the core, which may hold on to the ROM's path, and open or map the file there (an
+    /// unzipped ROM's file goes when this does). (The ROM's contents are freed once the core has
+    /// loaded them: libretro only keeps them valid that long, unless a core asks for longer with
+    /// SET_CONTENT_INFO_OVERRIDE, which Specular refuses; so cores copy what they need, and
+    /// keeping our copy would only double the game's memory.)
+    _rom: (CString, Option<unzip::Unzipped>),
 }
 
 impl Game {
     fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>) -> Result<Self, String> {
         let core = Core::load(&spec.core)?;
-        let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string());
-        let (system_dir, save_dir, rom_path) = (cstring(&spec.system_dir)?, cstring(spec.save.parent().unwrap_or(Path::new(".")))?, cstring(&spec.rom)?);
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
+        let unzipped = unzip::if_needed(&spec.rom, &info)?;
+        let rom_file = unzipped.as_ref().map_or(spec.rom.as_path(), |u| &u.path);
+        let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string());
+        let (system_dir, save_dir, rom_path) = (cstring(&spec.system_dir)?, cstring(spec.save.parent().unwrap_or(Path::new(".")))?, cstring(rom_file)?);
         // A core that reads the file itself (as it says, or as the spec says) gets only its path;
         // others get its contents too.
         let rom = if info.need_fullpath || spec.rom_by_path { None } else {
-            Some(MappedFile::open(&spec.rom).map_err(|e| format!("reading {}: {e}", spec.rom.display()))?)
+            Some(MappedFile::open(rom_file).map_err(|e| format!("reading {}: {e}", spec.rom.display()))?)
         };
         let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());
         frontend::install(Some(Frontend {
@@ -412,7 +417,7 @@ impl Game {
         unsafe { (core.get_system_av_info)(&mut av) };
         let writer = Writer::new().map_err(|e| format!("starting the save writer: {e}"))?;
         let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
-                           autosave: spec.autosave.clone(), writer, _rom_path: rom_path };
+                           autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
         drop(rom);
         g.read_save();
         if let Some(p) = spec.autosave.as_deref().filter(|p| p.exists()) && let Err(e) = g.load_state(p) {
