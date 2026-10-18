@@ -91,10 +91,13 @@ fn settings_change_and_save() {
     assert_eq!(focused(&a), "Brightness");
     let e = tap(&mut a, Button::Right, 20);
     assert_eq!(e, vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key: "display.brightness", value: json!(7) }]);
-    // loading settings applies every global one
-    let loaded = a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::new()));
+    // loading settings applies every global one, and saves the change made before (whose save
+    // left out the file's values)
+    let loaded = a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::from_iter([("sound.volume".into(), json!(5))])));
     assert!(loaded.contains(&Effect::Apply { key: "lights.brightness", value: json!(3) }));
-    assert_eq!(a.ctx().settings.layer(&Layer::Global).get("display.brightness"), Some(&json!(7)));
+    assert!(loaded.contains(&Effect::SaveSettings(Layer::Global)));
+    let global = a.ctx().settings.layer(&Layer::Global);
+    assert_eq!((global.get("display.brightness"), global.get("sound.volume")), (Some(&json!(7)), Some(&json!(5))));
 }
 
 #[test]

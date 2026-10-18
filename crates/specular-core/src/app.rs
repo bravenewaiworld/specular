@@ -433,12 +433,16 @@ impl App {
                 if changed { vec![Effect::Redraw(None)] } else { vec![] }
             }
             Msg::SettingsLoaded(layer, values) => {
+                // A change made before the file was loaded was saved without the file's values
+                // (and replaced it): save the two together.
+                let save = (!self.ctx.settings.layer(&layer).is_empty()).then(|| Effect::SaveSettings(layer.clone()));
                 self.ctx.settings.set_layer(layer, values);
                 self.changed();
                 let s = &self.ctx.settings;
                 self.radios.settings_loaded = true;
                 std::iter::once(Effect::Redraw(None))
                     .chain(s.decls().iter().filter_map(|d| s.get(d.key, &Layer::Global).map(|(v, _)| Effect::Apply { key: d.key, value: v.clone() })))
+                    .chain(save)
                     .collect()
             }
             Msg::Wifi(e) => self.wifi_event(e),
