@@ -12,6 +12,7 @@ WiFi and Bluetooth: the services that drive the radios, how the app keeps them a
 - **Failures are shown only on the radio's own screen** (2026-10-14), where the user asked for something. Elsewhere they are only in the trace.
 - **Every exchange with a radio is traced, always** (2026-10-14). It is a few lines per user action, so it costs the same everywhere and there is no separate mode in which behaviour could differ. Passwords are never written.
 - **Bluetooth headphones and speakers are a sound output** (2026-10-14), through bluez-alsa, with one volume they all share. A game's sound can switch to them mid-game, and falls back to the speaker if they fail.
+- **On the keyboard, Select shows or hides masked text, and a hint says which** (2026-10-18). The text is hidden each time the keyboard opens. Rejected: a key among the keys (one more to walk past; Y and X are already Shift and Symbols); remembering it shown (a password on screen by surprise).
 
 ## Design
 

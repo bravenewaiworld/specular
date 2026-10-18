@@ -511,6 +511,28 @@ mod wireless {
     }
 
     #[test]
+    fn select_shows_a_password_until_the_keyboard_closes() {
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Office", true, false)])));
+        focus_on(&mut a, "Office");
+        let shown = |a: &App| {
+            let v = a.view();
+            (v.entry.as_ref().unwrap().text.clone(), v.hints.iter().find(|(b, _)| *b == Button::Select).map(|(_, l)| l.clone()))
+        };
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 0);
+        assert_eq!(shown(&a), ("•".into(), Some("Show".into())));
+        tap(&mut a, Button::Select, 0);
+        assert_eq!(shown(&a), ("q".into(), Some("Hide".into())));
+        tap(&mut a, Button::B, 0);
+        tap(&mut a, Button::B, 0); // the first deletes the "q", the second closes the keyboard
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 0);
+        assert_eq!(shown(&a), ("•".into(), Some("Show".into())));
+    }
+
+    #[test]
     fn bluetooth_searches_on_its_screen_and_routes_sound_to_a_headset() {
         let mut a = radio_app();
         open(&mut a, "Bluetooth", 0);

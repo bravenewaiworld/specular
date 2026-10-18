@@ -723,15 +723,18 @@ fn setting_press(ctx: &mut Ctx, row: &Row, p: Press) -> Outcome {
 }
 
 /// The keyboard's screen: one row per key, line by line (`Layout::Keys`), its text above them.
-/// Keys' row ids are their line and column, so the focus is the keyboard's own.
+/// Keys' row ids are their line and column, so the focus is the keyboard's own. Masked text has
+/// a hint for Select, which shows or hides it.
 fn keyboard_view(kb: &Keyboard) -> ScreenView {
     let rows = kb.lines().iter().enumerate().flat_map(|(line, keys)| keys.iter().map(move |k| {
         Row::new(format!("key:{line}:{}", k.column), kb.label(k.key), RowKind::Key { line, column: k.column, span: k.span })
     })).collect();
     let (shown, caret) = kb.shown();
+    let reveal = kb.revealed().map(|shown| (Button::Select, if shown { "Hide" } else { "Show" }));
+    let hints = reveal.into_iter().chain([(Button::Y, "Shift"), (Button::X, "Symbols"), (Button::B, "Delete"), (Button::Start, "Done")]);
     ScreenView {
         title: kb.prompt.clone(), layout: Layout::Keys, rows,
-        hints: vec![(Button::Y, "Shift".into()), (Button::X, "Symbols".into()), (Button::B, "Delete".into()), (Button::Start, "Done".into())],
+        hints: hints.map(|(b, label)| (b, label.into())).collect(),
         entry: Some(TextEntry { text: shown, caret }),
     }
 }

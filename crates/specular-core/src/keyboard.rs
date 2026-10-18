@@ -117,6 +117,10 @@ impl Keyboard {
 
     pub fn text(&self) -> String { self.text.iter().collect() }
 
+    /// Whether masked text is shown as it is (Select switches it; hidden each time the keyboard
+    /// opens). None for text that isn't masked.
+    pub fn revealed(&self) -> Option<bool> { self.masked.then_some(self.revealed) }
+
     pub fn press(&mut self, p: Press) -> KeyOutcome {
         let lines = self.lines();
         let (line, index) = self.focus();
@@ -226,6 +230,7 @@ mod tests {
     #[test]
     fn symbols_and_cancel() {
         let mut kb = Keyboard::new("", false);
+        assert_eq!((press(&mut kb, Button::Select), kb.revealed()), (KeyOutcome::None, None)); // nothing to reveal
         assert_eq!(press(&mut kb, Button::B), KeyOutcome::Cancel);
         press(&mut kb, Button::X);
         press(&mut kb, Button::A);

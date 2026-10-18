@@ -89,12 +89,12 @@ Completed:
  - Developer details: developer-only settings and screens
  - Settings are declared once (key, type, default, who sees them); the settings screens are generated from them
  - Settings stored as JSON on the SD card: only values that differ from the default, unknown keys kept, writes safe against power cuts, a damaged file set aside
+ - Select shows or hides the Wi-Fi password on the keyboard, with a hint; it is hidden each time the keyboard opens
 
 TODO:
  - All possible configuration (interface, core-specific settings, system settings, etc) in config files in `{sd card}/config/v0/` (`specular.json`, `systems/<system>.json`, `cores/<core>.json`, `games/<game>.json`; see docs/settings.md). The `.json` files hold only user overrides; all default or dynamically computed values live in fully documented JSON Schemas extracted beside each as `<name>.schema.json`, marked RO (just as a hint to the user, modifications to this file are ignored and it may be overwritten anytime)
  - Move settings from `configs/` (where they are today) to `config/v0/`, migrating existing files. Each future format change gets a new `vN/` folder, migrated from the previous one
  - Per-system and per-game settings (the stored layers exist; they aren't loaded or editable yet)
- - Password reveal button for Wifi password
  - Core options as settings, declared from each core's option list (`cores/<core>.json`, overridable per system and per game)
 
 ### Aesthetics and Presentation
