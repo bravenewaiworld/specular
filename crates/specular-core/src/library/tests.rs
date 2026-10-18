@@ -72,6 +72,17 @@ fn titles_and_sorting() {
     let mut names = ["Mega Man 10", "mega man 2", "The Adventures of Batman", "Castlevania"];
     names.sort_by_key(|n| sort_key(n));
     assert_eq!(names, ["The Adventures of Batman", "Castlevania", "mega man 2", "Mega Man 10"]);
+    // Accented letters sort with their plain ones.
+    let mut names = ["Pokemon Pinball", "Zelda", "Pokémon Emerald", "Æon"];
+    names.sort_by_key(|n| sort_key(n));
+    assert_eq!(names, ["Æon", "Pokémon Emerald", "Pokemon Pinball", "Zelda"]);
+}
+
+#[test]
+fn index_letters() {
+    for (title, letter) in [("Golden Sun", 'G'), ("the Legend of Zelda", 'L'), ("Éclair", 'E'), ("Æon", 'A'), ("1942", '#'), ("'98 Koshien", '#'), ("ポケモン", '#'), ("", '#')] {
+        assert_eq!(index_letter(title), letter, "{title}");
+    }
 }
 
 #[test]

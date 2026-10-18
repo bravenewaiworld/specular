@@ -17,6 +17,9 @@ How Specular finds the games on the card, works out their systems, identifies ea
 - **Other unusual games** (2026-10-18): an `.m3u` set is identified by its first disc; betas and prototypes by name with tags stripped. Arcade short names need a lookup table, added with the first arcade core.
 - **A fuzzy name match is used only when it is unambiguous** (2026-10-18): one candidate left after dropping region and revision tags, and every number and roman numeral agrees, so sequels never collapse. Among region variants, the ROM's own region tag is preferred, else any region will do (box art differs little).
 - **ScreenScraper is not used in V0** (2026-10-18). It may become an optional source later; it needs a developer ID for the project, each user's own account, and quota handling (see Findings).
+- **Search covers every system, and shows its results on a screen of their own** (2026-10-18). Search on Home, or X in any game list, opens the on-screen keyboard; confirming the text (Start) shows the matching games, best first, each with its system, as a list or grid like a system's games. Rejected: searching only the system being shown (narrower, and the game you search for is often one whose system you don't remember), filtering the list as you type (needs a new layout with the keyboard and a list on one screen).
+- **Search matches titles the way people type them** (2026-10-18). Case, accents, spaces and punctuation are ignored. Titles that start with the query come first, then those with a word that starts with it (or, for several words, a word starting with each, in any order), then those that contain it anywhere, even across words; by title within each.
+- **Game lists have a letter index** (2026-10-18): L2 and R2 jump to the previous or next first letter (see [look-and-motion.md](look-and-motion.md)). Search results are ranked rather than in title order, so they have none.
 
 ## Design
 
@@ -26,7 +29,7 @@ How Specular finds the games on the card, works out their systems, identifies ea
 
 Linux's inotify watches `roms/` and every folder under it; a scan follows once no change has come for 2 s, so copying many files leads to one scan.
 
-Display titles come from file names, which mostly follow No-Intro and Redump naming: everything from the first bracket on is removed, and a trailing ", The" moves to the front.
+Display titles come from file names, which mostly follow No-Intro and Redump naming: everything from the first bracket on is removed, and a trailing ", The" moves to the front. Games sort by title without a leading "The", ignoring case and accents, with numbers by value ("Mega Man 2" before "Mega Man 10"). The letter index files each game under the first letter of its title as sorted (no "The", no accents), with digits, symbols and letters outside A–Z under "#".
 
 ```rust
 pub struct SystemDecl {
@@ -43,6 +46,15 @@ pub struct SystemDecl {
 ```
 
 Built in: GB, GBC, GBA (with mGBA), and NES, SNES, Mega Drive and PS1 (no core yet). PS1 discs are listed by their `.cue`, `.chd`, `.pbp` or `.m3u`.
+
+### Search
+
+The results screen's params are the query, so a rescan rebuilds the results rather than losing them. Matching runs on the UI thread each time the screen is built, so it reuses one buffer for every title (see Findings).
+
+```rust
+pub fn search<'a>(games: &'a [Game], query: &str) -> Vec<&'a Game>;  // best first
+pub fn index_letter(title: &str) -> char;                             // 'A'–'Z' or '#'
+```
 
 ### Identifying a ROM
 
@@ -106,4 +118,5 @@ How the download queue behaves:
 - (2026-10-12, upstream) The libretro-database data for one system is mostly 1–8 MB. Source: libretro-database.
 - (2026-10-13, desktop) The trimmed tables in `data/db/` are 0.1–0.6 MB each. Source: `data/db/`.
 - (2026-10-12, upstream) A CHD's built-in checksum matches Redump only if it was made from the same tracks. Source: Redump (redump.org).
+- (2026-10-18, desktop) Searching 3,000 titles takes about 0.5 ms in a release build (the fastest of 100 runs on a busy PC). Source: the ignored benchmark in `crates/specular-core/src/library/search.rs`.
 - (2026-10-12, upstream) ScreenScraper has better art and checksum lookups, but needs a developer ID for the project (requested from them), each user's own account, and has daily quotas. Source: ScreenScraper (screenscraper.fr).

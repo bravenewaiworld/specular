@@ -29,11 +29,25 @@ fn event(app: &mut App, button: Button, pressed: bool, t: u64) -> Vec<Effect> {
 
 fn focused(app: &App) -> String { app.view().rows[app.focus()].label.clone() }
 
+/// Types `text` on the on-screen keyboard: moves to each key in turn and presses it.
+fn type_text(a: &mut App, text: &str) {
+    for c in text.chars() {
+        let mut moves = 0;
+        while focused(a) != c.to_string() {
+            // Right goes round a line (of at most 10 keys), then down to the next.
+            tap(a, if moves % 11 == 10 { Button::Down } else { Button::Right }, 0);
+            moves += 1;
+            assert!(moves < 100, "no key {c}");
+        }
+        tap(a, Button::A, 0);
+    }
+}
+
 #[test]
 fn home_lists_systems_with_games() {
     let v = app().view();
     let labels: Vec<&str> = v.rows.iter().map(|r| r.label.as_str()).collect();
-    assert_eq!(labels, ["Systems", "Game Boy Advance", "Super Nintendo", "Device", "Settings"]);
+    assert_eq!(labels, ["Systems", "Game Boy Advance", "Super Nintendo", "Search", "Device", "Settings"]);
     assert_eq!(app().focus(), 1); // the header is skipped
 }
 
@@ -187,6 +201,91 @@ fn y_switches_games_to_a_grid_where_left_and_right_move() {
     tap(&mut a, Button::Y, 60);
     assert_eq!(a.view().layout, Layout::ListWithPicture);
     assert_eq!(focused(&a), "Game 0");
+}
+
+#[test]
+fn search_finds_games_in_every_system_best_first_and_plays_them() {
+    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    a.handle(Msg::Library { games: vec![game("gba", "Metroid Fusion"), game("gba", "Mother 3"), game("snes", "Super Metroid")], card_found: true });
+    tap(&mut a, Button::Down, 0);
+    tap(&mut a, Button::Down, 0);
+    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Redraw(Some(Transition::Push))]);
+    assert_eq!((a.view().title.as_str(), a.view().layout), ("Search", Layout::Keys));
+    type_text(&mut a, "metroid");
+    // The results take the keyboard's place.
+    assert_eq!(tap(&mut a, Button::Start, 0), vec![Effect::Redraw(Some(Transition::Push))]);
+    assert_eq!((a.view().title.as_str(), a.parent_title().as_deref()), ("“metroid”", Some("Library")));
+    let results = |a: &App| a.view().rows.iter().map(|r| match &r.kind {
+        RowKind::Image { detail: Some(d), .. } => format!("{} {d}", r.label),
+        _ => r.label.clone(),
+    }).collect::<Vec<_>>();
+    assert_eq!(results(&a), ["Metroid Fusion GBA", "Super Metroid SNES"]);
+    // A rescan keeps the results (the query is the screen's params) and the focus.
+    tap(&mut a, Button::Down, 0);
+    a.handle(Msg::Library { games: vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")], card_found: true });
+    assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
+    assert_eq!(focused(&a), "Super Metroid");
+    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), Effect::Redraw(None)]);
+    a.handle(Msg::GameEnded(None));
+    assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
+    assert_eq!(focused(&a), "Search");
+}
+
+#[test]
+fn x_searches_from_a_game_list_and_no_matches_say_so() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::X, 0);
+    assert_eq!(tap(&mut a, Button::Start, 0), vec![Effect::Redraw(Some(Transition::Pop))]); // nothing typed: back
+    assert_eq!(a.view().title, "Game Boy Advance");
+    tap(&mut a, Button::X, 0);
+    type_text(&mut a, "zz");
+    tap(&mut a, Button::Start, 0);
+    assert_eq!(a.view().layout, Layout::List);
+    assert_eq!(a.view().rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["No games match this search"]);
+    assert_eq!(tap(&mut a, Button::A, 0), vec![]);
+    // A new search replaces this one.
+    tap(&mut a, Button::X, 0);
+    type_text(&mut a, "su");
+    assert_eq!(tap(&mut a, Button::Start, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
+    assert_eq!(a.view().title, "“su”");
+    assert_eq!(a.view().layout, Layout::ListWithPicture);
+    assert_eq!(focused(&a), "Super Metroid"); // starts with it, before Golden Sun's word
+    assert_eq!(tap(&mut a, Button::R2, 0), vec![]); // results are by relevance: no letter index
+    tap(&mut a, Button::B, 0);
+    assert_eq!(a.view().title, "Game Boy Advance");
+}
+
+#[test]
+fn l2_and_r2_jump_between_first_letters() {
+    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let titles = ["1942", "Advance Wars", "Asterix", "Boktai", "Castlevania", "Contra", "The Legend of Zelda"];
+    a.handle(Msg::Library { games: titles.iter().map(|t| game("gba", t)).collect(), card_found: true });
+    tap(&mut a, Button::A, 0);
+    assert_eq!(tap(&mut a, Button::R2, 0), vec![Effect::Redraw(None), Effect::ShowLetter('A')]);
+    tap(&mut a, Button::R2, 0);
+    assert_eq!(focused(&a), "Boktai");
+    tap(&mut a, Button::L2, 0);
+    assert_eq!(focused(&a), "Advance Wars");
+    assert_eq!(tap(&mut a, Button::L2, 0), vec![Effect::Redraw(None), Effect::ShowLetter('#')]);
+    tap(&mut a, Button::L2, 0); // a fresh press wraps
+    assert_eq!(focused(&a), "The Legend of Zelda"); // filed under L
+    tap(&mut a, Button::R2, 0);
+    assert_eq!(focused(&a), "1942");
+    // Holding R2 repeats, and stops at the last letter, which stays shown.
+    event(&mut a, Button::R2, true, 1000);
+    let mut last = vec![];
+    for t in (1000..3000).step_by(10) {
+        let e = a.handle(Msg::Tick(Duration::from_millis(t)));
+        if !e.is_empty() { last = e; }
+    }
+    assert_eq!(focused(&a), "The Legend of Zelda");
+    assert_eq!(last, vec![Effect::ShowLetter('L')]);
+    event(&mut a, Button::R2, false, 3000);
+    // The grid has it too.
+    tap(&mut a, Button::Y, 3100);
+    tap(&mut a, Button::R2, 3200);
+    assert_eq!((a.view().layout, focused(&a)), (Layout::Grid, "1942".into()));
 }
 
 #[test]
@@ -513,7 +612,7 @@ mod wireless {
         assert_eq!(a.view().entry.as_ref().unwrap().text, "•••");
         for _ in 0..5 { tap(&mut a, Button::A, 0); }
         let e = tap(&mut a, Button::Start, 0);
-        assert_eq!(e[0], Effect::Wifi(WifiCmd::Join { ssid: "Office".into(), password: Some(Secret::new("qqqqqqqq")) }));
+        assert!(e.contains(&Effect::Wifi(WifiCmd::Join { ssid: "Office".into(), password: Some(Secret::new("qqqqqqqq")) })));
         assert_eq!(a.view().title, "Wi-Fi");
         assert_eq!(focused(&a), "Office");
         // An open network joins at once.

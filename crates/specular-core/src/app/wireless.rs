@@ -379,11 +379,11 @@ impl Screen for WifiScreen {
     }
 
     /// A password typed for the network `ssid`.
-    fn entered(&self, _: &mut Ctx, _: &mut ScreenState, ssid: &str, text: String) -> Result<Vec<Effect>, String> {
+    fn entered(&self, _: &mut Ctx, _: &mut ScreenState, ssid: &str, text: String) -> Result<Outcome, String> {
         if !wifi::valid_password(&text) {
             return Err(wifi::WifiError::BadPassword { ssid: ssid.into() }.message());
         }
-        Ok(vec![Effect::Wifi(WifiCmd::Join { ssid: ssid.into(), password: Some(Secret::new(text)) })])
+        Ok(Outcome::Effects(vec![Effect::Wifi(WifiCmd::Join { ssid: ssid.into(), password: Some(Secret::new(text)) })]))
     }
 }
 

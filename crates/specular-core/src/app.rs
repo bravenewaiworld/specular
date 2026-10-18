@@ -12,7 +12,7 @@ use std::time::Duration;
 use crate::device::{Battery, Output};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
-use crate::library::{Game, SystemDecl};
+use crate::library::{self, Game, SystemDecl};
 use crate::list;
 use crate::model::{Icon, ImageRef, Layout, Row, RowKind, ScreenId, ScreenView, TextEntry};
 use crate::nav::{NavStack, ScreenState, Transition};
@@ -89,6 +89,9 @@ pub enum Effect {
     /// whether it is a Bluetooth device's volume. Sent on every volume key press (even at an end)
     /// and whenever the mute switch moves.
     ShowVolume { level: i64, muted: bool, bluetooth: bool },
+    /// Show this letter of the letter index for a moment: L2 or R2 jumped to it, or stayed on it
+    /// (held at the first or last letter, or a list of one letter).
+    ShowLetter(char),
     /// Silence the sound (true) or restore it (false). The volume level is untouched; `Apply`
     /// still carries it.
     Mute(bool),
@@ -171,12 +174,17 @@ pub trait Screen {
     /// `state.params` (not on the battery or the focus).
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView;
     /// Text typed on the keyboard this screen opened (`Outcome::Type`) was confirmed. Ok closes
-    /// the keyboard and carries out the effects; Err keeps it open and shows the message.
-    fn entered(&self, _ctx: &mut Ctx, _state: &mut ScreenState, _purpose: &str, _text: String) -> Result<Vec<Effect>, String> { Ok(vec![]) }
-    /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus, and in a
-    /// grid so do left and right; Menu goes home). Screens never see the power button: the app
-    /// handles it (a tap sleeps, holding it opens the power menu). `focused` is the focused row, if
-    /// the screen has one that can take presses (never a header or a disabled row).
+    /// the keyboard and carries out the outcome as if it came from a press, except that an
+    /// `Outcome::Push` replaces the keyboard; Err keeps the keyboard open and shows the message.
+    fn entered(&self, _ctx: &mut Ctx, _state: &mut ScreenState, _purpose: &str, _text: String) -> Result<Outcome, String> { Ok(Outcome::None) }
+    /// Whether L2 and R2 jump between the first letters of the rows' labels (`list::jump`,
+    /// `library::index_letter`), for a list sorted by title.
+    fn letter_index(&self) -> bool { false }
+    /// Handles a press the app didn't take itself (up, down, L1 and R1 move the focus; so do left
+    /// and right in a grid, and L2 and R2 with a `letter_index`; Menu goes home). Screens never
+    /// see the power button: the app handles it (a tap sleeps, holding it opens the power menu).
+    /// `focused` is the focused row, if the screen has one that can take presses (never a header
+    /// or a disabled row).
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome;
 }
 
@@ -185,6 +193,8 @@ pub mod screens {
     use super::ScreenId;
     pub const HOME: ScreenId = ScreenId(std::borrow::Cow::Borrowed("home"));
     pub const GAMES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("games"));
+    /// The games matching a search, with the query in its params.
+    pub const SEARCH: ScreenId = ScreenId(std::borrow::Cow::Borrowed("search"));
     pub const SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("settings"));
     /// Over a paused game. Its presses are handled by the app itself (see `App::game_menu`).
     pub const GAME_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game menu"));
@@ -252,6 +262,7 @@ impl App {
         let mut screens: HashMap<ScreenId, Box<dyn Screen>> = HashMap::new();
         screens.insert(screens::HOME, Box::new(Home));
         screens.insert(screens::GAMES, Box::new(Games));
+        screens.insert(screens::SEARCH, Box::new(Search));
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
         screens.insert(screens::POWER_MENU, Box::new(PowerMenu));
@@ -465,8 +476,15 @@ impl App {
             self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
             return vec![Effect::Redraw(None)];
         }
-        let focused = view.rows.get(focus).filter(|r| r.kind.focusable());
         let id = self.nav.top().id.clone();
+        if matches!(p.button, Button::L2 | Button::R2) && self.screens[&id].letter_index() && !view.rows.is_empty() {
+            let to = list::jump(&view.rows, focus, p.button == Button::R2, p.repeat, |r| library::index_letter(&r.label));
+            let letter = Effect::ShowLetter(library::index_letter(&view.rows[to].label));
+            if to == focus { return vec![letter]; }
+            self.nav.top_mut().focus = Some(view.rows[to].id.clone());
+            return vec![Effect::Redraw(None), letter];
+        }
+        let focused = view.rows.get(focus).filter(|r| r.kind.focusable());
         let row = focused.map(|r| r.id.0.as_str());
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
@@ -476,6 +494,11 @@ impl App {
         // (A, B and Menu never repeat.)
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
         let outcome = self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p);
+        self.outcome(outcome)
+    }
+
+    /// Carries out what a press on the current screen (or text typed for it) led to.
+    fn outcome(&mut self, outcome: Outcome) -> Vec<Effect> {
         match outcome {
             Outcome::None => vec![],
             Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
@@ -606,9 +629,11 @@ impl App {
                 let Some(mut below) = below else { return vec![] };
                 match self.screens[&below.id].entered(&mut self.ctx, &mut below, &purpose, text) {
                     Err(message) => vec![Effect::Notice(message)],
-                    Ok(mut e) => {
-                        e.extend(self.go(|nav| nav.pop()));
-                        *self.nav.top_mut() = below;
+                    // A screen opened replaces the keyboard in one push, rather than a pop then a push.
+                    Ok(Outcome::Push(s)) => self.go(|nav| { nav.pop(); *nav.top_mut() = below; Some(nav.push(s)) }),
+                    Ok(outcome) => {
+                        let mut e = self.go(|nav| { nav.pop(); *nav.top_mut() = below; Some(Transition::Pop) });
+                        e.extend(self.outcome(outcome));
                         e
                     }
                 }
@@ -626,7 +651,7 @@ impl App {
     }
 }
 
-/// Home: the systems that have games, then settings.
+/// Home: the systems that have games, and Search when there are any; then settings.
 struct Home;
 
 impl Screen for Home {
@@ -646,6 +671,8 @@ impl Screen for Home {
                 rows.push(Row::note("note:none", "No games found"));
                 rows.push(Row::note("note:where", "Put them in roms/ on the SD card"));
             }
+        } else {
+            rows.push(action("search", "Search"));
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));
         rows.push(Row::new("settings", "Settings", RowKind::Action { value: None }));
@@ -656,48 +683,100 @@ impl Screen for Home {
         let (Button::A, Some(row)) = (p.button, focused) else { return Outcome::None };
         match row.id.0.strip_prefix("system:") {
             Some(system) => Outcome::Push(ScreenState::new(screens::GAMES, Some(system.to_string()))),
+            None if row.id.0 == "search" => type_search(),
             None if row.id.0 == "settings" => Outcome::Push(ScreenState::new(screens::SETTINGS, None)),
             None => Outcome::None,
         }
     }
+
+    fn entered(&self, _: &mut Ctx, _: &mut ScreenState, _: &str, text: String) -> Result<Outcome, String> { Ok(open_search(&text)) }
 }
 
-/// One system's games, as a list beside the focused game's box art or as a grid of box art
-/// (Y switches). A game's row id is its path under `roms/`.
+/// Opens the keyboard to type a search; the screen's `entered` passes the text to `open_search`.
+fn type_search() -> Outcome { Outcome::Type { prompt: "Search".into(), masked: false, purpose: String::new() } }
+
+/// Opens the results screen for text typed; blank text just closes the keyboard.
+fn open_search(text: &str) -> Outcome {
+    let query = text.trim();
+    if query.is_empty() { Outcome::None } else { Outcome::Push(ScreenState::new(screens::SEARCH, Some(query.into()))) }
+}
+
+/// A game's row, with its box art and `detail` beside the title. Its id is the game's path under
+/// `roms/`.
+fn game_row(g: &Game, detail: Option<String>) -> Row {
+    Row::new(g.path.to_string_lossy(), &g.title, RowKind::Image { image: ImageRef::Art { system: g.system, rom: g.path.clone() }, detail })
+}
+
+/// Whether games are shown as a grid of box art (else as a list beside the focused game's art).
+fn games_grid(ctx: &Ctx) -> bool { ctx.settings.get(builtin::LIBRARY_VIEW, &Layer::Global).is_some_and(|(v, _)| v == "grid") }
+
+/// A screen of games, as a list or a grid (`games_grid`).
+fn games_view(ctx: &Ctx, title: String, rows: Vec<Row>) -> ScreenView {
+    let grid = games_grid(ctx);
+    ScreenView {
+        title, layout: if grid { Layout::Grid } else { Layout::ListWithPicture }, rows,
+        hints: vec![(Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::X, "Search".into()), (Button::B, "Back".into()), (Button::A, "Play".into())],
+        entry: None,
+    }
+}
+
+/// A press on a screen of games: A plays the focused one, Y switches between list and grid, X
+/// opens the keyboard to search, B goes back.
+fn games_press(ctx: &mut Ctx, focused: Option<&Row>, p: Press) -> Outcome {
+    match (p.button, focused) {
+        (Button::B, _) => Outcome::Back,
+        (Button::X, _) => type_search(),
+        (Button::Y, _) if !p.repeat => {
+            let value = if games_grid(ctx) { "list" } else { "grid" };
+            let _ = ctx.settings.set(builtin::LIBRARY_VIEW, &Layer::Global, value.into());
+            Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global)])
+        }
+        (Button::A, Some(row)) => ctx.games.iter().find(|g| g.path.as_os_str() == row.id.0.as_str())
+            .map_or(Outcome::None, |g| Outcome::Launch(g.clone())),
+        _ => Outcome::None,
+    }
+}
+
+/// One system's games (the system's id is the screen's params), by title, with a letter index.
 struct Games;
-
-impl Games {
-    fn grid(ctx: &Ctx) -> bool { ctx.settings.get(builtin::LIBRARY_VIEW, &Layer::Global).is_some_and(|(v, _)| v == "grid") }
-}
 
 impl Screen for Games {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let system = state.params.as_deref().unwrap_or_default();
         let title = ctx.systems.iter().find(|s| s.id == system).map_or(system, |s| s.name).to_string();
-        let rows = ctx.games.iter().filter(|g| g.system == system).map(|g| {
-            let image = ImageRef::Art { system: g.system, rom: g.path.clone() };
-            Row::new(g.path.to_string_lossy(), &g.title, RowKind::Image { image, detail: None })
-        }).collect();
-        let grid = Self::grid(ctx);
+        games_view(ctx, title, ctx.games.iter().filter(|g| g.system == system).map(|g| game_row(g, None)).collect())
+    }
+
+    fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome { games_press(ctx, focused, p) }
+
+    fn entered(&self, _: &mut Ctx, _: &mut ScreenState, _: &str, text: String) -> Result<Outcome, String> { Ok(open_search(&text)) }
+
+    fn letter_index(&self) -> bool { true }
+}
+
+/// The games of every system matching a search (the query in the params), best first
+/// (`library::search`), each with its system. A new search (X) replaces this one. No letter
+/// index: the results are ranked, not in title order.
+struct Search;
+
+impl Screen for Search {
+    fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
+        let query = state.params.as_deref().unwrap_or_default();
+        let rows: Vec<Row> = library::search(&ctx.games, query).into_iter().map(|g| game_row(g, Some(g.system.to_uppercase()))).collect();
+        let title = format!("“{query}”");
+        if !rows.is_empty() { return games_view(ctx, title, rows); }
+        // No matches: a plain list, as a grid or the picture beside the list would be empty.
         ScreenView {
-            title, layout: if grid { Layout::Grid } else { Layout::ListWithPicture }, rows,
-            hints: vec![(Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::B, "Back".into()), (Button::A, "Play".into())],
-            entry: None,
+            title, layout: Layout::List, rows: vec![Row::note("note:none", "No games match this search")],
+            hints: vec![(Button::X, "Search".into()), (Button::B, "Back".into())], entry: None,
         }
     }
 
-    fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
-        match (p.button, focused) {
-            (Button::B, _) => Outcome::Back,
-            (Button::Y, _) if !p.repeat => {
-                let value = if Self::grid(ctx) { "list" } else { "grid" };
-                let _ = ctx.settings.set(builtin::LIBRARY_VIEW, &Layer::Global, value.into());
-                Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global)])
-            }
-            (Button::A, Some(row)) => ctx.games.iter().find(|g| g.path.as_os_str() == row.id.0.as_str())
-                .map_or(Outcome::None, |g| Outcome::Launch(g.clone())),
-            _ => Outcome::None,
-        }
+    fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome { games_press(ctx, focused, p) }
+
+    fn entered(&self, _: &mut Ctx, state: &mut ScreenState, _: &str, text: String) -> Result<Outcome, String> {
+        if let Outcome::Push(results) = open_search(&text) { *state = results; }
+        Ok(Outcome::None)
     }
 }
 

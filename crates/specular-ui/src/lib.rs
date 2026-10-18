@@ -191,6 +191,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         picture_timer: slint::Timer::default(),
         toast_timer: slint::Timer::default(),
         volume_timer: slint::Timer::default(),
+        letter_timer: slint::Timer::default(),
         stats_timer: slint::Timer::default(),
         art_worker,
         art_online: Cell::new(online),
@@ -482,6 +483,7 @@ struct Runner {
     picture_timer: slint::Timer,
     toast_timer: slint::Timer,
     volume_timer: slint::Timer,
+    letter_timer: slint::Timer,
     /// Updates the frame statistics each second while they are on.
     stats_timer: slint::Timer,
     art_worker: mpsc::Sender<art::ArtCmd>,
@@ -500,6 +502,8 @@ const STUCK_LIMIT: Duration = Duration::from_secs(6);
 const TOAST_TIME: Duration = Duration::from_millis(2500);
 /// How long the volume shows after the last change.
 const VOLUME_TIME: Duration = Duration::from_millis(1200);
+/// How long the letter index's letter shows after the last jump.
+const LETTER_TIME: Duration = Duration::from_millis(700);
 /// While a direction is held, the picture beside the list changes only once the focus has
 /// rested this long.
 const PICTURE_DELAY: Duration = Duration::from_millis(120);
@@ -571,6 +575,13 @@ impl Runner {
                 w.set_volume_shown(true);
                 let weak = self.window.clone();
                 self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
+            }
+            Effect::ShowLetter(letter) => {
+                let Some(w) = self.window.upgrade() else { return };
+                w.set_letter(letter.to_string().into());
+                w.set_letter_shown(true);
+                let weak = self.window.clone();
+                self.letter_timer.start(slint::TimerMode::SingleShot, LETTER_TIME, move || { if let Some(w) = weak.upgrade() { w.set_letter_shown(false); } });
             }
             Effect::QuitGame => {
                 // (The game's texture is freed, and stops being shown, at the next draw.)

@@ -67,6 +67,23 @@ component FocusPlate inherits Rectangle {
     }
 }
 
+// The letter index's letter (L2 and R2 jump between first letters), large on a raised square
+// shaped like the focus plate (sharp top corners, rounded bottom ones, a highlighted top edge),
+// over the middle of the list.
+component LetterPlate inherits Rectangle {
+    in property <string> letter;
+    width: Theme.letter-plate; height: self.width;
+    background: Theme.raised;
+    border-bottom-left-radius: Theme.radius;
+    border-bottom-right-radius: Theme.radius;
+    drop-shadow-offset-y: 10px * Theme.u; drop-shadow-blur: 40px * Theme.u; drop-shadow-color: #00000080;
+    Rectangle { y: 0; height: Theme.line; background: Theme.edge; }
+    Text {
+        text: letter; horizontal-alignment: center; vertical-alignment: center;
+        font-size: Theme.letter-size; font-weight: 600; color: Theme.fg;
+    }
+}
+
 component Toggle inherits Rectangle {
     in property <bool> on;
     width: 80px * Theme.u; height: 42px * Theme.u;
@@ -374,6 +391,9 @@ export component AppWindow inherits Window {
     in property <bool> volume-muted;
     in property <bool> volume-bluetooth;
     in property <bool> volume-shown;
+    // The letter L2 or R2 last jumped to, shown over the list while `letter-shown`.
+    in property <string> letter;
+    in property <bool> letter-shown;
     // Developer frame statistics, shown over a game while not empty.
     in property <string> stats;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
@@ -483,6 +503,12 @@ export component AppWindow inherits Window {
             if root.layout == ScreenLayout.list || root.layout == ScreenLayout.list-with-picture : Rectangle {
                 y: parent.height - 56px * Theme.u; height: 56px * Theme.u; background: @linear-gradient(0deg, Theme.bg 0%, Theme.bg.transparentize(1) 100%);
                 opacity: root.more-below ? 1 : 0; animate opacity { duration: Motion.fade; }
+            }
+            LetterPlate {
+                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                letter: root.letter;
+                opacity: root.letter-shown ? 1 : 0;
+                animate opacity { duration: Motion.fade; }
             }
         }
         if root.layout == ScreenLayout.list-with-picture : Rectangle {

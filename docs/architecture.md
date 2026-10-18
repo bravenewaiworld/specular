@@ -72,7 +72,9 @@ pub trait Screen {
     /// Presses the app didn't take itself (it handles focus moves, Menu and the power button).
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome;
     /// Text typed on the on-screen keyboard this screen opened was confirmed.
-    fn entered(&self, ctx: &mut Ctx, state: &mut ScreenState, purpose: &str, text: String) -> Result<Vec<Effect>, String>;
+    fn entered(&self, ctx: &mut Ctx, state: &mut ScreenState, purpose: &str, text: String) -> Result<Outcome, String>;
+    /// Whether L2 and R2 jump between the rows' first letters (lists sorted by title).
+    fn letter_index(&self) -> bool;
 }
 ```
 

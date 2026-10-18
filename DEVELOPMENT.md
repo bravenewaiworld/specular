@@ -43,7 +43,7 @@
   - `SPECULAR_SCRIPT=down,a,…` plays a list of button presses into the app, one every `SPECULAR_SCRIPT_MS` (default 400).
   - It then saves a screenshot (raw RGBA) to `SPECULAR_SNAPSHOT` and quits.
   - This is the basis for end-to-end checks; there is no test runner around it yet.
-- **Benchmarks.** An ignored test times focus moves in a 3,000-game list (`cargo test -- --ignored --nocapture`).
+- **Benchmarks.** Ignored tests time focus moves in a 3,000-game list and a search of 3,000 titles (`cargo test --release -- --ignored --nocapture`).
 
 ## Measuring and exploring
 

@@ -23,6 +23,28 @@ pub fn step(rows: &[Row], focus: usize, delta: isize, repeat: bool) -> usize {
     focusable[target as usize]
 }
 
+/// The focus after jumping to the first row of the next (`forward`) or previous run of rows that
+/// share a `letter`: from anywhere among the M's, forward to the first N, back to the first L.
+/// Rows must be grouped by letter (sorted by title). As with `step`, at either end a fresh press
+/// wraps around and a repeat stops. Only focusable rows count.
+pub fn jump(rows: &[Row], focus: usize, forward: bool, repeat: bool, letter: impl Fn(&Row) -> char) -> usize {
+    let mut starts = vec![];
+    let mut last = None;
+    for (i, r) in rows.iter().enumerate().filter(|(_, r)| r.kind.focusable()) {
+        let l = letter(r);
+        if last != Some(l) { starts.push(i); }
+        last = Some(l);
+    }
+    // The run the focus is in.
+    let Some(run) = starts.iter().rposition(|&s| s <= focus) else { return first(rows).unwrap_or(focus) };
+    let target = if forward { starts.get(run + 1) } else { run.checked_sub(1).map(|r| &starts[r]) };
+    match target {
+        Some(&to) => to,
+        None if repeat => focus,
+        None => if forward { starts[0] } else { *starts.last().unwrap() },
+    }
+}
+
 /// The first focusable row.
 pub fn first(rows: &[Row]) -> Option<usize> { rows.iter().position(|r| r.kind.focusable()) }
 
@@ -171,6 +193,21 @@ mod tests {
         let r = rows();
         assert_eq!(step(&r, 1, 10, false), 4);
         assert_eq!(step(&r, 4, -10, false), 1);
+    }
+
+    #[test]
+    fn jumps_between_letters_wrapping_on_press_not_on_repeat() {
+        let r: Vec<Row> = ["Advance Wars", "Asterix", "Bomberman", "Castlevania", "Contra"].iter().map(|t| Row::new(*t, *t, RowKind::Text { detail: None })).collect();
+        let letter = |r: &Row| r.label.chars().next().unwrap();
+        assert_eq!(jump(&r, 1, true, false, letter), 2);
+        assert_eq!(jump(&r, 2, true, false, letter), 3);
+        assert_eq!(jump(&r, 4, false, false, letter), 2); // from the middle of the C's, back to the B
+        assert_eq!(jump(&r, 4, true, true, letter), 4); // held: no wrap
+        assert_eq!(jump(&r, 4, true, false, letter), 0);
+        assert_eq!(jump(&r, 1, false, true, letter), 1);
+        assert_eq!(jump(&r, 1, false, false, letter), 3);
+        assert_eq!(jump(&r[..2], 1, true, false, letter), 0); // one letter: back to its start
+        assert_eq!(jump(&[], 0, true, false, letter), 0);
     }
 
     #[test]

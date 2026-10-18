@@ -9,10 +9,11 @@ use std::time::Duration;
 pub enum Button { Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, F1, F2, VolUp, VolDown, Power, Mute }
 
 impl Button {
-    /// Whether holding the button repeats it (moving through lists, changing values, volume).
+    /// Whether holding the button repeats it (moving through lists, jumping between letters,
+    /// changing values, volume).
     pub fn repeats(self) -> bool {
         use Button::*;
-        matches!(self, Up | Down | Left | Right | L1 | R1 | VolUp | VolDown)
+        matches!(self, Up | Down | Left | Right | L1 | R1 | L2 | R2 | VolUp | VolDown)
     }
 }
 

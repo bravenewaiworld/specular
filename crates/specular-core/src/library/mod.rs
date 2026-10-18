@@ -7,12 +7,14 @@
 
 mod names;
 pub mod saves;
+mod search;
 pub(crate) mod zip;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub use names::{display_title, sort_key};
+pub use names::{display_title, index_letter, sort_key};
+pub use search::search;
 
 /// An emulated system and the files that hold its games.
 #[derive(Clone, Debug)]

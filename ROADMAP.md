@@ -64,10 +64,10 @@ Completed:
  - Box art: the user's own PNG beside the ROM, then the cache, then downloaded from libretro-thumbnails over WiFi. Games on screen first, then the rest in the background, paused while a game runs
  - Saves follow a renamed or moved ROM
  - "No SD card" and "no games" shown when they apply
+ - Search: from Home, or X in any game list, across every system, best matches first; case, accents and punctuation ignored
+ - A letter index: L2/R2 jump between first letters in game lists and grids, with the letter shown large for a moment
 
 TODO:
- - Search
- - A letter index for long lists
  - Fuzzy name matching for box art (only when unambiguous: one candidate after dropping region and revision tags, every number and roman numeral agreeing, the ROM's own region preferred), JPEG user images, PS1 disc serials
 
 ### Installer

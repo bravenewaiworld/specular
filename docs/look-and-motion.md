@@ -18,6 +18,7 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 - **Only effects Slint can reproduce** (2026-10-12): timed animations with a standard ease or a cubic-bezier curve (an overshoot curve for a spring-like feel); no backdrop blur, blend modes or filters; glows are drop shadows. The in-game menu's frosted backdrop is to be a blurred copy of the frame, made once when the menu opens.
 - **No fonts for non-Latin scripts are bundled** (2026-10-18). CJK fonts cost 15 MB or more, so Specular uses any font files in `{sd card}/fonts/` as fallbacks, and users who need one add it there.
 - **The card's fonts are named one by one, after the emoji font, at start-up** (2026-10-18). Specular puts each TrueType or OpenType file directly in `{sd card}/fonts/` on `$SLINT_FONT_PATH`, after Noto Emoji, and logs which it uses and which it skips, and why. Fonts added later are used from the next start. Rejected: putting the folder itself on `$SLINT_FONT_PATH` (Slint would read whole every file in it, font or not, and say nothing of those it can't use); looking in folders inside it (Slint doesn't either); the card's fonts before Noto Emoji (a CJK font's own symbols would replace its emoji).
+- **L2 and R2 jump between first letters in game lists and grids, and show the letter** (2026-10-18). The letter shows large, on a raised square over the middle of the list, for 0.7 s after the last jump, like the volume gauge after the last change. Held, they repeat like directions; at either end a fresh press wraps and a held one stops, as in lists. Rejected: a strip of letters down the side (always on screen, for something used now and then), L1 and R1 (they already jump by a screen).
 - **Sounds are designed later** (2026-10-18), starting from the mockup's quiet tick on each move.
 - **In-game LED, light bar and rumble reactions are pluggable effects** (2026-10-18), registered like the other extension points (see [architecture.md](architecture.md)).
 
@@ -54,9 +55,10 @@ Every screen is built from a few patterns, and any new screen has to be too:
 
 - **Lists of rows.** Each row is one of: header, note (explanatory text, never focused), text, image (a game with its art), toggle, choice (a colour choice also shows its swatch), number, action, or a key of the on-screen keyboard.
 - **A grid of box art.**
+- **The index letter**: one large letter (150 u) on a raised square shaped like the focus plate, centred over the list.
 - **A sheet**, a picker for long choices such as Language. No screen needs one yet.
 
-Layouts are `List`, `ListWithPicture` (a game list beside the focused game's art), `Grid` and `Keys` (the on-screen keyboard). Toasts show for 2.5 s; notes never take the focus; the volume gauge shows for 1.2 s after the last change. Games without box art get a generated cover, a gradient derived from the title so each game keeps its own.
+Layouts are `List`, `ListWithPicture` (a game list beside the focused game's art), `Grid` and `Keys` (the on-screen keyboard). Toasts show for 2.5 s; notes never take the focus; the volume gauge shows for 1.2 s after the last change, and the index letter for 0.7 s after the last jump. Games without box art get a generated cover, a gradient derived from the title so each game keeps its own.
 
 ### Long lists
 
@@ -68,9 +70,10 @@ While a direction is held, the picture beside the list changes only once the foc
 
 Buttons are abstract (A, B, X, Y, L1, R1, L2, R2, Start, Select, Menu, the d-pad, the volume keys). Each device says which ones it has, and hints show only those.
 
-- **Held directions:** the first repeat after 350 ms, then about 14 a second, rising to about 30 a second after 1.5 s of repeating. Repeats are driven by the caller's clock, so they are deterministic in tests.
+- **Held directions, and L2 / R2:** the first repeat after 350 ms, then about 14 a second, rising to about 30 a second after 1.5 s of repeating. Repeats are driven by the caller's clock, so they are deterministic in tests.
 - **List ends:** a list wraps around on a fresh press, never on a repeat. The same goes for choices.
 - **L1 / R1:** jump by about 80 % of a screen.
+- **L2 / R2:** in a list of games sorted by title, jump to the first game of the previous or next letter (from the middle of the M's, back to the first L). They repeat when held.
 - **Number and choice rows:** left and right change the value.
 
 ### Fonts
