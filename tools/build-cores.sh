@@ -30,14 +30,11 @@ patched_src() {
 # mGBA (MPL-2.0): CMake, with everything but the libretro core switched off (no GUI, no optional
 # libraries).
 patched_src mgba https://github.com/libretro/mgba.git 7a12d6d4b9acb14c0ae62c9166b6a2f3d08007f6
-mkdir -p "$OUT/build/mgba"
-(cd "$OUT/build/mgba" && cmake "$OUT/src/mgba" -DCMAKE_BUILD_TYPE=Release ${CMAKE_CROSS:-} \
+cmake -S "$OUT/src/mgba" -B "$OUT/build/mgba" -DCMAKE_BUILD_TYPE=Release ${CMAKE_CROSS:-} \
 	-DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DCMAKE_C_FLAGS="${CORE_CFLAGS:-}" \
 	-DBUILD_LIBRETRO=ON -DSKIP_LIBRARY=ON -DBUILD_QT=OFF -DBUILD_SDL=OFF -DBUILD_SHARED=OFF -DBUILD_STATIC=OFF \
 	-DBUILD_GL=OFF -DBUILD_GLES2=OFF -DBUILD_GLES3=OFF -DENABLE_SCRIPTING=OFF -DUSE_DEBUGGERS=OFF -DUSE_GDB_STUB=OFF \
 	-DUSE_FFMPEG=OFF -DUSE_ZLIB=OFF -DUSE_PNG=OFF -DUSE_LIBZIP=OFF -DUSE_MINIZIP=OFF -DUSE_SQLITE3=OFF -DUSE_ELF=OFF \
-	-DUSE_LZMA=OFF -DUSE_EPOXY=OFF -DUSE_DISCORD_RPC=OFF -DUSE_EDITLINE=OFF -DUSE_LUA=OFF -DUSE_JSON_C=OFF >/dev/null \
-	&& make -j"$(nproc)" mgba_libretro >/dev/null)
+	-DUSE_LZMA=OFF -DUSE_EPOXY=OFF -DUSE_DISCORD_RPC=OFF -DUSE_EDITLINE=OFF -DUSE_LUA=OFF -DUSE_JSON_C=OFF >/dev/null
+cmake --build "$OUT/build/mgba" --target mgba_libretro -j"$(nproc)" >/dev/null
 cp "$OUT/build/mgba/mgba_libretro.so" "$OUT/"
-
-ls -l "$OUT"/*.so

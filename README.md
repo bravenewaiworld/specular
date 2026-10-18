@@ -32,11 +32,11 @@ The desktop build runs on Linux. macOS and Windows aren't supported yet. On Wind
 
 You need:
 - **Rust**, through [rustup](https://rustup.rs). The pinned toolchain is installed on first build.
-- **A C compiler** (one dependency builds C code).
+- **A C/C++ compiler and CMake** (a dependency and the emulator cores build C code).
 - **To run the desktop build:** X11 or Wayland with libxkbcommon, and OpenGL/EGL. ALSA (libasound) is needed for sound; without it Specular runs silently.
 - **Python 3**, for the scripts in `tools/`.
 
-Run it with `cargo run -p specular-desktop -- [data folder]`. The data folder stands in for the SD card (default `./sdcard`). It is laid out like one: `roms/`, `bios/`, `saves/`, `config/v0/` (settings) and `cache/` (box art). Games only appear for systems that have an emulator core. `make cores` builds them for this PC into `target/cores/host`; run with `SPECULAR_CORES=target/cores/host`. Run the tests with `make test`, which builds the cores first (plain `cargo test` skips the tests that need a core); building the cores needs CMake and git.
+Run it with `cargo run -p specular-desktop -- [data folder]`. The data folder stands in for the SD card (default `./sdcard`). It is laid out like one: `roms/`, `bios/`, `saves/`, `config/v0/` (settings) and `cache/` (box art). Games only appear for systems that have an emulator core. `make cores` builds them for this PC into `target/cores/host`; run with `SPECULAR_CORES=target/cores/host`. Run the tests with `make test`, which builds the cores first (plain `cargo test` skips the tests that need a core).
 
 Running on a device goes through Crystaline OS, which includes Specular and builds it for the device with this repository's `Makefile`.
 

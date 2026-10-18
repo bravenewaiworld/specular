@@ -47,7 +47,7 @@
 
 ## Measuring and exploring
 
-These are cargo examples. Build them for a device and run them there through Crystaline OS (`tools/run-specular.sh <binary> [args]`).
+These are cargo examples. Build them for a device and run them there through Crystaline OS: `make specular` puts them in its `build/specular/aarch64-unknown-linux-gnu/release/examples/`, and `tools/run-specular.sh <binary> [args]` runs one.
 
 - **Headless player** (`specular-runtime`'s `play`). Runs a core and a ROM with no UI, optionally paced by vsync. It reports the core's time per frame and can save the last frame.
 - **Device measurements** (`devices/brick/examples/s*`). Each measures one part of the stack on a device:

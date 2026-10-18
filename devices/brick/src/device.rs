@@ -74,7 +74,7 @@ struct BrickPower(PowerSupply);
 impl Power for BrickPower {
     fn battery(&self) -> io::Result<specular_core::device::Battery> { self.0.battery() }
 
-    /// Through the test card's `sleepnow`, which also stops WiFi around sleep (its driver can't
+    /// Through the system's `sleepnow`, which also stops WiFi around sleep (its driver can't
     /// suspend while connected).
     fn sleep(&self) -> io::Result<()> { run("/usr/bin/sleepnow", &[]) }
 
