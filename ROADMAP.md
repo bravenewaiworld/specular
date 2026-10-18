@@ -50,7 +50,6 @@ TODO:
  - User added/pluggable libretro cores (loaded from `{sd card}/cores/{name}`)
  - NES and PS1 cores, from QuickNES or Nestopia, and SwanStation (each needs a licence, speed and save-memory check)
  - Protect battery saves from cores whose save states also restore the save memory, by storing a hash of the `.srm` with each state and renaming a newer `.srm` to `<name>.newer.srm` before it is overwritten
- - 3D cores, with a shared GL context
  - Check that zipped ROMs launch (they are listed, but mGBA is built without zip support)
  - Core log messages captured into Specular's log
  - Launch record (`cache/launch.json`), so after a crash Specular says which core stopped with which game
@@ -134,6 +133,7 @@ TODO:
 ### Core Integration and Support
 
 TODO:
+ - 3D cores, with a GL context shared with the UI's (built and measured on the Brick; SwanStation's hardware renderer would be the first user)
  - SNES and Mega Drive cores (each needs a licence, speed and save-memory check). bsnes is likely too slow for a Cortex-A53, and BlastEm's 68000 emulation is an x86 recompiler; also consider Beetle Supafaust (SNES) and ClownMDEmu (Mega Drive)
 
 ### Library and Game Management
