@@ -15,8 +15,8 @@ CROSS_COMPILE =
 CORE_CFLAGS =
 # Where everything is built: cargo's output, and the cores in $(OUT)/cores/<TARGET, or host>.
 OUT = $(CURDIR)/target
-# install puts Specular in $(DESTDIR)$(PREFIX): the specular binary, with cores/ and fonts/ next to
-# it, where it looks for them.
+# install puts Specular in $(DESTDIR)$(PREFIX): the specular binary, with cores/, fonts/ and
+# licences.txt next to it, where it looks for them.
 DESTDIR =
 PREFIX = /usr/lib/specular
 
@@ -41,6 +41,7 @@ cores:
 
 install: build cores
 	install -D -m 755 $(BIN)/specular $(DESTDIR)$(PREFIX)/specular
+	install -D -m 644 $(BIN)/licences.txt $(DESTDIR)$(PREFIX)/licences.txt	# see crates/specular-credits
 	install -D -m 644 -t $(DESTDIR)$(PREFIX)/cores $(CORES)/*.so
 	install -D -m 644 -t $(DESTDIR)$(PREFIX)/fonts assets/fonts/NotoEmoji.ttf	# see specular_ui::use_fallback_fonts
 

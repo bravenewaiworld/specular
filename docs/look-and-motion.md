@@ -17,6 +17,7 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 - **The device sleeps when left alone, never during a running game** (2026-10-13). After 30 s by default ("Sleep after").
 - **Only effects Slint can reproduce** (2026-10-12): timed animations with a standard ease or a cubic-bezier curve (an overshoot curve for a spring-like feel); no backdrop blur, blend modes or filters; glows are drop shadows. The in-game menu's frosted backdrop is to be a blurred copy of the frame, made once when the menu opens.
 - **No fonts for non-Latin scripts are bundled** (2026-10-18). CJK fonts cost 15 MB or more, so Specular uses any font files in `{sd card}/fonts/` as fallbacks, and users who need one add it there.
+- **The card's fonts are named one by one, after the emoji font, at start-up** (2026-10-18). Specular puts each TrueType or OpenType file directly in `{sd card}/fonts/` on `$SLINT_FONT_PATH`, after Noto Emoji, and logs which it uses and which it skips, and why. Fonts added later are used from the next start. Rejected: putting the folder itself on `$SLINT_FONT_PATH` (Slint would read whole every file in it, font or not, and say nothing of those it can't use); looking in folders inside it (Slint doesn't either); the card's fonts before Noto Emoji (a CJK font's own symbols would replace its emoji).
 - **Sounds are designed later** (2026-10-18), starting from the mockup's quiet tick on each move.
 - **In-game LED, light bar and rumble reactions are pluggable effects** (2026-10-18), registered like the other extension points (see [architecture.md](architecture.md)).
 
@@ -74,10 +75,11 @@ Buttons are abstract (A, B, X, Y, L1, R1, L2, R2, Start, Select, Menu, the d-pad
 
 ### Fonts
 
-Geist and Geist Mono are built into the UI. Network and Bluetooth device names can hold emoji, which Geist lacks, so Noto Emoji is a fallback font. Slint looks for fallback fonts only among the system's and those in `$SLINT_FONT_PATH`, not among fonts built into the UI, so Noto Emoji ships as a file (`fonts/` next to the binary) and Specular sets `$SLINT_FONT_PATH` at start-up.
+Geist and Geist Mono are built into the UI. Network and Bluetooth device names can hold emoji, which Geist lacks, so Noto Emoji is a fallback font. Slint looks for fallback fonts only among the system's and those in `$SLINT_FONT_PATH`, not among fonts built into the UI, so Noto Emoji ships as a file (`fonts/` next to the binary) and Specular sets `$SLINT_FONT_PATH` at start-up (`specular_ui::run`, before Slint starts and before any other thread does), followed by the font files in `{sd card}/fonts/`. A `$SLINT_FONT_PATH` already set takes Noto Emoji's place. Each of the card's fonts counts towards Specular's memory, whole.
 
 ## Findings
 
 - (2026-10-12, desktop) With 3,000 games, a focus move takes about 15 µs. Source: the ignored benchmark in `crates/specular-core/src/app/tests.rs`.
 - (2026-10-12, device) On the Brick, 3,000 games use 22 MB resident (21 MB with none). Scrolling continuously at 20 moves a second uses about 47 % of one core at the `ondemand` governor's low clock, mostly drawing. Source: Brick measurements of the long-list build.
 - (2026-10-12, upstream) CJK fonts cost 15 MB or more. Source: sizes of common CJK font files.
+- (2026-10-18, upstream) Slint 1.18.1 reads `$SLINT_FONT_PATH` when it builds its font collection: a list split as `$PATH` is (`:` on Linux), each entry a font file or a folder whose files it reads (not those in folders inside it). It reads each file whole into memory and silently skips any it can't parse. Their families become the fallback (sans-serif) families, in order. Source: `i-slint-common-1.18.1/sharedfontique.rs`.

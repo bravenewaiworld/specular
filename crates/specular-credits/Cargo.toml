@@ -1,0 +1,10 @@
+[package]
+name = "specular-credits"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Used only by build scripts (a build dependency), so it runs on the PC doing the build.
+[dependencies]
+serde_json = "1"

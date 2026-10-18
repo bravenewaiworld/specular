@@ -21,7 +21,8 @@ How Specular is put together: the toolkit, the crates and threads, the boundary 
 - **GPLv3** (2026-10-12). Anything GPL we build on decides the licence: the algorithms ported from muOS's runtime are GPLv3, and Slint's GPL option is GPL-3.0-only, so Specular as a whole is GPL-3.0-only (2026-10-18). Rejected: "or later" (Slint's option doesn't allow it).
 - **Specular has its own repository** (2026-10-18). Crystaline OS includes Specular and builds it for devices. Rejected: staying inside the Brick's OS repository (only ever meant as a start).
 - **Specular builds itself and its cores, and installs them; a system supplies only its compiler and where to install** (2026-10-18). The `Makefile` is the whole interface (`DEVICE`, `TARGET`, `CROSS_COMPILE`, `CORE_CFLAGS`, `DESTDIR`, `PREFIX`), so the installed layout and the core patches (which add calls only Specular understands) live in one place, and working on Specular needs nothing from Crystaline OS. Rejected: Crystaline OS building the cores and laying out Specular's files.
-- **The credits screen is generated at build time from a licence list** (2026-10-18): Rust crates' licences, Slint, the cores, fonts, and the libretro-database data (CC-BY-SA).
+- **The credits are worked out when a device's binary is built** (2026-10-18). Its build script (`specular-credits`) lists the Rust crates linked into it, with their licences, and adds what `data/credits.tsv` lists: Specular, the cores, fonts, the libretro-database data (CC-BY-SA) and Slint. It writes the list the credits screen shows, and `licences.txt`, every distinct licence text after the projects it covers, which is installed beside the binary. Crates are those `cargo tree` gives for the device's package and platform: normal dependencies only, since build scripts and procedural macros run during the build and ship nothing. Rejected: `cargo metadata`'s dependency graph alone (it resolves features for the whole workspace, so the Brick's credits would list the desktop's window crates); the UI crate's build script (it can't tell which device it is built for); a hand-kept list of crates (it would drift); `cargo-about` and the like (one more tool every build needs).
+- **Mistakes in the repository's own credits fail the build; a crate without a licence text only warns** (2026-10-18). A core `tools/build-cores.sh` builds without a line in `data/credits.tsv` (or a line for a core it doesn't build), a licence text that isn't there, or a crate declaring no licence at all stop the build with what to fix. A crate whose package ships no licence text gets a build warning naming it and the fix (its text in `data/licences/`, named on a `crate` line), and is listed in `licences.txt` as having none. Rejected: failing on that too (updating a dependency would break a device's build over something only we can fix, by hand).
 
 ## Design
 
@@ -33,6 +34,8 @@ crates/
                      repeat, list layout, settings, library, saves, box art identification, device,
                      wireless and installer interfaces. No Slint, no files or hardware touched by the app.
   specular-runtime/  the libretro runtime (see runtime.md)
+  specular-credits/  works out what a binary ships and its licences; run by the device crates'
+                     build scripts
   specular-ui/       Slint theme, prefabs and screens; carries out the app's effects; owns the
                      threads; art service; run(device)
   specular-linux/    standard Linux implementations: evdev, power supply, LED class, ALSA,
@@ -42,11 +45,13 @@ devices/
   brick/             the TrimUI Brick (see brick.md)
 design/              design/mockup.html, the interactive look (see look-and-motion.md)
 data/db/             game tables for box art (see library-and-box-art.md)
+data/credits.tsv     what Specular ships besides crates, for the credits (see Credits below)
+data/licences/       licence texts not found anywhere else
 tools/               build-cores.sh and its core-patches/, trim-db.py, trace-to-scenario.py
 Makefile             builds Specular and its cores for a device, and installs them
 ```
 
-Each device crate is a small binary that builds its device and calls `specular_ui::run`.
+Each device crate is a small binary that builds its device and calls `specular_ui::run`, with the credits its build script worked out.
 
 ### The app
 
@@ -125,10 +130,33 @@ The display platform is passed to `run` separately, since it is Slint-specific. 
 
 ```rust
 pub type InstallPlatform = Box<dyn FnOnce(Box<dyn FnMut(ButtonEvent)>) -> Result<(), Error>>;
-pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Option<InstallPlatform>) -> Result<(), Error>;
+pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Option<InstallPlatform>, credits: &'static [Credit]) -> Result<(), Error>;
 ```
 
 3D cores will also need a GL context shared with the UI's, which the platform will have to provide (the Brick spike already made one; see [brick.md](brick.md)).
+
+### Credits
+
+`specular_credits::generate`, run by each `devices/<name>/build.rs`, writes two files to `$OUT_DIR`: `credits.rs`, the projects as Rust, and `licences.txt`. It also copies `licences.txt` into the folder the binary is built in, so a development build finds it beside itself as an installed one does; `make install` takes it from there. A core's version (its commit) and web address come from `tools/build-cores.sh`. A crate line in `data/credits.tsv` can choose which of a crate's licences Specular uses (Slint's crates: GPL-3.0-only), or give the licence texts its package lacks.
+
+```rust
+// devices/<name>/src/main.rs
+const CREDITS: &[Credit] = include!(concat!(env!("OUT_DIR"), "/credits.rs"));
+
+// specular_core::app
+pub struct Credit {
+    pub kind: CreditKind,              // groups the credits screen, in this order
+    pub name: &'static str,
+    pub version: Option<&'static str>, // a crate's version, or a core's commit
+    pub licence: &'static str,         // SPDX
+    pub url: Option<&'static str>,
+}
+pub enum CreditKind { Specular, Core, Font, Data, Library }
+pub struct Credits { pub projects: &'static [Credit], pub texts: Option<PathBuf> }
+impl App { pub fn set_credits(&mut self, credits: Credits); }
+```
+
+The UI gives the app the credits with `licences.txt`'s path, if it is beside the binary. Settings → Credits (in the System section, for everyone) lists Specular, then the cores, fonts, data and libraries, each with its licence; A shows a project's web address.
 
 ### Registries
 
@@ -139,3 +167,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
 | Systems and emulators | the `Vec<SystemDecl>` given to `App::new`, each naming its `CoreDecl` |
 | Art sources | the ordered `Vec<Box<dyn ArtSource>>` given to the art worker |
 | Themes | not yet: there is one theme, `crates/specular-ui/ui/theme.slint` |
+
+## Findings
+
+- (2026-10-18, desktop) The desktop binary ships 273 projects under 189 distinct licence texts (a 645 KB `licences.txt`); the Brick's, 206 projects (507 KB). Five crates (`lyon_algorithms`, `lyon_extra`, `lyon_geom`, `lyon_path`, `taffy`) ship no licence text in their packages; theirs are in `data/licences/`, from their repositories. Source: the builds' `licences.txt`.

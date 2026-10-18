@@ -11,13 +11,13 @@ mod watch;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, VecModel};
-use specular_core::app::{App, Effect, InputTarget, Msg, WifiNeed};
+use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
 use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Output, Rgb};
 use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
@@ -46,17 +46,66 @@ pub fn now() -> Duration {
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
-/// Makes Slint fall back to Specular's emoji font (Noto Emoji: network and device names have
-/// emoji, which Geist lacks). Slint looks for fallback fonts only among the system's and those in
-/// $SLINT_FONT_PATH, not among fonts built into the UI, so it is a file: `fonts/` next to the
-/// binary, or the source tree's in a development build. Must run before any other thread starts,
-/// since it sets an environment variable; does nothing if $SLINT_FONT_PATH is already set.
-pub fn use_fallback_fonts() {
-    if std::env::var_os("SLINT_FONT_PATH").is_some() { return; }
-    let installed = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("fonts"))).filter(|d| d.is_dir());
-    let path = installed.unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/NotoEmoji.ttf").into());
-    // SAFETY: before any other thread exists (see above).
-    unsafe { std::env::set_var("SLINT_FONT_PATH", path) };
+/// Gives Slint the fonts to fall back on for characters Geist lacks: Specular's emoji font
+/// (network and device names have emoji), then the font files in the SD card's `fonts/` (for
+/// scripts such as Japanese; see docs/look-and-motion.md). Slint looks for fallback fonts only
+/// among the system's and those in $SLINT_FONT_PATH (files and folders, separated as in $PATH),
+/// not among fonts built into the UI, so the emoji font ships as a file rather than built in:
+/// `fonts/` next to the binary, or the source tree's NotoEmoji.ttf in a development build. A
+/// $SLINT_FONT_PATH already set is used instead of the emoji font (the card's fonts are still
+/// added). Slint reads the fonts once, as it starts, so this must run before that, and before any
+/// other thread starts (it sets an environment variable).
+fn use_fallback_fonts(data: &DataRoot) {
+    let own = match std::env::var_os("SLINT_FONT_PATH") {
+        Some(set) => std::env::split_paths(&set).collect(),
+        None => {
+            let installed = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("fonts"))).filter(|d| d.is_dir());
+            vec![installed.unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/NotoEmoji.ttf").into())]
+        }
+    };
+    let paths: Vec<PathBuf> = own.into_iter().chain(card_fonts(&data.fonts())).collect();
+    match std::env::join_paths(&paths) {
+        // SAFETY: before any other thread exists (see above).
+        Ok(list) => unsafe { std::env::set_var("SLINT_FONT_PATH", list) },
+        // Only a $SLINT_FONT_PATH already set can hold a ':' (`card_fonts` leaves such paths out).
+        Err(e) => eprintln!("fonts: can't list the fallback fonts ({e}): {paths:?}"),
+    }
+}
+
+/// The font files in `dir` (the SD card's `fonts/`), sorted by name. Logs which it uses, and which it
+/// doesn't and why (Slint skips files it can't use without a word).
+fn card_fonts(dir: &Path) -> Vec<PathBuf> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return vec![],
+        Err(e) => { eprintln!("fonts: can't read {}: {e}", dir.display()); return vec![] }
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    let mut used = Vec::new();
+    for path in paths {
+        match font_size(&path) {
+            Ok(size) => used.push((path, size)),
+            Err(why) => eprintln!("fonts: not using {}: {why}", path.display()),
+        }
+    }
+    // Slint reads each one whole into memory, so their sizes count towards Specular's.
+    let list: Vec<String> = used.iter().map(|(p, size)| format!("{} ({:.1} MB)", p.file_name().unwrap_or_default().to_string_lossy(), *size as f64 / 1e6)).collect();
+    if list.is_empty() { eprintln!("fonts: {} has no fonts in it", dir.display()); } else { eprintln!("fonts: from {}: {}", dir.display(), list.join(", ")); }
+    used.into_iter().map(|(p, _)| p).collect()
+}
+
+/// The size of the font file at `path`, or why Slint can't use it: it reads only TrueType and
+/// OpenType fonts (and collections of them), and only files directly in the folder.
+fn font_size(path: &Path) -> Result<u64, String> {
+    use std::io::Read;
+    if path.is_dir() { return Err("fonts in folders aren't looked for".into()); }
+    if path.as_os_str().as_encoded_bytes().contains(&b':') { return Err("its path has a ':' in it, which $SLINT_FONT_PATH can't hold".into()); }
+    let mut file = std::fs::File::open(path).map_err(|e| format!("can't open it: {e}"))?;
+    let mut magic = [0; 4];
+    file.read_exact(&mut magic).map_err(|e| format!("can't read it: {e}"))?;
+    if !matches!(&magic, b"\0\x01\0\0" | b"OTTO" | b"true" | b"ttcf") { return Err("it isn't a TrueType or OpenType font".into()); }
+    file.metadata().map(|m| m.len()).map_err(|e| format!("can't read it: {e}"))
 }
 
 /// Where Specular's data lives: the SD card's folders.
@@ -69,12 +118,17 @@ impl DataRoot {
     pub fn cache(&self) -> PathBuf { self.0.join("cache") }
     pub fn saves(&self) -> PathBuf { self.0.join("saves") }
     pub fn bios(&self) -> PathBuf { self.0.join("bios") }
+    /// Fonts the user adds, for characters Specular's own fonts lack.
+    pub fn fonts(&self) -> PathBuf { self.0.join("fonts") }
 }
 
 /// Runs Specular on `device` until the event loop ends. `platform` sets up the device's platform;
 /// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`).
 /// The device is also used from other threads, to open sound outputs (which can block).
-pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Option<InstallPlatform>) -> Result<(), Error> {
+/// `credits` are what the binary ships (worked out by its build script; see specular-credits).
+/// Must be called before any other thread starts (see `use_fallback_fonts`).
+pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Option<InstallPlatform>, credits: &'static [Credit]) -> Result<(), Error> {
+    use_fallback_fonts(&data);
     quit_on_signals();
     let profile = device.profile();
     let keyboard = platform.is_none();
@@ -94,6 +148,10 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     let mut app = App::new(systems.clone(), builtin::settings());
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
+    // Beside the binary, where `make install` puts it (and the build does, for development).
+    let texts = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("licences.txt"))).filter(|p| p.is_file());
+    if texts.is_none() { eprintln!("credits: there's no licences.txt beside the binary"); }
+    app.set_credits(Credits { projects: credits, texts });
     // Without WiFi, the network (if any) is assumed to be there.
     let online = wifi.is_none();
     let art_worker = art::worker(data.roms(), data.cache(), systems, vec![Box::new(art::LibretroThumbnails::new())], online,
@@ -1030,5 +1088,19 @@ mod tests {
                             (Key::RightArrow, "\u{f703}"), (Key::Return, "\n"), (Key::Tab, "\t"), (Key::Escape, "\u{1b}")] {
             assert_eq!(slint::SharedString::from(key).as_str(), code);
         }
+    }
+
+    #[test]
+    fn only_font_files_directly_in_the_cards_folder_are_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str, bytes: &[u8]| std::fs::write(dir.path().join(name), bytes).unwrap();
+        file("b.otf", b"OTTO and the rest");
+        file("a.ttf", b"\0\x01\0\0 and the rest");
+        file("readme.txt", b"Fonts go here");
+        file("tiny.ttf", b"\0");
+        file("odd:name.ttc", b"ttcf");
+        std::fs::create_dir(dir.path().join("more")).unwrap();
+        assert_eq!(super::card_fonts(dir.path()), [dir.path().join("a.ttf"), dir.path().join("b.otf")]);
+        assert!(super::card_fonts(&dir.path().join("missing")).is_empty());
     }
 }

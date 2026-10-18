@@ -286,6 +286,62 @@ fn home_says_where_games_go_when_there_are_none() {
     assert!(labels(&a).contains(&"No SD card".to_string()));
 }
 
+mod credits {
+    use super::*;
+
+    const PROJECTS: &[Credit] = &[
+        Credit { kind: CreditKind::Specular, name: "Specular", version: None, licence: "GPL-3.0-only", url: None },
+        Credit { kind: CreditKind::Core, name: "mGBA", version: Some("7a12d6d4b9ac"), licence: "MPL-2.0", url: Some("https://github.com/libretro/mgba") },
+        Credit { kind: CreditKind::Font, name: "Geist", version: None, licence: "OFL-1.1", url: Some("https://github.com/vercel/geist-font") },
+        Credit { kind: CreditKind::Library, name: "Slint", version: None, licence: "GPL-3.0-only", url: Some("https://slint.dev") },
+        Credit { kind: CreditKind::Library, name: "serde", version: Some("1.0.219"), licence: "MIT OR Apache-2.0", url: None },
+    ];
+
+    /// The app on its credits screen, opened from Settings.
+    fn credits_app(texts: Option<&str>) -> App {
+        let mut a = app();
+        a.set_credits(Credits { projects: PROJECTS, texts: texts.map(Into::into) });
+        tap(&mut a, Button::Up, 0);
+        tap(&mut a, Button::A, 10);
+        while focused(&a) != "Credits" { tap(&mut a, Button::Down, 20); }
+        let rows = &a.view().rows;
+        assert_eq!(rows[a.focus() - 1].label, "Developer details"); // in the System section
+        tap(&mut a, Button::A, 30);
+        a
+    }
+
+    #[test]
+    fn credits_list_specular_then_each_kind_of_project_with_its_licence() {
+        let mut a = credits_app(Some("/usr/lib/specular/licences.txt"));
+        assert_eq!(a.view().title, "Credits");
+        let rows: Vec<(String, Option<String>)> = a.view().rows.iter().map(|r| match &r.kind {
+            RowKind::Text { detail } => (r.label.clone(), detail.clone()),
+            _ => (r.label.clone(), None),
+        }).collect();
+        let row = |label: &str, detail: Option<&str>| (label.to_string(), detail.map(String::from));
+        assert_eq!(rows, [
+            row("The licence texts are in /usr/lib/specular/licences.txt", None),
+            row("Specular", Some("GPL-3.0-only")),
+            row("Emulator cores", None), row("mGBA 7a12d6d4b9ac", Some("MPL-2.0")),
+            row("Fonts", None), row("Geist", Some("OFL-1.1")),
+            row("Libraries", None), row("Slint", Some("GPL-3.0-only")), row("serde 1.0.219", Some("MIT OR Apache-2.0")),
+        ]);
+        // A shows a project's web address, if it has one.
+        assert_eq!(focused(&a), "Specular");
+        assert_eq!(tap(&mut a, Button::A, 40), vec![]);
+        tap(&mut a, Button::Down, 50);
+        assert_eq!(tap(&mut a, Button::A, 60), vec![Effect::Notice("https://github.com/libretro/mgba".into())]);
+        assert_eq!(tap(&mut a, Button::B, 70), vec![Effect::Redraw(Some(Transition::Pop))]);
+        assert_eq!(a.view().title, "Settings");
+    }
+
+    #[test]
+    fn credits_say_when_the_licence_texts_are_missing() {
+        let a = credits_app(None);
+        assert_eq!(a.view().rows[0].label, "The licence texts weren't installed with Specular");
+    }
+}
+
 mod wireless {
     use super::*;
     use crate::app::wireless::{NEED_TIMEOUT, WIFI_GRACE};

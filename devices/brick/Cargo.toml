@@ -16,6 +16,9 @@ specular-linux = { path = "../../crates/specular-linux" }
 specular-ui = { path = "../../crates/specular-ui" }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 
+[build-dependencies]
+specular-credits = { path = "../../crates/specular-credits" }
+
 [dev-dependencies]
 glow = "0.18"
 

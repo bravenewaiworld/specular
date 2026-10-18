@@ -37,7 +37,8 @@ SYSTEMS = {
 NOTICE = """\
 The tables in this directory are derived from libretro-database
 (https://github.com/libretro/libretro-database), which is licensed under
-CC-BY-SA 4.0. These derived tables are distributed under the same licence.
+CC-BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/). These derived
+tables are distributed under the same licence.
 
 They contain only each ROM's CRC32, serial number and game name.
 

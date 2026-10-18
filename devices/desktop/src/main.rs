@@ -33,11 +33,13 @@ impl Device for Desktop {
     fn open_vsync(&self) -> Option<Box<dyn Vsync>> { None }
 }
 
+/// Everything this binary ships, with its licence (written by build.rs).
+const CREDITS: &[specular_core::app::Credit] = include!(concat!(env!("OUT_DIR"), "/credits.rs"));
+
 fn main() -> Result<(), specular_ui::Error> {
     // One window pixel per panel pixel, whatever the desktop's scaling.
     // SAFETY: before any other thread exists.
     unsafe { std::env::set_var("SLINT_SCALE_FACTOR", "1") };
-    specular_ui::use_fallback_fonts();
     let data = std::env::args().nth(1).unwrap_or_else(|| "sdcard".into());
-    specular_ui::run(Box::new(Desktop), DataRoot(data.into()), None)
+    specular_ui::run(Box::new(Desktop), DataRoot(data.into()), None, CREDITS)
 }

@@ -15,3 +15,6 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 specular-core = { path = "../../crates/specular-core" }
 specular-linux = { path = "../../crates/specular-linux" }
 specular-ui = { path = "../../crates/specular-ui" }
+
+[build-dependencies]
+specular-credits = { path = "../../crates/specular-credits" }

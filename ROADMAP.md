@@ -111,13 +111,13 @@ Completed:
  - A list's drawing cost doesn't grow with its length (checked with 3,000 games)
  - 60 fps while animating; nothing drawn while idle
  - The design mockup (`design/mockup.html`) shows the Light Bar look only
+ - Credits in Settings: every project shipped (cores, fonts, data, libraries) and its licence, worked out when the binary is built; the full licence texts installed beside it
+ - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
 
 TODO:
- - Credits section with all used OSS projects and licenses, generated at build time from the licences of everything shipped
  - Pre-game splash screen with `Powered By: ` core name, core's copyright notice, and repo URL.
  - Light bar tinted per system
  - Sounds
- - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
  - Title screens and screenshots as art
  - Profile FemtoVG's per-frame cost while scrolling (about 47 % of a core on the Brick): text layout cache hits, how many row slots redraw, whether off-screen slots draw
  - Pluggable LED and rumble effects (e.g. the light bar reacting to low battery or a save in game, rumble following sound peaks)

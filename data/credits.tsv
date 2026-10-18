@@ -1,0 +1,32 @@
+# What Specular ships besides Rust crates (whose credits come from Cargo), and what Cargo can't tell
+# about some crates. Read when a device is built, by crates/specular-credits, for the credits screen and
+# licences.txt. Columns are separated by tabs; "-" leaves one empty. Licence texts are paths in this
+# repository, separated by spaces.
+#
+# A project: kind, name, licence (SPDX), web address, licence texts. The kind is specular, core:<name>,
+# font, data or library. A core's <name> is the one tools/build-cores.sh builds it as, and its version
+# and web address come from there; every core that script builds needs a line here.
+#
+# A crate: "crate", its name, the licence it is used under (when it offers several, or declares none),
+# and its licence texts (when its package ships none). A line covers every version of the crate, and
+# one for a crate no longer linked is ignored.
+#
+# Slint offers three licences; Specular uses it under GPL-3.0-only, whose text is Specular's LICENSE.
+specular	Specular	GPL-3.0-only	-	LICENSE
+core:mgba	mGBA	MPL-2.0	-	data/licences/MPL-2.0.txt
+font	Geist	OFL-1.1	https://github.com/vercel/geist-font	assets/fonts/OFL-Geist.txt
+font	Geist Mono	OFL-1.1	https://github.com/vercel/geist-font	assets/fonts/OFL-Geist.txt
+font	Noto Emoji	OFL-1.1	https://github.com/googlefonts/noto-emoji	assets/fonts/OFL-NotoEmoji.txt
+data	libretro-database	CC-BY-SA-4.0	https://github.com/libretro/libretro-database	data/db/NOTICE
+library	Slint	GPL-3.0-only	https://slint.dev	LICENSE
+crate	i-slint-backend-selector	GPL-3.0-only	-
+crate	i-slint-backend-winit	GPL-3.0-only	-
+crate	i-slint-common	GPL-3.0-only	-
+crate	i-slint-core	GPL-3.0-only	-
+crate	i-slint-renderer-femtovg	GPL-3.0-only	-
+crate	slint	GPL-3.0-only	-
+crate	lyon_algorithms	-	data/licences/lyon-MIT.txt
+crate	lyon_extra	-	data/licences/lyon-MIT.txt
+crate	lyon_geom	-	data/licences/lyon-MIT.txt
+crate	lyon_path	-	data/licences/lyon-MIT.txt
+crate	taffy	-	data/licences/taffy-MIT.txt

@@ -17,7 +17,7 @@
 
 ## Seeing what it does
 
-- **Log.** Messages go to stderr, prefixed by area (`game:`, `sound:`, `art:`, `saves:`, `settings:`, `input:`, `install:`, `core:`, …). On a device they end up in the system log.
+- **Log.** Messages go to stderr, prefixed by area (`game:`, `sound:`, `art:`, `saves:`, `settings:`, `input:`, `install:`, `core:`, `fonts:`, …). On a device they end up in the system log. At start-up, `fonts:` says which of the SD card's fonts are used, and why any aren't.
 - **Wireless trace.** Every call to and event from the WiFi and Bluetooth services is logged with a timestamp. Passwords are redacted. The trace is always on.
 - **Frame statistics** (a developer setting): fps, the core's median and 95th-percentile time per frame, and how much sound is queued, drawn over the game.
 - **Developer details** (a setting): shows developer-only settings, an icon gallery, the other network interfaces' IPv4 addresses (on the Wi-Fi screen, to find the device over USB), and why installing to internal storage isn't possible.
@@ -61,3 +61,4 @@ These are cargo examples. Build them for a device and run them there through Cry
 ## Data
 
 - **Game identification tables** are generated from a pinned libretro-database commit (`tools/trim-db.py`). They are compiled in.
+- **Credits** are worked out by each device's build script (`crates/specular-credits`), from the crates it links and `data/credits.tsv` (what isn't a crate; its header explains it). A new core in `tools/build-cores.sh` needs a line there, or the build fails. A build warning (`credits:`) names any crate that ships no licence text, and what to add. The licence texts are written to `licences.txt` beside the binary (`target/<profile>/`).

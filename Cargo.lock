@@ -3919,6 +3919,7 @@ dependencies = [
  "serde_json",
  "slint",
  "specular-core",
+ "specular-credits",
  "specular-linux",
  "specular-ui",
 ]
@@ -3934,11 +3935,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "specular-credits"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "specular-desktop"
 version = "0.1.0"
 dependencies = [
  "slint",
  "specular-core",
+ "specular-credits",
  "specular-linux",
  "specular-ui",
 ]
@@ -3978,6 +3987,7 @@ dependencies = [
  "slint-build",
  "specular-core",
  "specular-runtime",
+ "tempfile",
  "ureq",
 ]
 

@@ -21,11 +21,13 @@ use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
 use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
+mod credits;
 mod icons;
 mod install;
 mod wireless;
 pub use wireless::{BtState, WifiNeed, WifiState};
 pub use install::{InstallCmd, InstallState, TaskView};
+pub use credits::{Credit, CreditKind, Credits};
 
 /// Something that happened.
 #[derive(Debug)]
@@ -131,6 +133,7 @@ pub struct Ctx {
     pub bluetooth: Option<BtState>,
     /// None on a device without an installer; see `App::has_installer`.
     pub install: Option<InstallState>,
+    pub credits: Credits,
 }
 
 impl Ctx {
@@ -204,6 +207,7 @@ pub mod screens {
     pub const RESTORE: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore"));
     pub const RESTORE_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore confirm"));
     pub const TASK: ScreenId = ScreenId(std::borrow::Cow::Borrowed("task"));
+    pub const CREDITS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("credits"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -254,8 +258,10 @@ impl App {
         wireless::register(&mut screens);
         icons::register(&mut screens);
         install::register(&mut screens);
+        credits::register(&mut screens);
         Self {
-            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None },
+            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
+                   credits: Credits::default() },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -702,6 +708,9 @@ impl Screen for SettingsScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows = wireless::settings_rows(ctx);
         rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility()));
+        // Credits, last in the System section.
+        let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
+        rows.insert(system_end, credits::settings_row());
         if ctx.visibility() == Visibility::Developer { rows.push(Row::new("open:icons", "Icons", RowKind::Action { value: None })); }
         rows.extend(install::settings_rows(ctx));
         ScreenView { title: "Settings".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
@@ -710,7 +719,13 @@ impl Screen for SettingsScreen {
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         if p.button == Button::B { return Outcome::Back; }
         if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
-        if focused.is_some_and(|row| row.id.0 == "open:icons") && p.button == Button::A { return Outcome::Push(ScreenState::new(screens::ICONS, None)); }
+        if p.button == Button::A && let Some(row) = focused {
+            match row.id.0.as_str() {
+                "open:icons" => return Outcome::Push(ScreenState::new(screens::ICONS, None)),
+                "open:credits" => return Outcome::Push(ScreenState::new(screens::CREDITS, None)),
+                _ => {}
+            }
+        }
         if let Some(open) = focused.and_then(|row| install::settings_press(ctx, row, p)) { return open; }
         focused.map_or(Outcome::None, |row| setting_press(ctx, row, p))
     }

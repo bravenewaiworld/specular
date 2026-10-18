@@ -78,6 +78,7 @@ Beside each `<name>.json` is its `<name>.schema.json`: the generated JSON Schema
 |---|---|
 | `roms/` | Games, in any layout (see [library-and-box-art.md](library-and-box-art.md)). The user's box art beside each ROM (`Golden Sun.png`). Save states in a hidden `.states/` folder beside the games (`roms/gba/.states/Golden Sun.state1`, `.autosave`). |
 | `bios/` | BIOS files, handed to cores as their system folder |
+| `fonts/` | Fonts for characters Specular's own lack (Japanese or Chinese game names, say): TrueType or OpenType files, directly in it, read at start-up (see [look-and-motion.md](look-and-motion.md)) |
 | `saves/` | Battery saves (`.srm`), mirroring `roms/` and named after the ROM: `roms/gba/Golden Sun.gba` → `saves/gba/Golden Sun.srm`. Also `saves/.specular-saves.json`, which lets saves follow renamed ROMs (see [runtime.md](runtime.md)). |
 | `config/v0/` | Settings, as above |
 | `cache/` | Things Specular can rebuild, safe to delete: `cache/art/` (box art, mirroring `roms/`), `cache/identify/` (what is known about each ROM) |
