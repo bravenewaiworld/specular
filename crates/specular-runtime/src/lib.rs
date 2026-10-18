@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use specular_core::device::{SoundOut, Vsync};
 use specular_core::input::Button;
+use specular_core::launch::LaunchRecord;
 
 use crate::core::Core;
 use crate::frontend::Frontend;
@@ -33,7 +34,8 @@ use crate::frontend::Frontend;
 pub struct LaunchSpec {
     /// The core's shared library, e.g. `.../cores/mgba_libretro.so`.
     pub core: PathBuf,
-    /// A zip is unzipped into memory first, unless the core opens zips itself (see `unzip`).
+    /// The game's file. A zip is unzipped into memory first, unless the core opens zips itself
+    /// (see `unzip`).
     pub rom: PathBuf,
     /// The battery save (`.srm`): loaded before the game starts; written when the game has
     /// written its save memory (or, with a core that doesn't say when, within 10 s of play of it
@@ -52,6 +54,11 @@ pub struct LaunchSpec {
     /// to then read the file itself (libretro doesn't promise that a core will); it can map the
     /// file instead of copying it.
     pub rom_by_path: bool,
+    /// The launch record, and where to keep it (see `specular_core::launch`): written on the
+    /// game's thread before the core is loaded, removed once the game has ended (or failed to
+    /// start) and its core is unloaded. Since only one game runs at a time (`Session::start`), one
+    /// launch's ending can't remove the record of another.
+    pub record: Option<(PathBuf, LaunchRecord)>,
 }
 
 /// Where the game's output goes.
@@ -298,8 +305,12 @@ impl Pacer {
 
 fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
                started: mpsc::Sender<Result<GameInfo, String>>) {
+    let report = |r: io::Result<()>, path: &Path| if let Err(e) = r { eprintln!("game: launch record {}: {e}", path.display()); };
+    if let Some((path, r)) = &spec.record { report(r.write(path), path); }
     play(&spec, out, buttons, runs, cmds, started);
-    log::stop();
+    log::stop(); // (here, not in `Game`'s drop, so it also runs when loading fails)
+    // Not reached if the core crashes the process, or hangs and the watchdog ends it.
+    if let Some((path, _)) = &spec.record { report(LaunchRecord::remove(path), path); }
 }
 
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.

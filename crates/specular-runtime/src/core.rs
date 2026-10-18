@@ -56,7 +56,7 @@ pub struct SystemInfo {
 }
 
 impl SystemInfo {
-    /// What the core calls itself, e.g. "mGBA".
+    /// What the core calls itself, e.g. "mGBA", or "the core" if it gives no name.
     pub fn name(&self) -> String { text(self.library_name).unwrap_or_else(|| "the core".into()) }
     /// The extensions of the files it plays, in lower case.
     pub fn extensions(&self) -> Vec<String> {

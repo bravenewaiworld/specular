@@ -11,7 +11,7 @@ How Specular is put together: the toolkit, the crates and threads, the boundary 
 - **Nothing slow on the UI thread** (2026-10-12). Slint draws on the UI thread. To hold 60 fps while animating and draw nothing while idle, scanning, image decoding, file and hardware access run on other threads or are done ahead of time.
 - **Logic is separate from the UI toolkit** (2026-10-12). `specular-core` holds navigation, screen models, settings, the library and the device interfaces, with no Slint code; the Slint layer only draws and passes input on. The toolkit could be replaced, and all behaviour is testable without a screen.
 - **Screens are data** (2026-10-12). The core describes every screen with a few patterns (lists of rows, a grid of box art, a sheet for long choices), which a fixed set of prefab components draws (see [look-and-motion.md](look-and-motion.md)).
-- **Emulation runs in Specular's process** (2026-10-12). The core runs on its own thread and its frames are shown in the UI's scene. This is what lets box art zoom straight into the live game and the in-game menu animate over it. The cost: a crashing core takes the UI down with it. The service manager restarts Specular, and a launch record says which core crashed (2026-10-18): when a game starts, Specular writes `cache/launch.json` (core, game, start time) and removes it on a clean quit; at start-up, if it is still there, Specular says which core stopped with which game, then removes it.
+- **Emulation runs in Specular's process** (2026-10-12). The core runs on its own thread and its frames are shown in the UI's scene. This is what lets box art zoom straight into the live game and the in-game menu animate over it. The cost: a crashing core takes the UI down with it. The service manager restarts Specular, and a launch record says which core crashed (2026-10-18): when a game starts, Specular writes `cache/launch.json` (core, game, start time) and removes it on a clean quit; at start-up, if it is still there, Specular logs it, says which core stopped with which game, then removes it. The runtime writes and removes it on the game's thread (2026-10-18): one game runs at a time, so a launch quit while loading can't remove the record of the next, and a crash while loading the core is caught too. The watchdog adds why it ended the game before ending Specular. A power cut during a game leaves it too, and is reported the same way. Rejected: the UI writing it (two launches overlapping could mix up their records); the app doing so (it never touches files: it gets the record in a message and shows a notice).
 - **Game frames always go through the UI's scene** (2026-10-12). On the Brick this costs about 1 ms of CPU per frame more than a direct blit and adds no latency (see [brick.md](brick.md)). Rejected: drawing plain gameplay straight to the screen and handing over to the UI only for menus and transitions (a second drawing path for no gain).
 - **Device-independent** (2026-10-12). A port is a device crate, `devices/<name>`, holding its profile, hardware services and display platform. Device names appear nowhere else. `specular-linux` implements the standard Linux interfaces, so most ports override only their quirks.
 - **No async runtime** (2026-10-12). Plain threads and channels.
@@ -159,6 +159,28 @@ impl App { pub fn set_credits(&mut self, credits: Credits); }
 ```
 
 The UI gives the app the credits with `licences.txt`'s path, if it is beside the binary. Settings → Credits (in the System section, for everyone) lists Specular, then the cores, fonts, data and libraries, each with its licence; A shows a project's web address.
+
+### The launch record
+
+`specular_core::launch`, kept with the settings' power-cut-safe store:
+
+```rust
+pub struct LaunchRecord {
+    pub core: String,            // "mGBA" (CoreDecl::name)
+    pub library: PathBuf,        // .../cores/mgba_libretro.so
+    pub system: String,
+    pub game: PathBuf,           // under roms/
+    pub started: u64,            // seconds since 1970, by the device's clock
+    pub reason: Option<String>,  // why Specular ended the game itself: "it stopped responding"
+}
+impl LaunchRecord {
+    pub fn write(&self, path: &Path) -> io::Result<()>;
+    pub fn remove(path: &Path) -> io::Result<()>;
+    pub fn left_behind(path: &Path) -> Option<Self>;  // at start-up: logged and removed
+}
+// The app turns one left behind into a notice.
+Msg::LastGameStopped(LaunchRecord)
+```
 
 ### Registries
 

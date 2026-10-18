@@ -37,6 +37,7 @@ pub struct LaunchSpec {
     pub system_dir: PathBuf,            // bios/
     pub options: Vec<(String, String)>, // core options; the rest keep their defaults
     pub rom_by_path: bool,              // only for cores known to read the file themselves
+    pub record: Option<(PathBuf, LaunchRecord)>, // the launch record (see architecture.md)
 }
 pub struct Outputs {
     pub sound: Option<Box<dyn SoundOut>>,

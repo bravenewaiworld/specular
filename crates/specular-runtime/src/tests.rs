@@ -38,7 +38,7 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let (count, sound) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let c = count.clone();
     let session = Session::start(
-        LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false },
+        LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, record: None },
         Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(),
                   on_frame: Box::new(move || *c.lock().unwrap() += 1) },
     ).unwrap();
@@ -72,7 +72,7 @@ fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) };
-    let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false };
+    let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, record: None };
     assert!(Session::start(spec(dir.path().join("none.so")), out()).is_err());
     if let Some(core) = mgba() { assert!(Session::start(spec(core), out()).err().unwrap().contains("none.gba")); }
 }
@@ -98,7 +98,7 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
                                     0xe5c0_1000 /* strb r1, [r0] */, 0xeaff_fffe /* b . */])).unwrap();
     let (save, autosave) = (dir.path().join("writes.srm"), dir.path().join(".states/writes.autosave"));
     let spec = || LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: save.clone(), autosave: Some(autosave.clone()),
-                               system_dir: dir.path().into(), options: vec![], rom_by_path: false };
+                               system_dir: dir.path().into(), options: vec![], rom_by_path: false, record: None };
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) };
     let session = Session::start(spec(), out()).unwrap();
     // mGBA makes the ENV_SAVE_RAM_WRITTEN call 15 frames (a quarter of a second) after the game's
@@ -136,12 +136,15 @@ fn zip(files: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 #[test]
-fn a_zipped_game_is_unzipped_into_memory() {
+fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
     let dir = tempfile::tempdir().unwrap();
-    let spec = |rom: PathBuf| LaunchSpec { core: core.clone(), rom, save: dir.path().join("game.srm"), autosave: None,
-                                           system_dir: dir.path().into(), options: vec![], rom_by_path: true };
+    let record_path = dir.path().join("cache/launch.json");
+    let game = specular_core::library::Game { system: "gba", path: "game.zip".into(), title: "Game".into(), sort_key: String::new() };
+    let record = LaunchRecord::new("mGBA", &core, &game);
+    let spec = |rom: PathBuf| LaunchSpec { core: core.clone(), rom, save: dir.path().join("game.srm"), autosave: None, system_dir: dir.path().into(),
+                                           options: vec![], rom_by_path: true, record: Some((record_path.clone(), record.clone())) };
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::new(FrameSlot::default()), on_frame: Box::new(|| {}) };
     let write = |name: &str, data: &[u8]| { let p = dir.path().join(name); std::fs::write(&p, data).unwrap(); p };
     // mGBA is given the unzipped ROM's path, which has no extension: it tells a GBA ROM by its contents.
@@ -152,8 +155,10 @@ fn a_zipped_game_is_unzipped_into_memory() {
     assert_eq!((session.info().width, session.info().height), (240, 160));
     std::thread::sleep(Duration::from_millis(200));
     assert!(frames.take().is_some());
+    assert_eq!(specular_core::settings::store::load_layer(&record_path).unwrap()["game"], "game.zip");
     session.quit().unwrap();
     assert!(dir.path().join("game.srm").exists());
+    assert!(!record_path.exists()); // the game ended cleanly
     let none = write("none.zip", &zip(&[("readme.txt", b"hello")]));
     assert_eq!(Session::start(spec(none), out()).err().unwrap(), "the zip holds no game mGBA plays");
     let zipped = std::fs::read(&game).unwrap();
@@ -164,6 +169,7 @@ fn a_zipped_game_is_unzipped_into_memory() {
     damaged[zipped.windows(4).position(|w| w == b"PK\x01\x02").unwrap() - 4] ^= 0xff;
     let damaged = write("damaged.zip", &damaged);
     assert!(Session::start(spec(damaged), out()).err().unwrap().starts_with("the zip is damaged"));
+    assert!(!record_path.exists()); // nor is it left by a game that couldn't start
 }
 
 struct Instant0;
@@ -195,7 +201,7 @@ fn the_sound_moves_to_a_new_output_between_frames() {
     std::fs::write(&rom_path, rom(&[0xeaff_fffe /* b . */])).unwrap();
     let (first, second) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let session = Session::start(
-        LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false },
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, record: None },
         Outputs { sound: Some(Box::new(Count(first.clone()))), vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(200)); // frames reach the first output

@@ -21,6 +21,7 @@ use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNee
 use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Output, Rgb};
 use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
+use specular_core::launch::{self, LaunchRecord};
 use specular_core::list;
 use specular_core::list::Rect;
 use specular_core::palette;
@@ -234,10 +235,14 @@ fn playable_systems() -> Vec<specular_core::library::SystemDecl> {
 
 /// Exits if the game's core gets stuck (see `Session::watch`): its thread can't be stopped, so
 /// the only way out is to end Specular, which the service manager then starts again. The battery
-/// save is as the game last wrote it, at most about 10 s old.
+/// save is as the game last wrote it, at most about 10 s old. The launch record, left behind,
+/// says why, for the notice after the restart.
 fn watch_game(p: &game::Playing) {
-    p.session.watch(STUCK_LIMIT, || {
+    let (path, mut record) = p.record.clone();
+    p.session.watch(STUCK_LIMIT, move || {
         eprintln!("game: the core has spent {} s on one frame; it has stopped responding, restarting", STUCK_LIMIT.as_secs());
+        record.reason = Some("it stopped responding".into());
+        if let Err(e) = record.write(&path) { eprintln!("game: launch record {}: {e}", path.display()); }
         on_ui(|r| r.toast("The game stopped responding. Restarting…"));
         std::thread::sleep(Duration::from_millis(1500));
         std::process::exit(2);
@@ -416,6 +421,8 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
                 }
             }
         }
+        // Before the scan, so no game can have been launched (writing a new record) yet.
+        if let Some(r) = LaunchRecord::left_behind(&launch::path(&data.cache())) { post(Msg::LastGameStopped(r)); }
         // The library: scanned now, and again whenever the games on the card change.
         std::thread::spawn(move || {
             let (roms, saves) = (data.roms(), data.saves());

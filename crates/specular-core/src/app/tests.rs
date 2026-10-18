@@ -69,6 +69,18 @@ fn open_a_system_play_and_come_back() {
 }
 
 #[test]
+fn a_game_that_didnt_end_last_time_is_reported_at_start_up() {
+    use crate::launch::LaunchRecord;
+    let record = |reason: Option<&str>| LaunchRecord {
+        core: "mGBA".into(), library: "/cores/mgba_libretro.so".into(), system: "gba".into(),
+        game: "gba/Golden Sun (USA, Europe).zip".into(), started: 0, reason: reason.map(Into::into),
+    };
+    assert_eq!(app().handle(Msg::LastGameStopped(record(None))), vec![Effect::Notice("mGBA stopped unexpectedly while playing Golden Sun".into())]);
+    assert_eq!(app().handle(Msg::LastGameStopped(record(Some("it stopped responding")))),
+               vec![Effect::Notice("mGBA was stopped while playing Golden Sun: it stopped responding".into())]);
+}
+
+#[test]
 fn holding_down_repeats_and_stops_at_the_end() {
     let mut a = app();
     a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: true, time: Duration::ZERO }));

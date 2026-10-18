@@ -12,6 +12,7 @@ fn bad() -> io::Error { io::Error::new(io::ErrorKind::InvalidData, "not a zip") 
 
 /// A file in a zip, as the directory records it.
 pub struct Entry {
+    /// Its path inside the zip, which may include folders.
     pub name: String,
     /// The CRC32 of its uncompressed contents.
     pub crc32: u32,
@@ -23,7 +24,8 @@ pub struct Entry {
     offset: u64,
 }
 
-/// The files in the zip at `path`. A zip64 one (a file of 4 GiB or more) is refused.
+/// The files in the zip at `path`. A zip64 one (needed for files or zips of 4 GiB or more) is
+/// refused (Unsupported).
 pub fn entries(path: &Path) -> io::Result<Vec<Entry>> {
     let mut f = File::open(path)?;
     let len = f.seek(SeekFrom::End(0))?;

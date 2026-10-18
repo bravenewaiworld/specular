@@ -24,6 +24,7 @@
 - **Developer details** (a setting): shows developer-only settings, an icon gallery, the other network interfaces' IPv4 addresses (on the Wi-Fi screen, to find the device over USB), and why installing to internal storage isn't possible.
 - **Keep Wi-Fi on** (a developer setting): stops WiFi Auto from turning WiFi off, so SSH over WiFi stays up.
 - **Watchdog.** A core stuck on one frame for 6 s is reported, and Specular exits so the service manager restarts it.
+- **Launch record.** `cache/launch.json` exists while a game runs. If Specular finds it at start-up (after a crash, the watchdog or a power cut), it logs it in full (`game: the last game didn't end; its launch record: …`), says which core stopped with which game, and removes it.
 
 ## Reproducing and testing
 

@@ -43,6 +43,7 @@ Completed:
  - Autosave every 10 s of play, on sleep and on quit; games resume from it at launch
  - Save states compressed (about 11× smaller, less card wear)
  - Watchdog: a core stuck on one frame for 6 s restarts Specular
+ - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)
  - Screen scaling: integer, fit, stretch
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play: the ROM is unzipped into memory, never onto the card; a zip that can't be played says why
@@ -52,7 +53,6 @@ TODO:
  - User added/pluggable libretro cores (loaded from `{sd card}/cores/{name}`)
  - NES and PS1 cores, from QuickNES or Nestopia, and SwanStation (each needs a licence, speed and save-memory check)
  - Protect battery saves from cores whose save states also restore the save memory, by storing a hash of the `.srm` with each state and renaming a newer `.srm` to `<name>.newer.srm` before it is overwritten
- - Launch record (`cache/launch.json`), so after a crash Specular says which core stopped with which game
 
 ### Library and Game Management
 

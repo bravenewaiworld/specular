@@ -47,6 +47,8 @@ pub enum Msg {
     /// The game launched couldn't start, and why. (None, a game that ended by itself, isn't sent
     /// yet.)
     GameEnded(Option<String>),
+    /// At start-up: the game last played didn't end (its launch record was left behind).
+    LastGameStopped(crate::launch::LaunchRecord),
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
     Wifi(WifiEvent),
@@ -426,6 +428,13 @@ impl App {
                 if self.nav.top().id == screens::GAME_MENU { self.nav.pop(); }
                 self.changed();
                 why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
+            }
+            Msg::LastGameStopped(r) => {
+                let title = crate::library::display_title(r.game.file_stem().unwrap_or_default().to_str().unwrap_or_default());
+                vec![Effect::Notice(match r.reason {
+                    Some(why) => format!("{} was stopped while playing {title}: {why}", r.core),
+                    None => format!("{} stopped unexpectedly while playing {title}", r.core),
+                })]
             }
             Msg::Battery(b) => {
                 let changed = self.ctx.battery != Some(b);

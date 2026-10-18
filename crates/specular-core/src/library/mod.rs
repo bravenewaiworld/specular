@@ -46,6 +46,8 @@ pub struct SystemDecl {
 /// A libretro core, and how Specular runs it.
 #[derive(Debug)]
 pub struct CoreDecl {
+    /// Its name for the player, e.g. "mGBA".
+    pub name: &'static str,
     /// Its library's name without ".so", e.g. "mgba_libretro".
     pub library: &'static str,
     /// The core options it runs with; the rest keep the core's defaults.
@@ -60,7 +62,7 @@ pub struct CoreDecl {
 /// ROM's path, and our build (tools/core-patches/mgba) maps that file instead of copying it. Given
 /// the contents, mGBA copies them, and copies a GBA ROM again on the first write to its cartridge
 /// area (as Pokémon games' clock does): 64 MB of memory for a 32 MB ROM.
-const MGBA: &CoreDecl = &CoreDecl { library: "mgba_libretro", options: &[("mgba_idle_optimization", "Remove Known")], rom_by_path: true };
+const MGBA: &CoreDecl = &CoreDecl { name: "mGBA", library: "mgba_libretro", options: &[("mgba_idle_optimization", "Remove Known")], rom_by_path: true };
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,
 /// .chd, .pbp or .m3u; a .bin is only a track of a .cue.
