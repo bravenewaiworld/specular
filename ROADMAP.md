@@ -111,12 +111,12 @@ Completed:
  - Emoji in WiFi network and Bluetooth device names
  - A list's drawing cost doesn't grow with its length (checked with 3,000 games)
  - 60 fps while animating; nothing drawn while idle
+ - The design mockup (`design/mockup.html`) shows the Light Bar look only
 
 TODO:
  - Credits section with all used OSS projects and licenses, generated at build time from the licences of everything shipped
  - Pre-game splash screen with `Powered By: ` core name, core's copyright notice, and repo URL.
  - Light bar tinted per system
- - Trim the design spec and mockup (`design/`) to the Light Bar direction only
  - Sounds
  - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
  - Title screens and screenshots as art

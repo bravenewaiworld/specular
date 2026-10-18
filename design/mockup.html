@@ -1,7 +1,7 @@
 <title>Specular UI Mockup</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@600;800&family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&display=swap">
 <style>
 /* Layout: the page (the "bench") is a plain backdrop around the simulated device screen, scaled to fit.
    Everything inside .screen is sized in "u": 1u = one Brick panel pixel at its ~400 ppi, so a
@@ -13,8 +13,8 @@
   --page-dim: #6b7178;
   --page-line: #1b1e22;
   --page-chip: #101215;
-  --page-font: "Geist", "IBM Plex Sans", system-ui, sans-serif;
-  --page-mono: "Geist Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --page-font: "Geist", system-ui, sans-serif;
+  --page-mono: "Geist Mono", ui-monospace, monospace;
 }
 html, body { height: 100%; }
 [hidden] { display: none !important; }
@@ -61,8 +61,6 @@ body {
   position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden;
   background: var(--bg); color: var(--fg); font-family: var(--font);
   -webkit-font-smoothing: antialiased; font-kerning: normal;
-}
-.screen.lightbar {
   --bg: #08090a; --surface: #141518; --raised: #202226; --fg: #f2f2f2; --dim: #8a8f96; --faint: #3a3d42;
   --accent: #2ec4b6; --tint: var(--accent);
   --font: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace; --display: "Geist", system-ui, sans-serif;
@@ -70,15 +68,6 @@ body {
   --m-scroll: 280ms; --e-scroll: cubic-bezier(.2, 0, 0, 1);
   --m-view: 260ms; --e-view: cubic-bezier(.2, 0, 0, 1);
   --m-fade: 160ms;
-}
-.screen.instrument {
-  --bg: #0a0a0a; --surface: #161616; --raised: #222222; --fg: #ededed; --dim: #6e6e6e; --faint: #2a2a2a;
-  --accent: #ff5a1f; --tint: var(--accent);
-  --font: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace; --display: "Doto", "IBM Plex Mono", monospace;
-  --m-move: 90ms; --e-move: steps(3, end);
-  --m-scroll: 90ms; --e-scroll: steps(3, end);
-  --m-view: 120ms; --e-view: steps(4, end);
-  --m-fade: 90ms;
 }
 .dim-overlay { position: absolute; inset: 0; background: #000; pointer-events: none; z-index: 50; transition: opacity .2s; }
 
@@ -96,19 +85,11 @@ body {
 .batt i::after { content: ""; position: absolute; right: calc(-6 * var(--u)); top: calc(5 * var(--u)); width: calc(3 * var(--u));
   height: calc(6 * var(--u)); background: var(--dim); }
 .wifi { width: calc(30 * var(--u)); height: calc(22 * var(--u)); }
-.instrument .status { border-bottom: var(--line) solid var(--faint); }
-.instrument .status .crumb { font: 500 var(--t-cap)/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
-.instrument .clock { font: 800 calc(34 * var(--u))/1 var(--display); color: var(--fg); letter-spacing: .02em; }
-.instrument .wifi, .instrument .batt i { display: none; }
-.instrument .batt::before { content: "BAT"; color: var(--dim); }
-.lightbar .wifi-txt, .lightbar .clock-label { display: none; }
-.instrument .wifi-txt { color: var(--dim); }
 
 /* light bar along the top edge */
 .lbar { position: absolute; left: 0; right: 0; top: 0; height: calc(3 * var(--u)); background: var(--tint); z-index: 30;
   box-shadow: 0 0 calc(18 * var(--u)) calc(2 * var(--u)) color-mix(in srgb, var(--tint) 45%, transparent);
   transition: background .35s, box-shadow .35s, opacity .2s; }
-.instrument .lbar { display: none; }
 
 /* hint bar */
 .hints { position: absolute; left: 0; right: 0; bottom: 0; height: var(--hint); display: flex; align-items: center;
@@ -118,8 +99,6 @@ body {
 .btn { display: inline-grid; place-items: center; min-width: calc(40 * var(--u)); height: calc(40 * var(--u));
   padding: 0 calc(8 * var(--u)); box-sizing: border-box; border-radius: 999px; background: var(--raised); color: var(--fg);
   font: 600 calc(22 * var(--u))/1 var(--font); }
-.instrument .hints { border-top: var(--line) solid var(--faint); font: 500 var(--t-cap)/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
-.instrument .btn { border-radius: 0 0 calc(6 * var(--u)) calc(6 * var(--u)); background: transparent; border: var(--line) solid var(--dim); font-family: var(--mono); }
 
 /* views */
 .stage { position: absolute; left: 0; right: 0; top: var(--bar); bottom: var(--hint); }
@@ -128,7 +107,6 @@ body {
 .view.to-left { transform: translateX(calc(-64 * var(--u))); opacity: 0; }
 .view.from-left { transform: translateX(calc(-64 * var(--u))); opacity: 0; }
 .view.to-right { transform: translateX(calc(64 * var(--u))); opacity: 0; }
-.instrument .view.from-right, .instrument .view.to-left, .instrument .view.from-left, .instrument .view.to-right { transform: none; }
 
 .pane-list { position: relative; flex: 1 1 58%; min-width: 0; overflow: hidden; }
 .pane-side { position: relative; flex: 0 0 42%; min-width: 0; padding: calc(24 * var(--u)) var(--gut) calc(24 * var(--u)) calc(16 * var(--u));
@@ -137,7 +115,6 @@ body {
 
 .title { position: absolute; left: var(--gut); right: calc(16 * var(--u)); top: calc(18 * var(--u)); font: 600 var(--t-title)/1.1 var(--display); letter-spacing: -.02em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.instrument .title { font: 800 calc(58 * var(--u))/1 var(--display); letter-spacing: .01em; text-transform: uppercase; }
 .list { position: absolute; left: 0; right: 0; top: calc(108 * var(--u)); bottom: 0; overflow: hidden; }
 .list::before, .list::after { content: ""; position: absolute; left: 0; right: 0; height: calc(56 * var(--u)); z-index: 2; pointer-events: none; }
 .list::before { top: 0; background: linear-gradient(var(--bg), transparent); }
@@ -152,8 +129,6 @@ body {
   transition: transform var(--m-move) var(--e-move), height var(--m-move) var(--e-move); }
 .plate::before { content: ""; position: absolute; left: 0; top: calc(18 * var(--u)); bottom: calc(18 * var(--u)); width: calc(4 * var(--u));
   background: var(--accent); box-shadow: 0 0 calc(12 * var(--u)) color-mix(in srgb, var(--accent) 70%, transparent); }
-.instrument .plate { background: var(--surface); box-shadow: inset 0 0 0 var(--line) var(--faint); left: calc(var(--gut) - 16 * var(--u)); right: calc(var(--gut) - 16 * var(--u)); }
-.instrument .plate::before { left: calc(16 * var(--u)); top: calc(50% - 7 * var(--u)); bottom: auto; width: calc(14 * var(--u)); height: calc(14 * var(--u)); box-shadow: none; }
 
 .row { position: relative; height: var(--row); display: flex; align-items: center; gap: calc(20 * var(--u));
   padding: 0 var(--gut); box-sizing: border-box; color: var(--dim); font: 400 var(--t-body)/1.1 var(--font); }
@@ -164,14 +139,6 @@ body {
 .det { flex: none; font: 400 var(--t-sec)/1 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
 .row.hdr { height: calc(76 * var(--u)); align-items: flex-end; padding-bottom: calc(12 * var(--u));
   font: 500 var(--t-cap)/1 var(--font); color: var(--dim); letter-spacing: .02em; }
-.instrument .row { padding-left: calc(var(--gut) + 24 * var(--u)); }
-.instrument .row.hdr { font: 500 var(--t-cap)/1 var(--mono); text-transform: uppercase; letter-spacing: .12em; padding-left: 0;
-  border-bottom: var(--line) solid var(--faint); margin: 0 var(--gut); padding-right: 0; }
-.instrument .row.hdr::after { content: attr(data-n); margin-left: auto; color: var(--faint); }
-.instrument .row.focus .lbl { font-weight: 500; }
-.idx { display: none; }
-.instrument .idx { display: inline; flex: none; font: 400 var(--t-cap)/1 var(--mono); color: var(--faint); width: calc(64 * var(--u)); font-variant-numeric: tabular-nums; }
-.instrument .row.focus .idx { color: var(--dim); }
 
 /* values */
 .val { flex: none; display: flex; align-items: center; gap: calc(16 * var(--u)); font: 500 var(--t-sec)/1 var(--mono); color: var(--dim); font-variant-numeric: tabular-nums; }
@@ -184,30 +151,20 @@ body {
   border-radius: 50%; background: var(--dim); transition: transform var(--m-move) var(--e-move), background var(--m-fade); }
 .tog.on { background: color-mix(in srgb, var(--accent) 38%, var(--raised)); }
 .tog.on::after { transform: translateX(calc(38 * var(--u))); background: var(--fg); }
-.instrument .tog { width: auto; height: auto; background: none; border-radius: 0; font: 500 var(--t-sec)/1 var(--mono); letter-spacing: .06em; }
-.instrument .tog::after { display: none; }
-.instrument .tog::before { content: "OFF"; color: var(--dim); }
-.instrument .tog.on::before { content: "ON"; color: var(--accent); }
 .gauge { position: relative; width: calc(200 * var(--u)); height: calc(8 * var(--u)); background: var(--faint); border-radius: 0 0 calc(4 * var(--u)) calc(4 * var(--u)); overflow: hidden; }
 .gauge i { position: absolute; left: 0; top: 0; bottom: 0; width: calc(100% * var(--f)); background: var(--fg);
   transition: width var(--m-move) var(--e-move); }
 .row.focus .gauge i { background: var(--accent); }
-.instrument .gauge { height: calc(26 * var(--u)); border-radius: 0; background: repeating-linear-gradient(90deg, var(--faint) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); }
-.instrument .gauge i { background: repeating-linear-gradient(90deg, var(--dim) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); width: calc(100% * var(--f)); }
-.instrument .row.focus .gauge i { background: repeating-linear-gradient(90deg, var(--accent) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); }
 .num { min-width: calc(64 * var(--u)); text-align: right; }
 .chev { font: 400 var(--t-sec)/1 var(--mono); color: var(--dim); }
 
 /* side panel */
 .big { font: 600 calc(150 * var(--u))/0.9 var(--display); letter-spacing: -.04em; color: var(--fg); font-variant-numeric: tabular-nums; }
-.instrument .big { font: 800 calc(150 * var(--u))/0.9 var(--display); letter-spacing: 0; }
 .cap { font: 400 var(--t-cap)/1.35 var(--font); color: var(--dim); }
-.instrument .cap { font-family: var(--mono); text-transform: uppercase; letter-spacing: .08em; }
 .cap b { color: var(--fg); font-weight: 500; }
 .meta { display: grid; grid-template-columns: auto 1fr; gap: calc(10 * var(--u)) calc(24 * var(--u)); font: 400 var(--t-cap)/1.2 var(--font); color: var(--dim); }
 .meta dd { margin: 0; color: var(--fg); font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .meta dt { white-space: nowrap; }
-.instrument .meta { font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; }
 .side-swap { display: flex; flex-direction: column; gap: calc(18 * var(--u)); transition: opacity var(--m-fade); }
 
 /* box art: placeholder covers generated per game */
@@ -221,7 +178,6 @@ body {
   text-wrap: balance; text-shadow: 0 1px 2px rgba(0, 0, 0, .4); }
 .art em { position: absolute; left: 8%; top: 8%; font: 500 calc(20 * var(--u))/1 var(--mono); font-style: normal; color: rgba(255, 255, 255, .7); letter-spacing: .1em; }
 .side-art { width: min(100%, calc(400 * var(--u))); }
-.instrument .art { border-radius: 0 0 calc(6 * var(--u)) calc(6 * var(--u)); }
 
 /* grid */
 .grid { position: absolute; left: 0; right: 0; top: calc(108 * var(--u)); bottom: 0; overflow: hidden; }
@@ -234,8 +190,6 @@ body {
 .cell.focus { opacity: 1; transform: translateY(calc(-8 * var(--u))); }
 .cell.focus .nm { color: var(--fg); }
 .cell.focus .art { box-shadow: inset 0 var(--line) 0 rgba(255, 255, 255, .28), 0 calc(10 * var(--u)) calc(30 * var(--u)) rgba(0, 0, 0, .55), 0 0 0 var(--line) var(--accent); }
-.instrument .cell.focus { transform: none; }
-.instrument .cell .nm { font-family: var(--mono); text-transform: uppercase; letter-spacing: .04em; }
 
 /* game layer */
 .game { position: absolute; inset: 0; z-index: 40; background: #000; opacity: 0; pointer-events: none; }
@@ -243,7 +197,6 @@ body {
 .game .blur { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity .2s; }
 .game .shade { position: absolute; inset: 0; background: #000; opacity: 0; transition: opacity .2s; }
 .game .gframe { position: absolute; transform-origin: 0 0; transition: transform 280ms cubic-bezier(.2, 0, 0, 1); }
-.instrument .game .gframe { transition: transform 120ms steps(4, end); }
 .game canvas.live { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
 .game.paused .blur { opacity: 1; }
 .game.paused .shade { opacity: .45; }
@@ -251,22 +204,17 @@ body {
 .flyer .art { width: 100%; height: 100%; aspect-ratio: auto; }
 .gmenu { position: absolute; left: 0; top: 0; bottom: 0; width: 46%; z-index: 46; display: flex; flex-direction: column; justify-content: center;
   transform: translateX(-100%); transition: transform 240ms cubic-bezier(.2, 0, 0, 1); }
-.instrument .gmenu { transition: transform 100ms steps(4, end); }
 .gmenu.open { transform: none; }
 .gmenu .panel { position: relative; height: 100%; background: color-mix(in srgb, var(--bg) 82%, transparent); display: flex; flex-direction: column;
   box-shadow: inset calc(-2 * var(--u)) 0 0 rgba(255, 255, 255, .08); }
 .gmenu .gtitle { padding: calc(56 * var(--u)) var(--gut) calc(8 * var(--u)); font: 600 var(--t-sec)/1.15 var(--font); color: var(--fg); }
 .gmenu .gsub { padding: 0 var(--gut); font: 400 var(--t-cap)/1 var(--mono); color: var(--dim); }
-.instrument .gmenu .gtitle { font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; }
 .gmenu .list { top: calc(170 * var(--u)); }
 
 /* sheet (picker for long choices) */
 .sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 74%; z-index: 35; background: var(--surface);
   border-top: var(--line) solid rgba(255, 255, 255, .1); transform: translateY(100%); transition: transform 260ms cubic-bezier(.2, 0, 0, 1); }
 .sheet.open { transform: none; }
-.instrument .sheet { left: auto; top: var(--bar); width: 52%; height: auto; border-top: 0; border-left: var(--line) solid var(--faint);
-  transform: translateX(100%); transition: transform 100ms steps(4, end); }
-.instrument .sheet.open { transform: none; }
 .sheet .title { font-size: var(--t-sec); top: calc(28 * var(--u)); }
 .sheet .list { top: calc(92 * var(--u)); }
 .scrim { position: absolute; inset: 0; z-index: 34; background: #000; opacity: 0; pointer-events: none; transition: opacity .2s; }
@@ -278,16 +226,11 @@ body {
   opacity: 0; transition: opacity .18s; overflow: hidden; }
 .osd i { position: absolute; left: 0; right: 0; bottom: 0; height: calc(100% * var(--f)); background: var(--fg); transition: height 120ms cubic-bezier(.2, 0, 0, 1); }
 .osd.on { opacity: 1; }
-.instrument .osd { right: auto; left: 50%; top: calc(var(--bar) + 20 * var(--u)); margin: 0; width: calc(420 * var(--u)); height: calc(54 * var(--u));
-  margin-left: calc(-210 * var(--u)); background: var(--surface); border-radius: 0; box-shadow: inset 0 0 0 var(--line) var(--faint); }
-.instrument .osd i { top: calc(14 * var(--u)); bottom: calc(14 * var(--u)); left: calc(16 * var(--u)); height: auto; width: calc((100% - 32 * var(--u)) * var(--f));
-  background: repeating-linear-gradient(90deg, var(--accent) 0 calc(14 * var(--u)), transparent 0 calc(20 * var(--u))); transition: width 90ms steps(2, end); }
 .toast { position: absolute; left: 50%; bottom: calc(var(--hint) + 24 * var(--u)); z-index: 60; transform: translate(-50%, calc(24 * var(--u))); opacity: 0;
   padding: calc(18 * var(--u)) calc(30 * var(--u)); background: var(--raised); color: var(--fg); border-radius: 0 0 var(--rb) var(--rb);
   box-shadow: inset 0 var(--line) 0 rgba(255, 255, 255, .13), 0 calc(10 * var(--u)) calc(40 * var(--u)) rgba(0, 0, 0, .5);
   font: 500 var(--t-cap)/1 var(--font); white-space: nowrap; transition: transform 220ms cubic-bezier(.2, 0, 0, 1), opacity 160ms; }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
-.instrument .toast { font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; box-shadow: inset 0 0 0 var(--line) var(--accent); background: var(--bg); transition: opacity 80ms; }
 .ingame .status, .ingame .hints, .ingame .lbar { opacity: 0; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -297,12 +240,8 @@ body {
 </style>
 
 <header class="bench-head">
-  <div class="wordmark">Specular <span>· interface mockup, two directions</span></div>
+  <div class="wordmark">Specular <span>· interface mockup</span></div>
   <div class="controls">
-    <div class="seg" role="group" aria-label="Direction">
-      <button id="dir-lightbar" aria-pressed="true">Light Bar</button>
-      <button id="dir-instrument" aria-pressed="false">Instrument</button>
-    </div>
     <div class="seg" role="group" aria-label="Screen" id="profiles"></div>
     <div class="seg" role="group" aria-label="Size">
       <button id="size-fit" aria-pressed="true">Fit</button>
@@ -314,8 +253,8 @@ body {
 
 <main class="bench" id="bench">
   <div class="leds" id="leds" aria-hidden="true"></div>
-  <div class="frame" id="frame"><div class="screen lightbar" id="screen"></div></div>
-  <div class="leds-cap" id="leds-cap">top light bar (device LEDs, synced to the accent)</div>
+  <div class="frame" id="frame"><div class="screen" id="screen"></div></div>
+  <div class="leds-cap">top light bar (device LEDs, synced to the accent)</div>
   <div class="pad" id="pad">
     <button data-b="left">◀</button><button data-b="up">▲</button><button data-b="down">▼</button><button data-b="right">▶</button>
     <button data-b="a">A</button><button data-b="b">B</button><button data-b="y">Y</button><button data-b="menu">☰</button>
@@ -325,7 +264,7 @@ body {
 <footer class="legend">
   <span>key → button:</span><span><kbd>←↑↓→</kbd> d-pad</span><span><kbd>X</kbd> A</span><span><kbd>Z</kbd> B</span><span><kbd>A</kbd> Y (grid)</span>
   <span><kbd>Q</kbd><kbd>W</kbd> L1 / R1</span><span><kbd>Esc</kbd> Menu</span><span><kbd>−</kbd><kbd>=</kbd> volume</span>
-  <span><kbd>T</kbd> direction</span><span><kbd>R</kbd> screen</span><span><kbd>P</kbd> physical size</span>
+  <span><kbd>R</kbd> screen</span><span><kbd>P</kbd> physical size</span>
 </footer>
 
 <script>
@@ -354,12 +293,11 @@ SYSTEMS.forEach((s, si) => s.games = s.games.map((t, i) => ({
   played: ((si * 7 + i * 13) % 9) * 37 + 12, // minutes, for the side panel
   saves: (si + i) % 4,
 })));
-const ACCENTS = { lightbar: [["Lagoon", "#2ec4b6"], ["Moss", "#7fb069"], ["Rose", "#e3a08a"], ["Sky", "#5aa9ff"]],
-                  instrument: [["Signal", "#ff5a1f"], ["Amber", "#ffb21f"], ["Cyan", "#3ad6e0"], ["White", "#ededed"]] };
+const ACCENTS = [["Lagoon", "#2ec4b6"], ["Moss", "#7fb069"], ["Rose", "#e3a08a"], ["Sky", "#5aa9ff"]];
 const LANGS = ["Deutsch", "English", "Español", "Français", "Italiano", "日本語", "한국어", "Nederlands", "Polski", "Português", "Русский", "中文"];
 
 const S = {
-  dir: "lightbar", prof: 0, phys: false,
+  prof: 0, phys: false,
   stack: [], sheet: null, game: null, paused: false,
   last: SYSTEMS[1].games[1],
   set: { brightness: 7, scaling: 0, smoothing: 0, volume: 12, clicks: true, accent: 0, tint: true, leds: 3,
@@ -379,7 +317,6 @@ screen.innerHTML = `
   <div class="status" id="status">
     <div class="crumb" id="crumb"></div>
     <div class="right">
-      <span class="wifi-txt">WIFI</span>
       <svg class="wifi" viewBox="0 0 30 22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M3 8a17 17 0 0 1 24 0"/><path d="M8 13a10 10 0 0 1 14 0"/><circle cx="15" cy="18" r="1.6" fill="currentColor" stroke="none"/></svg>
       <span class="batt" style="--lvl:.78"><i></i>78%</span>
       <span class="clock" id="clock">21:47</span>
@@ -402,12 +339,11 @@ function crumb(t) { $("#crumb").textContent = t; }
 function tint(color) { screen.style.setProperty("--tint", color || "var(--accent)"); paintLeds(); }
 
 // ---------------------------------------------------------------------------------------------
-// Rows: one model, one renderer; the two directions differ only in CSS.
-// kinds: hdr, text, action, toggle, choice, number
-function rowEl(r, i) {
+// Rows. kinds: hdr, text, action, toggle, choice, number
+function rowEl(r) {
   const e = h("div", "row" + (r.kind === "hdr" ? " hdr" : "") + (r.disabled ? " disabled" : ""));
-  if (r.kind === "hdr") { e.textContent = r.label; if (r.n != null) e.dataset.n = String(r.n).padStart(2, "0"); return e; }
-  e.append(h("span", "idx", String(i).padStart(3, "0")), h("span", "lbl", esc(r.label)));
+  if (r.kind === "hdr") { e.textContent = r.label; return e; }
+  e.append(h("span", "lbl", esc(r.label)));
   if (r.detail != null) e.append(h("span", "det", esc(r.detail)));
   const v = h("span", "val");
   e.append(v);
@@ -431,8 +367,8 @@ function rowEl(r, i) {
 function makeList(rows, { onFocus } = {}) {
   const el = h("div", "list"), track = h("div", "track"), plate = h("div", "plate");
   track.append(plate);
-  let y = 0, n = 0;
-  const els = rows.map((r) => { const e = rowEl(r, r.kind === "hdr" ? 0 : ++n); e.style.top = y + "px"; r.y = y; track.append(e); return e; });
+  let y = 0;
+  const els = rows.map((r) => { const e = rowEl(r); e.style.top = y + "px"; r.y = y; track.append(e); return e; });
   const L = { el, rows, els, focus: -1 };
   // positions are in u, measured once the screen is sized
   function layout() {
@@ -486,7 +422,7 @@ function viewHome() {
   left.append(h("div", "title", "Library"));
   const rows = [
     { kind: "action", label: "Continue", detail: S.last.sys.short, open: () => launch(S.last, null) },
-    { kind: "hdr", label: "Systems", n: SYSTEMS.length },
+    { kind: "hdr", label: "Systems" },
     ...SYSTEMS.map((s) => ({ kind: "text", label: s.name, detail: String(s.games.length), sys: s, open: () => push(viewGames(s)) })),
     { kind: "hdr", label: "Device" },
     { kind: "action", label: "Settings", open: () => push(viewSettings()) },
@@ -584,37 +520,37 @@ function viewGames(sys) {
 }
 
 function settingsRows() {
-  const st = S.set, acc = () => ACCENTS[S.dir];
+  const st = S.set;
   const num = (label, key, min, max, after) => ({ kind: "number", label, min, max, get: () => st[key], set: (x) => { st[key] = x; after && after(); } });
   const choice = (label, key, options, after) => ({ kind: "choice", label, options, get: () => st[key], set: (x) => { st[key] = x; after && after(); } });
   const toggle = (label, key, after) => ({ kind: "toggle", label, get: () => st[key], set: (x) => { st[key] = x; after && after(); } });
   const rows = [
-    { kind: "hdr", label: "Display", n: 1 },
+    { kind: "hdr", label: "Display" },
     num("Brightness", "brightness", 1, 10, applyBrightness),
     choice("Scaling", "scaling", ["Integer", "Fit", "Stretch"]),
     choice("Pixels", "smoothing", ["Sharp", "Smooth"]),
-    { kind: "hdr", label: "Sound", n: 2 },
+    { kind: "hdr", label: "Sound" },
     num("Volume", "volume", 0, 20, () => osd()),
     toggle("Button sounds", "clicks"),
-    { kind: "hdr", label: "Look", n: 3 },
-    { kind: "choice", label: "Accent", get: () => st.accent, set: (x) => { st.accent = x; applyAccent(); }, get options() { return acc().map((a) => a[0]); } },
+    { kind: "hdr", label: "Look" },
+    { kind: "choice", label: "Accent", get: () => st.accent, set: (x) => { st.accent = x; applyAccent(); }, options: ACCENTS.map((a) => a[0]) },
     toggle("Tint by system", "tint"),
     num("Light bar", "leds", 0, 5, paintLeds),
-    { kind: "hdr", label: "System", n: 4 },
+    { kind: "hdr", label: "System" },
     { kind: "action", label: "Language", value: () => LANGS[st.lang], open: () => openSheet("Language", LANGS, st.lang, (i) => { st.lang = i; }) },
     choice("Sleep after", "sleep", ["Never", "1 min", "3 min", "5 min", "10 min"]),
     { kind: "action", label: "Wi-Fi", value: () => "Home 2.4", open: () => toast("Connected to Home 2.4 · 192.168.1.41") },
     toggle("Developer details", "dev", () => rebuildSettings()),
   ];
   if (st.dev) rows.push(
-    { kind: "hdr", label: "Developer", n: 5 },
+    { kind: "hdr", label: "Developer" },
     { kind: "text", label: "Frame time", value: () => "2.1 ms · 60.2 Hz" },
     { kind: "text", label: "GPU", value: () => "GLES 3.2 · 702 MHz" },
     { kind: "text", label: "Memory", value: () => "31 MB" },
     { kind: "text", label: "Config", value: () => "configs/specular.json" },
   );
   rows.push(
-    { kind: "hdr", label: "About", n: st.dev ? 6 : 5 },
+    { kind: "hdr", label: "About" },
     { kind: "text", label: "Storage", value: () => "41 GB free" },
     { kind: "text", label: "Battery", value: () => "Good · 78%" },
   );
@@ -733,8 +669,7 @@ function launch(g, artEl) {
   const sx = from.w / R.w, sy = from.h / R.h;
   fly.style.transform = `translate(${from.x - R.x}px, ${from.y - R.y}px) scale(${sx}, ${sy})`;
   screen.append(fly);
-  const inst = S.dir === "instrument";
-  const dur = inst ? 200 : 420, ease = inst ? "steps(5, end)" : "cubic-bezier(.05, .7, .1, 1)";
+  const dur = 420, ease = "cubic-bezier(.05, .7, .1, 1)";
   screen.classList.add("ingame");
   fly.getBoundingClientRect();
   fly.style.transition = `transform ${dur}ms ${ease}, opacity 160ms ease-out ${dur}ms`;
@@ -755,9 +690,9 @@ function quitGame() {
   screen.append(fly);
   gameEl.classList.remove("on", "paused");
   screen.classList.remove("ingame");
-  const inst = S.dir === "instrument", dur = inst ? 160 : 340;
+  const dur = 340;
   fly.getBoundingClientRect();
-  fly.style.transition = `transform ${dur}ms ${inst ? "steps(4, end)" : "cubic-bezier(.3, 0, .1, 1)"}`;
+  fly.style.transition = `transform ${dur}ms cubic-bezier(.3, 0, .1, 1)`;
   fly.style.transform = `translate(${to.x - R.x}px, ${to.y - R.y}px) scale(${to.w / R.w}, ${to.h / R.h})`;
   setTimeout(() => fly.remove(), dur + 30);
   S.game = null;
@@ -833,7 +768,7 @@ function click() {
   try {
     actx = actx || new AudioContext();
     const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
-    o.type = S.dir === "instrument" ? "square" : "sine"; o.frequency.value = S.dir === "instrument" ? 1800 : 1250;
+    o.type = "sine"; o.frequency.value = 1250;
     g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.03, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.025);
     o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.03);
   } catch (e) { /* audio is optional */ }
@@ -846,7 +781,7 @@ function paintLeds() {
   const a = S.set.leds / 5;
   [...ledsEl.children].forEach((e) => { e.style.background = a ? `color-mix(in srgb, ${col} ${20 + a * 80}%, #15171a)` : "#15171a"; e.style.boxShadow = a ? `0 0 ${4 + a * 10}px color-mix(in srgb, ${col} ${a * 60}%, transparent)` : "none"; });
 }
-function applyAccent() { const a = ACCENTS[S.dir][S.set.accent] || ACCENTS[S.dir][0]; screen.style.setProperty("--accent", a[1]); paintLeds(); }
+function applyAccent() { const a = ACCENTS[S.set.accent]; screen.style.setProperty("--accent", a[1]); paintLeds(); }
 function applyBrightness() { $("#dimmer").style.opacity = (10 - S.set.brightness) * 0.06; }
 
 // ---------------------------------------------------------------------------------------------
@@ -890,7 +825,6 @@ function up(b) { if (rep.b === b) { clearTimeout(rep.timer); rep.b = null; rep.a
 addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (k === "t") { setDir(S.dir === "lightbar" ? "instrument" : "lightbar"); return; }
   if (k === "r") { setProfile((S.prof + 1) % PROFILES.length); return; }
   if (k === "p") { setPhys(!S.phys); return; }
   const b = e.code === "ShiftRight" ? "select" : KEYS[k];
@@ -904,16 +838,7 @@ $("#pad").addEventListener("pointerup", (e) => { const b = e.target.dataset.b; i
 $("#pad").addEventListener("pointerleave", () => rep.b && up(rep.b));
 
 // ---------------------------------------------------------------------------------------------
-// Bench controls: direction, device profile, fit vs physical size
-function setDir(d) {
-  S.dir = d;
-  screen.classList.toggle("lightbar", d === "lightbar"); screen.classList.toggle("instrument", d === "instrument");
-  $("#dir-lightbar").setAttribute("aria-pressed", d === "lightbar"); $("#dir-instrument").setAttribute("aria-pressed", d === "instrument");
-  S.set.accent = 0; applyAccent();
-  $("#leds-cap").textContent = "top light bar (device LEDs, synced to the accent)";
-  relayoutAll();
-  try { localStorage.setItem("specular-dir", d); } catch (e) {}
-}
+// Bench controls: device profile, fit vs physical size
 function setProfile(i) {
   S.prof = i; const p = PROFILES[i];
   [...$("#profiles").children].forEach((b, j) => b.setAttribute("aria-pressed", j === i));
@@ -941,8 +866,6 @@ function relayoutAll() {
   });
 }
 PROFILES.forEach((p, i) => { const b = h("button", null, esc(p.label)); b.id = "prof-" + p.id; b.setAttribute("aria-pressed", i === 0); b.onclick = () => setProfile(i); $("#profiles").append(b); });
-$("#dir-lightbar").onclick = () => setDir("lightbar");
-$("#dir-instrument").onclick = () => setDir("instrument");
 $("#size-fit").onclick = () => setPhys(false);
 $("#size-phys").onclick = () => setPhys(true);
 $("#monitor-ppi").addEventListener("input", () => S.phys && fit());
@@ -953,8 +876,6 @@ tickClock(); setInterval(tickClock, 15000);
 
 // boot
 setProfile(0);
-let saved = "lightbar"; try { saved = localStorage.getItem("specular-dir") || saved; } catch (e) {}
-setDir(saved);
 applyBrightness();
 const homeV = viewHome(); S.stack.push(homeV); mount(homeV);
 if (document.fonts) document.fonts.ready.then(relayoutAll);
