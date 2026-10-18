@@ -168,7 +168,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
 }
 
 /// The systems Specular can play: those it has a core for. Other systems' games aren't listed at
-/// all, rather than listed and failing to start (see ROADMAP.md).
+/// all, rather than listed and failing to start (see docs/library-and-box-art.md).
 fn playable_systems() -> Vec<specular_core::library::SystemDecl> {
     specular_core::library::builtin_systems().into_iter().filter(|s| s.core.is_some()).collect()
 }

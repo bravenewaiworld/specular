@@ -1,4 +1,4 @@
-//! Spike checks "Slint on our EGL", "GL function lookup" and "Input" (specular/ROADMAP.md, step 2):
+//! Spike checks "Slint on our EGL", "GL function lookup" and "Input" (docs/brick.md):
 //! Slint's FemtoVG renderer on the Brick's EGL display.
 //!
 //! Shows a Light Bar style list whose focus moves every 1.5 s (a short animation, then idle); up

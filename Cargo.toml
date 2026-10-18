@@ -4,7 +4,7 @@ members = ["crates/specular-core", "crates/specular-linux", "crates/specular-run
 
 [workspace.package]
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "GPL-3.0-only"
 
 [profile.release]
 lto = "fat"

@@ -1,5 +1,5 @@
 //! Spike checks "Frames from another thread", "Composite vs direct" and "Latency"
-//! (specular/ROADMAP.md, step 2): game frames from another thread, what showing them costs, and
+//! (docs/brick.md): game frames from another thread, what showing them costs, and
 //! how long a button press takes to reach the screen.
 //!
 //! A stand-in emulator thread with its own GL context (sharing objects with the UI's) makes a

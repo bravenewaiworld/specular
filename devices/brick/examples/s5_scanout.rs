@@ -1,4 +1,4 @@
-//! Spike check "Display queue" (specular/ROADMAP.md, step 2): how long from starting a frame to
+//! Spike check "Display queue" (docs/brick.md): how long from starting a frame to
 //! the display scanning it out, and whether the swap's buffering adds a frame.
 //!
 //! Draws frames whose colour encodes their number. A watcher thread polls which of /dev/fb0's

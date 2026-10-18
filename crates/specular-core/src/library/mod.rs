@@ -55,9 +55,10 @@ pub struct CoreDecl {
 
 /// mGBA, for GB, GBC and GBA alike. "Remove Known" skips the busy-wait loops of known games,
 /// which saves battery without changing how they run (TrimUI's own setting too). It gets only the
-/// ROM's path, and our build (tools/core-patches/mgba) maps that file instead of copying it. Given
-/// the contents, mGBA copies them, and copies a GBA ROM again on the first write to its cartridge
-/// area (as Pokémon games' clock does): 64 MB of memory for a 32 MB ROM.
+/// ROM's path, and Crystaline OS's build of mGBA (its tools/core-patches/mgba) maps that file
+/// instead of copying it. Given the contents, mGBA copies them, and copies a GBA ROM again on the
+/// first write to its cartridge area (as Pokémon games' clock does): 64 MB of memory for a 32 MB
+/// ROM.
 const MGBA: &CoreDecl = &CoreDecl { library: "mgba_libretro", options: &[("mgba_idle_optimization", "Remove Known")], rom_by_path: true };
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,

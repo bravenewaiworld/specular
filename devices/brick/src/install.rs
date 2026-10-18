@@ -1,5 +1,6 @@
-//! The Brick's installer: the system's brick-install program (userspace/brick-install), run with
-//! its output read line by line (its protocol is in its report.rs).
+//! The Brick's installer: the system's brick-install program (Crystaline OS's
+//! userspace/brick-install), run with its output read line by line (its protocol is in its
+//! report.rs).
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};

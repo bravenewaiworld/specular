@@ -66,7 +66,7 @@ fn encode(p: &Picture) -> Result<Vec<u8>, png::EncodingError> {
 }
 
 /// Box art from the libretro thumbnail server, for identified games. Plain HTTP: see the box
-/// art decisions in ROADMAP.md.
+/// art decisions in docs/library-and-box-art.md.
 pub struct LibretroThumbnails { agent: ureq::Agent }
 
 impl LibretroThumbnails {
