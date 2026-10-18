@@ -14,6 +14,7 @@ pub const ENV_GET_VARIABLE: c_uint = 15;
 pub const ENV_SET_VARIABLES: c_uint = 16;
 pub const ENV_GET_VARIABLE_UPDATE: c_uint = 17;
 pub const ENV_SET_SUPPORT_NO_GAME: c_uint = 18;
+pub const ENV_GET_LOG_INTERFACE: c_uint = 27;
 pub const ENV_GET_SAVE_DIRECTORY: c_uint = 31;
 pub const ENV_SET_SYSTEM_AV_INFO: c_uint = 32;
 pub const ENV_SET_CONTROLLER_INFO: c_uint = 35;
@@ -83,6 +84,9 @@ pub struct Variable { pub key: *const c_char, pub value: *const c_char }
 
 #[repr(C)]
 pub struct Message { pub msg: *const c_char, pub frames: c_uint }
+
+#[repr(C)]
+pub struct LogCallback { pub log: unsafe extern "C" fn(c_uint, *const c_char, ...) }
 
 pub type EnvironmentFn = unsafe extern "C" fn(c_uint, *mut c_void) -> bool;
 pub type VideoRefreshFn = unsafe extern "C" fn(*const c_void, c_uint, c_uint, usize);

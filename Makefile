@@ -22,8 +22,9 @@ PREFIX = /usr/lib/specular
 
 BIN := $(OUT)/$(if $(TARGET),$(TARGET)/)release
 CORES := $(OUT)/cores/$(or $(TARGET),host)
-# Cross builds: cargo links with the device's compiler, and crates that build C code (zstd) use it
-# too. CC_<target> rather than CC, which would also reach the build scripts that run on this PC.
+# Cross builds: cargo links with the device's compiler, and crates that build C code (zstd, the
+# runtime's log shim) use it too. CC_<target> rather than CC, which would also reach the build
+# scripts that run on this PC.
 CROSS_ENV := $(if $(TARGET),CC_$(subst -,_,$(TARGET))=$(CROSS_COMPILE)gcc)
 CROSS_ARGS := $(if $(TARGET),--target $(TARGET) --config 'target.$(TARGET).linker="$(CROSS_COMPILE)gcc"')
 

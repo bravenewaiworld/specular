@@ -11,6 +11,7 @@
 
 mod core;
 mod frontend;
+mod log;
 mod sound;
 mod unzip;
 
@@ -297,7 +298,14 @@ impl Pacer {
 
 fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
                started: mpsc::Sender<Result<GameInfo, String>>) {
-    let mut game = match Game::load(&spec, buttons, out.frames.clone(), out.on_frame) {
+    play(&spec, out, buttons, runs, cmds, started);
+    log::stop();
+}
+
+/// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
+fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
+        started: mpsc::Sender<Result<GameInfo, String>>) {
+    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame) {
         Ok(g) => g,
         Err(e) => { let _ = started.send(Err(e)); return; }
     };
@@ -385,6 +393,7 @@ impl Game {
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
+        log::start(info.name());
         let unzipped = unzip::if_needed(&spec.rom, &info)?;
         let rom_file = unzipped.as_ref().map_or(spec.rom.as_path(), |u| &u.path);
         let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string());

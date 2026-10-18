@@ -46,12 +46,12 @@ Completed:
  - Screen scaling: integer, fit, stretch
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play: the ROM is unzipped into memory, never onto the card; a zip that can't be played says why
+ - Cores' own log messages go into Specular's log (debug messages left out, and at most 30 a second)
 
 TODO:
  - User added/pluggable libretro cores (loaded from `{sd card}/cores/{name}`)
  - NES and PS1 cores, from QuickNES or Nestopia, and SwanStation (each needs a licence, speed and save-memory check)
  - Protect battery saves from cores whose save states also restore the save memory, by storing a hash of the `.srm` with each state and renaming a newer `.srm` to `<name>.newer.srm` before it is overwritten
- - Core log messages captured into Specular's log
  - Launch record (`cache/launch.json`), so after a crash Specular says which core stopped with which game
 
 ### Library and Game Management

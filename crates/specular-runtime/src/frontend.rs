@@ -105,6 +105,7 @@ impl Frontend {
                     if !m.msg.is_null() { eprintln!("core: {}", CStr::from_ptr(m.msg).to_string_lossy()); }
                     true
                 }
+                ENV_GET_LOG_INTERFACE => { (*(data as *mut LogCallback)).log = crate::log::specular_log; true }
                 ENV_SAVE_RAM_WRITTEN => { self.save_ram_written = true; true }
                 ENV_GET_INPUT_BITMASKS | ENV_SET_INPUT_DESCRIPTORS | ENV_SET_CONTROLLER_INFO | ENV_SET_MEMORY_MAPS
                 | ENV_SET_SUPPORT_ACHIEVEMENTS | ENV_SET_SUPPORT_NO_GAME | ENV_SET_PERFORMANCE_LEVEL

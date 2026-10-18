@@ -3968,6 +3968,7 @@ dependencies = [
 name = "specular-runtime"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "crc32fast",
  "flate2",
  "libc",

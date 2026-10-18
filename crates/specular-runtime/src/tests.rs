@@ -1,7 +1,7 @@
 use super::*;
 
-/// Tests that start a session take turns: only one game runs at a time.
-static ONE_GAME: Mutex<()> = Mutex::new(());
+/// Tests that start a session (or use the core log) take turns: only one game runs at a time.
+pub(crate) static ONE_GAME: Mutex<()> = Mutex::new(());
 
 /// The host build of mGBA in `$SPECULAR_CORES` (`make test` builds it and sets it); tests that need
 /// it are skipped without.

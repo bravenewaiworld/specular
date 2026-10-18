@@ -10,6 +10,9 @@ libc = "0.2"
 zstd = { version = "0.13", default-features = false }
 specular-core = { path = "../specular-core" }
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 specular-linux = { path = "../specular-linux" }
 tempfile = "3"
