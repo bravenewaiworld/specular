@@ -90,7 +90,7 @@ Every game's sound is resampled, by linear interpolation, to the output's rate (
 
 ### Patches to mGBA
 
-Kept in Crystaline OS (`tools/core-patches/mgba`), which builds the cores:
+Kept in `tools/core-patches/mgba`; `tools/build-cores.sh` fetches mGBA at a pinned commit and applies them:
 
 1. `0001`: map ROM files (copy-on-write) instead of copying them into memory.
 2. `0002`: tell the frontend when save memory has been written.

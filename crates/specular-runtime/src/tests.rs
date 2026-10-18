@@ -3,8 +3,8 @@ use super::*;
 /// Tests that start a session take turns: only one game runs at a time.
 static ONE_GAME: Mutex<()> = Mutex::new(());
 
-/// The host build of mGBA in `$SPECULAR_CORES` (Crystaline OS's `tools/build-cores.sh host`);
-/// tests that need it are skipped without.
+/// The host build of mGBA in `$SPECULAR_CORES` (`make test` builds it and sets it); tests that need
+/// it are skipped without.
 fn mgba() -> Option<PathBuf> {
     let p = PathBuf::from(std::env::var_os("SPECULAR_CORES")?).join("mgba_libretro.so");
     p.exists().then_some(p)

@@ -25,10 +25,9 @@ pub const ENV_GET_INPUT_BITMASKS: c_uint = 51 | EXPERIMENTAL;
 pub const ENV_GET_CORE_OPTIONS_VERSION: c_uint = 52;
 pub const ENV_SET_CORE_OPTIONS_DISPLAY: c_uint = 55;
 pub const ENV_SET_MINIMUM_AUDIO_LATENCY: c_uint = 63;
-/// A call of Specular's own, from mGBA as Crystaline OS patches it (its
-/// `tools/core-patches/mgba/0002`): the game has changed its save memory and finished writing to
-/// it. Made inside `retro_run`, once the save memory has gone 15 frames (a quarter of a second)
-/// without a write. No data.
+/// A call of Specular's own, from our patched mGBA (`tools/core-patches/mgba/0002`): the game
+/// has changed its save memory and finished writing to it. Made inside `retro_run`, once the
+/// save memory has gone 15 frames (a quarter of a second) without a write. No data.
 pub const ENV_SAVE_RAM_WRITTEN: c_uint = PRIVATE + 1;
 const EXPERIMENTAL: c_uint = 0x10000;
 /// The start of the range libretro leaves to private agreements between a frontend and its cores.

@@ -1,0 +1,38 @@
+diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
+--- a/src/platform/libretro/libretro.c
++++ b/src/platform/libretro/libretro.c
+@@ -82,6 +82,14 @@
+ static int32_t _readTiltY(struct mRotationSource* source);
+ static int32_t _readGyroZ(struct mRotationSource* source);
+ static void _setupMaps(struct mCore* core);
++static void _savedataUpdated(void* context);
++
++// A private environment call (from RETRO_ENVIRONMENT_PRIVATE's range, agreed with Specular): the
++// game has changed its save memory and finished writing to it, so the save file can be written
++// now. Made inside retro_run, once the save memory has gone 15 frames without a write (mGBA's
++// savedataUpdated callback). Takes no data; a frontend that doesn't know it just refuses it.
++#define SPECULAR_ENVIRONMENT_SAVE_RAM_WRITTEN (RETRO_ENVIRONMENT_PRIVATE + 1)
++static struct mCoreCallbacks savedataCallbacks = { .savedataUpdated = _savedataUpdated };
+ 
+ static struct mCore* core;
+ static mColor* outputBuffer = NULL;
+@@ -2008,6 +2016,7 @@
+ 	}
+ 	mCoreInitConfig(core, NULL);
+ 	core->init(core);
++	core->addCoreCallbacks(core, &savedataCallbacks);
+ 
+ #ifdef _3DS
+ 	outputBuffer = linearMemAlign(VIDEO_BUFF_SIZE, 0x80);
+@@ -2393,6 +2402,11 @@
+ 	logCallback(retroLevel, "%s: %s\n", mLogCategoryName(category), message);
+ }
+ 
++static void _savedataUpdated(void* context) {
++	UNUSED(context);
++	environCallback(SPECULAR_ENVIRONMENT_SAVE_RAM_WRITTEN, NULL);
++}
++
+ /* Used only for GB/GBC content */
+ static void _postAudioBuffer(struct mAVStream* stream, struct mAudioBuffer* buffer) {
+ 	UNUSED(stream);

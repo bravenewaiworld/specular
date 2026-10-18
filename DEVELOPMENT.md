@@ -34,7 +34,7 @@
   - WiFi against a fake service socket replaying output recorded on a device.
   - Bluetooth parsing.
   - The installer's progress protocol.
-  - The runtime, with a real mGBA core on a generated ROM. This needs a host build of the core; without it these tests are skipped.
+  - The runtime, with a real mGBA core on a generated ROM. This needs a host build of the core (`make test` builds it); without it these tests are skipped.
 - **Wireless traces and scenarios.**
   - A wireless trace from a device converts into a scenario (`tools/trace-to-scenario.py`).
   - The desktop build replays a scenario (`SPECULAR_SCENARIO=<file>`): the same events, with the same answers and timing. A WiFi or Bluetooth problem seen on a device can be reproduced on the PC.

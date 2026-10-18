@@ -1,0 +1,88 @@
+diff --git a/include/mgba-util/vfs.h b/include/mgba-util/vfs.h
+index 6c9bd29..f60b4c7 100644
+--- a/include/mgba-util/vfs.h
++++ b/include/mgba-util/vfs.h
+@@ -73,6 +73,11 @@ struct VFile* VFileOpen(const char* path, int flags);
+ #ifdef ENABLE_VFS_FD
+ struct VFile* VFileOpenFD(const char* path, int flags);
+ struct VFile* VFileFromFD(int fd);
++// Maps the first `size` bytes of a file opened with VFileOpenFD/VFileFromFD privately and
++// writably at the start of a `reserve`-byte area whose rest is zeroed memory; free the whole area
++// with mappedMemoryFree(area, reserve). Pages are copied only when written, and writes never reach
++// the file. Returns NULL for other VFiles, or if mapping fails.
++void* VFileMapPrivately(struct VFile* vf, size_t size, size_t reserve);
+ #endif
+ 
+ #ifdef ENABLE_VFS_FILE
+diff --git a/src/gba/gba.c b/src/gba/gba.c
+index c30bd94..032a087 100644
+--- a/src/gba/gba.c
++++ b/src/gba/gba.c
+@@ -462,6 +462,18 @@ bool GBALoadROM(struct GBA* gba, struct VFile* vf) {
+ 		memcpy(&gba->memory.rom[0x80000], gba->memory.rom, 0x00100000);
+ 		memcpy(&gba->memory.rom[0xC0000], gba->memory.rom, 0x00100000);
+ 	} else {
++#if !defined(FIXED_ROM_BUFFER) && defined(ENABLE_VFS_FD)
++		// Map the file, copy-on-write, into a full-size ROM area: the same area _pristineCow
++		// otherwise copies the whole ROM into on the first write to it (e.g. to a cartridge
++		// clock's registers), but here only the pages written get copied. Unlike _pristineCow's
++		// copy, the area past the file's end reads as 0, not 0xFF (seen only if a cheat writes
++		// past the end).
++		void* rom = VFileMapPrivately(vf, gba->pristineRomSize, GBA_SIZE_ROM0);
++		if (rom) {
++			gba->memory.rom = rom;
++			gba->isPristine = false;
++		} else
++#endif
+ 		gba->memory.rom = vf->map(vf, gba->pristineRomSize, MAP_READ);
+ 		gba->memory.romSize = gba->pristineRomSize;
+ 	}
+@@ -476,9 +488,11 @@ bool GBALoadROM(struct GBA* gba, struct VFile* vf) {
+ 	if (popcount32(gba->memory.romSize) != 1) {
+ 		// This ROM is either a bad dump or homebrew. Emulate flash cart behavior.
+ #ifndef FIXED_ROM_BUFFER
+-		void* newRom = anonymousMemoryMap(GBA_SIZE_ROM0);
+-		memcpy(newRom, gba->memory.rom, gba->pristineRomSize);
+-		gba->memory.rom = newRom;
++		if (gba->isPristine) { // not already in a full-size area (see above)
++			void* newRom = anonymousMemoryMap(GBA_SIZE_ROM0);
++			memcpy(newRom, gba->memory.rom, gba->pristineRomSize);
++			gba->memory.rom = newRom;
++		}
+ #endif
+ 		gba->memory.romSize = GBA_SIZE_ROM0;
+ 		gba->memory.romMask = GBA_SIZE_ROM0 - 1;
+diff --git a/src/util/vfs/vfs-fd.c b/src/util/vfs/vfs-fd.c
+index 2535bd0..201e1f1 100644
+--- a/src/util/vfs/vfs-fd.c
++++ b/src/util/vfs/vfs-fd.c
+@@ -229,6 +229,29 @@ static void _vfdUnmap(struct VFile* vf, void* memory, size_t size) {
+ }
+ #endif
+ 
++void* VFileMapPrivately(struct VFile* vf, size_t size, size_t reserve) {
++#ifndef _POSIX_MAPPED_FILES
++	UNUSED(vf);
++	UNUSED(size);
++	UNUSED(reserve);
++	return NULL;
++#else
++	if (vf->close != _vfdClose || !size || size > reserve) {
++		return NULL;
++	}
++	struct VFileFD* vfd = (struct VFileFD*) vf;
++	void* area = mmap(0, reserve, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++	if (area == MAP_FAILED) {
++		return NULL;
++	}
++	if (mmap(area, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED, vfd->fd, 0) == MAP_FAILED) {
++		munmap(area, reserve);
++		return NULL;
++	}
++	return area;
++#endif
++}
++
+ static void _vfdTruncate(struct VFile* vf, size_t size) {
+ 	struct VFileFD* vfd = (struct VFileFD*) vf;
+ 	ftruncate(vfd->fd, size);

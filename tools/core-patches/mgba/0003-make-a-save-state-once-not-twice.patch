@@ -1,0 +1,92 @@
+diff --git a/src/platform/libretro/libretro.c b/src/platform/libretro/libretro.c
+--- a/src/platform/libretro/libretro.c
++++ b/src/platform/libretro/libretro.c
+@@ -83,6 +83,7 @@
+ static int32_t _readGyroZ(struct mRotationSource* source);
+ static void _setupMaps(struct mCore* core);
+ static void _savedataUpdated(void* context);
++static void _dropSizedState(void);
+ 
+ // A private environment call (from RETRO_ENVIRONMENT_PRIVATE's range, agreed with Specular): the
+ // game has changed its save memory and finished writing to it, so the save file can be written
+@@ -1546,6 +1547,7 @@
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
++	_dropSizedState();
+ 	uint16_t keys;
+ 	bool skipFrame = false;
+ 
+@@ -1939,6 +1941,7 @@
+ }
+ 
+ void retro_reset(void) {
++	_dropSizedState();
+ 	core->reset(core);
+ 	mRumbleIntegratorReset(&rumble);
+ 	_setupMaps(core);
+@@ -2133,6 +2136,7 @@
+ 	if (!core) {
+ 		return;
+ 	}
++	_dropSizedState();
+ 	mCoreConfigDeinit(&core->config);
+ 	core->deinit(core);
+ 	mappedMemoryFree(data, dataSize);
+@@ -2141,23 +2145,41 @@
+ 	savedata = 0;
+ }
+ 
++// The size of a state is only known by making it, and frontends ask for the size before each
++// retro_serialize, so the state made for retro_serialize_size is kept for the retro_serialize
++// that follows, instead of being made again. Anything that changes the emulation's state (a run,
++// a reset, loading a state) drops it. A frontend writing to the core's memory (through
++// retro_get_memory_data) between the two calls would get the state from before its write.
++// The kept state (about 0.5 MB for a GBA game) is held until then.
++static struct VFile* sizedState;
++
++static void _dropSizedState(void) {
++	if (sizedState) {
++		sizedState->close(sizedState);
++		sizedState = NULL;
++	}
++}
++
+ size_t retro_serialize_size(void) {
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
+-	struct VFile* vfm = VFileMemChunk(NULL, 0);
+-	mCoreSaveStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
+-	size_t size = vfm->size(vfm);
+-	vfm->close(vfm);
+-	return size;
++	_dropSizedState();
++	sizedState = VFileMemChunk(NULL, 0);
++	mCoreSaveStateNamed(core, sizedState, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
++	return sizedState->size(sizedState);
+ }
+ 
+ bool retro_serialize(void* data, size_t size) {
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
+-	struct VFile* vfm = VFileMemChunk(NULL, 0);
+-	mCoreSaveStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
++	struct VFile* vfm = sizedState;
++	sizedState = NULL;
++	if (!vfm) {
++		vfm = VFileMemChunk(NULL, 0);
++		mCoreSaveStateNamed(core, vfm, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
++	}
+ 	if ((ssize_t) size > vfm->size(vfm)) {
+ 		size = vfm->size(vfm);
+ 	} else if ((ssize_t) size < vfm->size(vfm)) {
+@@ -2174,6 +2196,7 @@
+ 	if (deferredSetup) {
+ 		_doDeferredSetup();
+ 	}
++	_dropSizedState();
+ 	struct VFile* vfm = VFileFromConstMemory(data, size);
+ 	bool success = mCoreLoadStateNamed(core, vfm, SAVESTATE_RTC);
+ 	vfm->close(vfm);

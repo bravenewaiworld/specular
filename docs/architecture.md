@@ -20,6 +20,7 @@ How Specular is put together: the toolkit, the crates and threads, the boundary 
 - **Every extension point is a registry from the start; plugins come later** (2026-10-12). Screens, settings, systems and emulators, themes, and art sources.
 - **GPLv3** (2026-10-12). Anything GPL we build on decides the licence: the algorithms ported from muOS's runtime are GPLv3, and Slint's GPL option is GPL-3.0-only, so Specular as a whole is GPL-3.0-only (2026-10-18). Rejected: "or later" (Slint's option doesn't allow it).
 - **Specular has its own repository** (2026-10-18). Crystaline OS includes Specular and builds it for devices. Rejected: staying inside the Brick's OS repository (only ever meant as a start).
+- **Specular builds itself and its cores, and installs them; a system supplies only its compiler and where to install** (2026-10-18). The `Makefile` is the whole interface (`DEVICE`, `TARGET`, `CROSS_COMPILE`, `CORE_CFLAGS`, `DESTDIR`, `PREFIX`), so the installed layout and the core patches (which add calls only Specular understands) live in one place, and working on Specular needs nothing from Crystaline OS. Rejected: Crystaline OS building the cores and laying out Specular's files.
 - **The credits screen is generated at build time from a licence list** (2026-10-18): Rust crates' licences, Slint, the cores, fonts, and the libretro-database data (CC-BY-SA).
 
 ## Design
@@ -39,8 +40,10 @@ crates/
 devices/
   desktop/           Slint's default window, simulated hardware, keyboard as gamepad
   brick/             the TrimUI Brick (see brick.md)
-design/              design spec and design/mockup.html
+design/              design/mockup.html, the interactive look (see look-and-motion.md)
 data/db/             game tables for box art (see library-and-box-art.md)
+tools/               build-cores.sh and its core-patches/, trim-db.py, trace-to-scenario.py
+Makefile             builds Specular and its cores for a device, and installs them
 ```
 
 Each device crate is a small binary that builds its device and calls `specular_ui::run`.
