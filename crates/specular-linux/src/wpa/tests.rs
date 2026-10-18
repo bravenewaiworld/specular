@@ -137,9 +137,12 @@ impl Fake {
     fn sent(&self) -> Vec<String> { self.sent.lock().unwrap().clone() }
 }
 
-/// The device: always powers on (the fake is already there).
-struct NoDevice;
-impl WifiDevice for NoDevice { fn set_power(&mut self, _: bool) -> io::Result<()> { Ok(()) } }
+/// The device: always powers on (the fake is already there), with these interfaces' addresses.
+struct NoDevice(Arc<Mutex<Vec<Interface>>>);
+impl WifiDevice for NoDevice {
+    fn set_power(&mut self, _: bool) -> io::Result<()> { Ok(()) }
+    fn addresses(&self) -> io::Result<Vec<Interface>> { Ok(self.0.lock().unwrap().clone()) }
+}
 
 /// wpa_supplicant's replies for a device with no saved networks, STATUS giving `status`.
 fn answers(status: Arc<Mutex<&'static str>>) -> impl Fn(&str) -> String + Send {
@@ -154,8 +157,10 @@ fn answers(status: Arc<Mutex<&'static str>>) -> impl Fn(&str) -> String + Send {
 
 const SCANNING: &str = "wpa_state=SCANNING\n";
 
-fn started(fake: &Fake) -> (WpaSupplicant, mpsc::Receiver<WifiEvent>) {
-    let mut wifi = WpaSupplicant::new(fake.dir.path().join("wlan0"), Box::new(NoDevice));
+fn started(fake: &Fake) -> (WpaSupplicant, mpsc::Receiver<WifiEvent>) { started_with(fake, Default::default()) }
+
+fn started_with(fake: &Fake, addresses: Arc<Mutex<Vec<Interface>>>) -> (WpaSupplicant, mpsc::Receiver<WifiEvent>) {
+    let mut wifi = WpaSupplicant::new(fake.dir.path().join("wlan0"), Box::new(NoDevice(addresses)));
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     wifi.start(Box::new(move |e| { let _ = tx.lock().unwrap().send(e); }));
@@ -215,4 +220,26 @@ fn out_of_range_only_after_a_scan_since_the_join() {
     assert_eq!(next(&rx), WifiEvent::Link(WifiLink::Idle));
     assert_eq!(next(&rx), WifiEvent::Failed(WifiError::OutOfRange { ssid: "Elsewhere".into() }));
     assert!(fake.sent().contains(&"SET_NETWORK 4 key_mgmt NONE".to_string()));
+}
+
+#[test]
+fn other_interfaces_are_reported_and_a_changed_wifi_address_is_read_again() {
+    let status = Arc::new(Mutex::new("ssid=VRP\nwpa_state=COMPLETED\nip_address=10.0.0.9\n"));
+    let fake = Fake::new(answers(status.clone()));
+    let iface = |name: &str, address: &str| Interface { name: name.into(), address: address.into() };
+    let addresses = Arc::new(Mutex::new(vec![iface("wlan0", "10.0.0.9"), iface("usb0", "10.1.1.2")]));
+    let (_wifi, rx) = started_with(&fake, addresses.clone());
+    let connected = |address: &str| WifiEvent::Link(WifiLink::Connected { ssid: "VRP".into(), address: address.into(), bars: None });
+    assert_eq!(next(&rx), connected("10.0.0.9"));
+    assert!(matches!(next(&rx), WifiEvent::Networks(_)));
+    assert_eq!(next(&rx), WifiEvent::Interfaces(vec![iface("usb0", "10.1.1.2")]));
+    // The USB link went down, and a renewal gave WiFi a new address.
+    *status.lock().unwrap() = "ssid=VRP\nwpa_state=COMPLETED\nip_address=10.0.0.10\n";
+    *addresses.lock().unwrap() = vec![iface("wlan0", "10.0.0.10")];
+    assert_eq!(next(&rx), WifiEvent::Interfaces(vec![]));
+    assert_eq!(next(&rx), connected("10.0.0.10"));
+    // The lease ran out.
+    *status.lock().unwrap() = "ssid=VRP\nwpa_state=COMPLETED\n";
+    addresses.lock().unwrap().clear();
+    assert_eq!(next(&rx), WifiEvent::Link(WifiLink::Connecting { ssid: "VRP".into(), step: JoinStep::GettingAddress }));
 }

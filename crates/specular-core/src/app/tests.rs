@@ -533,6 +533,23 @@ mod wireless {
     }
 
     #[test]
+    fn the_wifi_screen_shows_the_address_and_for_developers_the_other_interfaces() {
+        use crate::wireless::wifi::Interface;
+        let mut a = radio_app();
+        open(&mut a, "Wi-Fi", 0);
+        let addresses = |a: &App| a.view().rows.iter().filter(|r| r.id.0.starts_with("address")).map(|r| (r.label.clone(), r.kind.clone())).collect::<Vec<_>>();
+        let row = |label: &str, address: &str| (label.to_string(), RowKind::Note { detail: Some(address.into()) });
+        a.handle(Msg::Wifi(WifiEvent::Interfaces(vec![Interface { name: "usb0".into(), address: "10.1.1.2".into() }])));
+        assert_eq!(addresses(&a), []);
+        a.handle(connected("Home"));
+        assert_eq!(addresses(&a), [row("Address", "10.0.0.2")]);
+        a.handle(Msg::SettingsLoaded(Layer::Global, json!({"ui.developer_details": true}).as_object().unwrap().clone()));
+        assert_eq!(addresses(&a), [row("Address", "10.0.0.2"), row("usb0", "10.1.1.2")]);
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
+        assert_eq!(addresses(&a), [row("usb0", "10.1.1.2")]);
+    }
+
+    #[test]
     fn bluetooth_searches_on_its_screen_and_routes_sound_to_a_headset() {
         let mut a = radio_app();
         open(&mut a, "Bluetooth", 0);

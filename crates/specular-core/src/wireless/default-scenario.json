@@ -6,6 +6,17 @@
     "event": {
      "Link": "Off"
     }
+   },
+   {
+    "after_ms": 0,
+    "event": {
+     "Interfaces": [
+      {
+       "name": "usb0",
+       "address": "10.1.1.2"
+      }
+     ]
+    }
    }
   ],
   "answers": [

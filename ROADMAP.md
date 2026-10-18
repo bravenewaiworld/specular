@@ -23,12 +23,12 @@ Completed:
  - Gameplay paced by the display's vsync (`FBIO_WAITFORVSYNC`), with a timer when the device has none
  - Clock in the status bar, hidden until the time has been set
  - Controls that appear late or disconnect are picked up again
+ - The device's address on the Wi-Fi screen while connected, for file transfer, kept current as it changes; with Developer details, also the other interfaces' (e.g. the USB link)
  - Everything except the display, backlight, LEDs, volume, sleep and WiFi driver goes through standard Linux interfaces (evdev, power supply, LED class, ALSA, wpa_supplicant, BlueZ), shared by any Linux device
 
 TODO:
  - Rumble from games
  - Menus paced by vsync too (today only gameplay is)
- - Show the device's network address, for file transfer
  - Separate volume levels for speaker and headphones
 
 ### Core Integration and Support

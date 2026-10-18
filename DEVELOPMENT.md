@@ -20,7 +20,7 @@
 - **Log.** Messages go to stderr, prefixed by area (`game:`, `sound:`, `art:`, `saves:`, `settings:`, `input:`, `install:`, `core:`, …). On a device they end up in the system log.
 - **Wireless trace.** Every call to and event from the WiFi and Bluetooth services is logged with a timestamp. Passwords are redacted. The trace is always on.
 - **Frame statistics** (a developer setting): fps, the core's median and 95th-percentile time per frame, and how much sound is queued, drawn over the game.
-- **Developer details** (a setting): shows developer-only settings, an icon gallery, and why installing to internal storage isn't possible.
+- **Developer details** (a setting): shows developer-only settings, an icon gallery, the other network interfaces' IPv4 addresses (on the Wi-Fi screen, to find the device over USB), and why installing to internal storage isn't possible.
 - **Keep Wi-Fi on** (a developer setting): stops WiFi Auto from turning WiFi off, so SSH over WiFi stays up.
 - **Watchdog.** A core stuck on one frame for 6 s is reported, and Specular exits so the service manager restarts it.
 

@@ -6,6 +6,7 @@
 
 pub mod bluez;
 pub mod input;
+pub mod interfaces;
 pub mod leds;
 pub mod power_supply;
 pub mod sound;

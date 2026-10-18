@@ -5,7 +5,10 @@
 //! One worker thread owns the connection and the state. Commands and wpa_supplicant's messages
 //! reach it through one channel, so they are handled in the order they happened. The device
 //! supplies what isn't wpa_supplicant's: power, and DHCP (`WifiDevice`); the address is read back
-//! from wpa_supplicant's STATUS.
+//! from wpa_supplicant's STATUS. The interfaces' addresses are also read every few seconds: the
+//! other interfaces' are reported (`WifiEvent::Interfaces`), and when WiFi's own interface no
+//! longer has the connected link's address (a renewal gave a new one, or the lease ran out),
+//! STATUS is read again.
 //!
 //! Joining a network selects it (SELECT_NETWORK, which disables the others while it tries) and
 //! saves it (SAVE_CONFIG) only once it has connected, so a wrong password is never saved; the
@@ -22,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use specular_core::wireless::wifi::{JoinStep, Network, WifiCmd, WifiError, WifiEvent, WifiLink, valid_password};
+use specular_core::wireless::wifi::{Interface, JoinStep, Network, WifiCmd, WifiError, WifiEvent, WifiLink, valid_password};
 use specular_core::wireless::{Events, Secret, Wireless, trace};
 
 /// How long wpa_supplicant's control socket may take to appear after powering on.
@@ -40,6 +43,9 @@ const ADDRESS_POLL: Duration = Duration::from_secs(1);
 const RECONNECT_POLL: Duration = Duration::from_secs(1);
 /// How often the signal strength is read, while connected.
 const SIGNAL_POLL: Duration = Duration::from_secs(10);
+/// How often the interfaces' addresses are read, whether WiFi is on or off (short in tests, so
+/// they needn't wait).
+const INTERFACES_POLL: Duration = Duration::from_millis(if cfg!(test) { 50 } else { 5000 });
 
 /// What a device does around wpa_supplicant.
 pub trait WifiDevice: Send {
@@ -50,6 +56,9 @@ pub trait WifiDevice: Send {
     /// The device has just joined a network: the time to drop any address from a previous
     /// network and ask for a new one at once.
     fn joined(&mut self) {}
+    /// The addresses of the interfaces that are up, WiFi's included: WiFi's is the one named
+    /// like the control socket's file (e.g. wlan0).
+    fn addresses(&self) -> io::Result<Vec<Interface>> { crate::interfaces::addresses() }
 }
 
 /// WiFi through wpa_supplicant. Commands return at once; their work is done on a thread.
@@ -70,6 +79,7 @@ impl Wireless<WifiCmd, WifiEvent> for WpaSupplicant {
         let worker = Worker {
             socket, device, events, tx: tx.clone(), conn: None, powered: false, link: WifiLink::Off,
             saved: vec![], seen: vec![], join: None, address: None, lost_at: None, signal_due: None,
+            interfaces: vec![], interfaces_due: Instant::now(),
         };
         self.tx = Some(tx);
         std::thread::Builder::new().name("wifi".into()).spawn(move || worker.run(rx)).expect("spawning the WiFi thread");
@@ -200,6 +210,10 @@ struct Worker {
     lost_at: Option<Instant>,
     /// When the signal strength is next read; set only while connected.
     signal_due: Option<Instant>,
+    /// The other interfaces' addresses, as last reported.
+    interfaces: Vec<Interface>,
+    /// When the interfaces' addresses are next read; always set.
+    interfaces_due: Instant,
 }
 
 impl Worker {
@@ -256,7 +270,7 @@ impl Worker {
         let join = self.join.as_ref().map(|j| j.since + JOIN_WAIT);
         let address = self.address.as_ref().map(|a| a.next);
         let reconnect = self.lost_at.map(|t| t + RECONNECT_POLL);
-        [join, address, reconnect, self.signal_due].into_iter().flatten().min()
+        [join, address, reconnect, self.signal_due, Some(self.interfaces_due)].into_iter().flatten().min()
     }
 
     fn tick(&mut self) {
@@ -270,6 +284,33 @@ impl Worker {
         }
         if self.address.as_ref().is_some_and(|a| now >= a.next) { self.check_address(); }
         if self.signal_due.is_some_and(|t| now >= t) { self.poll_signal(); }
+        if now >= self.interfaces_due { self.poll_interfaces(); }
+    }
+
+    /// Reads the interfaces' addresses: reports the others' if they changed, and reads STATUS
+    /// again if WiFi's own no longer has the connected link's address. A failed reading is traced
+    /// and changes nothing.
+    fn poll_interfaces(&mut self) {
+        self.interfaces_due = Instant::now() + INTERFACES_POLL;
+        let all = match self.device.addresses() {
+            Ok(all) => all,
+            Err(e) => return trace::line("wifi", "interfaces", &format!("unreadable: {e}")),
+        };
+        let own = self.socket.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let (wifi, others): (Vec<Interface>, Vec<Interface>) = all.into_iter().partition(|i| i.name == own);
+        if others != self.interfaces { self.interfaces = others.clone(); self.report(WifiEvent::Interfaces(others)); }
+        let lost = matches!(&self.link, WifiLink::Connected { address, .. } if !wifi.iter().any(|i| i.address == *address));
+        if lost { self.read_status(); }
+    }
+
+    /// Sets the link from a fresh STATUS, keeping the last signal reading (STATUS has none);
+    /// connected without an address, waits for one.
+    fn read_status(&mut self) {
+        let Ok(status) = self.request("status", "STATUS") else { return };
+        let mut link = status_link(&status);
+        if let WifiLink::Connecting { ssid, step: JoinStep::GettingAddress } = &link { self.wait_for_address(ssid.clone()); }
+        if let (WifiLink::Connected { bars, .. }, WifiLink::Connected { bars: was, .. }) = (&mut link, &self.link) { *bars = *was; }
+        self.set_link(link);
     }
 
     /// Opens the connection; false (and traced) if it can't.

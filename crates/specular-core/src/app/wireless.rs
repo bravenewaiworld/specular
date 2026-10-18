@@ -15,10 +15,10 @@ use crate::device::Output;
 use crate::input::{Button, Press};
 use crate::model::{Icon, Layout, Row, RowKind, ScreenId, ScreenView};
 use crate::nav::ScreenState;
-use crate::settings::{Layer, builtin};
+use crate::settings::{Layer, Visibility, builtin};
 use crate::wireless::Secret;
 use crate::wireless::bluetooth::{BtCmd, BtDevice, BtEvent, BtKind};
-use crate::wireless::wifi::{self, JoinStep, Network, WifiCmd, WifiEvent, WifiLink};
+use crate::wireless::wifi::{self, Interface, JoinStep, Network, WifiCmd, WifiEvent, WifiLink};
 
 /// How long WiFi on Auto stays on after the last need is gone.
 pub const WIFI_GRACE: Duration = Duration::from_secs(60);
@@ -39,10 +39,12 @@ pub struct WifiState {
     pub networks: Vec<Network>,
     /// A saved network that last refused its password: joining it asks for a new one.
     pub wrong_password: Option<String>,
+    /// The device's other interfaces (not WiFi's).
+    pub interfaces: Vec<Interface>,
 }
 
 impl Default for WifiState {
-    fn default() -> Self { Self { link: WifiLink::Off, networks: Vec::new(), wrong_password: None } }
+    fn default() -> Self { Self { link: WifiLink::Off, networks: Vec::new(), wrong_password: None, interfaces: Vec::new() } }
 }
 
 /// What the Bluetooth service last reported, and the command the user is waiting on.
@@ -153,6 +155,7 @@ impl App {
                 w.link = link;
             }
             WifiEvent::Networks(n) => w.networks = n,
+            WifiEvent::Interfaces(i) => w.interfaces = i,
             WifiEvent::Failed(err) if notify => {
                 if let wifi::WifiError::WrongPassword { ssid } = &err { w.wrong_password = Some(ssid.clone()); }
                 out.push(Effect::Notice(err.message()));
@@ -281,8 +284,10 @@ pub(super) fn settings_press(row: &Row, p: Press) -> Option<Outcome> {
 }
 
 
-/// The Wi-Fi screen: the setting, then the networks (the current one first, then by signal,
-/// then saved ones out of range). A network's row id is "net:" and its name.
+/// The Wi-Fi screen: the setting, the device's address while connected, and with Developer
+/// details its other interfaces' addresses even with WiFi off (to find it over a USB link), then
+/// the networks (the current one first, then by signal, then saved ones out of range). A
+/// network's row id is "net:" and its name.
 struct WifiScreen;
 
 impl WifiScreen {
@@ -322,8 +327,14 @@ impl Screen for WifiScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows: Vec<Row> = ctx.settings.row(builtin::WIFI, &Layer::Global).into_iter().collect();
         let mode = wifi_mode(ctx);
-        if let Some(w) = ctx.wifi.as_ref().filter(|_| mode != "off") {
-            if mode == "auto" { rows.push(Row::note("note:auto", "On only while needed")); }
+        let address = |id: String, label: &str, address: &str| Row::new(id, label, RowKind::Note { detail: Some(address.into()) });
+        let wifi = ctx.wifi.as_ref().filter(|_| mode != "off");
+        if mode == "auto" && wifi.is_some() { rows.push(Row::note("note:auto", "On only while needed")); }
+        if let Some(WifiLink::Connected { address: a, .. }) = wifi.map(|w| &w.link) { rows.push(address("address".into(), "Address", a)); }
+        if ctx.visibility() == Visibility::Developer && let Some(w) = &ctx.wifi {
+            rows.extend(w.interfaces.iter().map(|i| address(format!("address:{}:{}", i.name, i.address), &i.name, &i.address)));
+        }
+        if let Some(w) = wifi {
             rows.push(Row::new("section:networks", "Networks", RowKind::Header));
             if w.link == WifiLink::Off {
                 rows.push(Row::note("note:starting", "Starting…"));

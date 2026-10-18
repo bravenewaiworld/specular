@@ -45,6 +45,10 @@ pub enum WifiLink {
     Connected { ssid: String, address: String, #[serde(default)] bars: Option<u8> },
 }
 
+/// One IPv4 address of a network interface (one with several appears once for each).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Interface { pub name: String, pub address: String }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JoinStep { Associating, Authenticating, GettingAddress }
 
@@ -54,6 +58,11 @@ pub enum WifiEvent {
     /// Every network known: those in range, then saved ones out of range. Sent after each scan
     /// and whenever the saved networks change.
     Networks(Vec<Network>),
+    /// The addresses of the device's other interfaces that are up and have a link, such as the
+    /// USB network link (not WiFi's, whose address is in `Connected`, nor loopback). Sent when
+    /// they change, whether WiFi is on or off; they count as none until then, so a device with
+    /// none never sends it.
+    Interfaces(Vec<Interface>),
     Failed(WifiError),
 }
 
