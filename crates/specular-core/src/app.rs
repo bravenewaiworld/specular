@@ -59,6 +59,9 @@ pub enum Msg {
     /// Sound couldn't be played on this output (it didn't open): the device's own plays it
     /// instead, until the Bluetooth device reconnects.
     SoundFailed(Output),
+    /// Headphones are plugged into the device's jack (true) or not: sent by a device that can
+    /// tell, with the state when it starts following the jack, then on each change.
+    Headphones(bool),
     /// The installer's answer to `InstallCmd::Offer`.
     InstallOffer(Result<crate::install::Offer, String>),
     /// The progress of the task started with `InstallCmd::Start`.
@@ -88,9 +91,9 @@ pub enum Effect {
     /// Show this short message for a moment.
     Notice(String),
     /// Show the volume: its level (0 to `builtin::VOLUME_MAX`), whether the sound is muted, and
-    /// whether it is a Bluetooth device's volume. Sent on every volume key press (even at an end)
-    /// and whenever the mute switch moves.
-    ShowVolume { level: i64, muted: bool, bluetooth: bool },
+    /// the output it is the volume of. Sent on every volume key press (even at an end) and
+    /// whenever the mute switch moves.
+    ShowVolume { level: i64, muted: bool, output: Output },
     /// Show this letter of the letter index for a moment: L2 or R2 jumped to it, or stayed on it
     /// (held at the first or last letter, or a list of one letter).
     ShowLetter(char),
@@ -237,6 +240,8 @@ pub struct App {
     idle_since: Option<Duration>,
     /// Whether the mute switch is on. Not saved: the device reports the switch when it opens.
     muted: bool,
+    /// Whether headphones are in the jack, as the device last said (`Msg::Headphones`).
+    headphones: bool,
     /// When the power button went down, while that press can still be a tap (a release before
     /// `POWER_HOLD` sleeps). None once it has been held long enough to open the power menu, so
     /// its release does nothing; also None for a press the app never saw (the one that woke the
@@ -280,6 +285,7 @@ impl App {
             repeater: Repeater::default(),
             idle_since: None,
             muted: false,
+            headphones: false,
             power_down: None,
             grid_columns: 1,
             playing: None,
@@ -458,6 +464,7 @@ impl App {
             Msg::Bluetooth(e) => self.bluetooth_event(e),
             Msg::WifiNeed { need, wanted, time } => { self.now = self.now.max(time); self.wifi_need(need, wanted); vec![] }
             Msg::SoundFailed(output) => self.sound_failed(output),
+            Msg::Headphones(plugged) => { self.headphones = plugged; vec![] } // the output follows (`reconcile_radios`)
             Msg::InstallOffer(offer) => self.install_offer(offer),
             Msg::InstallProgress(p) => self.install_progress(p),
         }
@@ -539,12 +546,12 @@ impl App {
 
     /// The volume setting of the output sound goes to: its key and level (0 if unset).
     fn volume(&self) -> (&'static str, i64) {
-        let key = if self.radios.output == Output::Builtin { builtin::VOLUME } else { builtin::BLUETOOTH_VOLUME };
+        let key = self.radios.output.volume_setting();
         (key, self.ctx.settings.get(key, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0))
     }
 
     fn show_volume(&self, level: i64) -> Effect {
-        Effect::ShowVolume { level, muted: self.muted, bluetooth: self.radios.output != Output::Builtin }
+        Effect::ShowVolume { level, muted: self.muted, output: self.radios.output.clone() }
     }
 
     /// The volume keys, on every screen and in games. The level is shown even when it is already

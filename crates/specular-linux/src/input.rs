@@ -20,8 +20,8 @@ pub fn clock(id: libc::clockid_t) -> Duration {
 }
 
 // linux/input-event-codes.h
-const EV_SYN: u16 = 0; const EV_KEY: u16 = 1; const EV_ABS: u16 = 3; const SYN_REPORT: u16 = 0; const SYN_DROPPED: u16 = 3;
-const EV_SW: u16 = 5; const SW_TABLET_MODE: u16 = 1; // how the Brick's gamepad program (padbridge) reports its FN slider, which Specular uses as the mute switch
+pub(crate) const EV_SYN: u16 = 0; const EV_KEY: u16 = 1; const EV_ABS: u16 = 3; pub(crate) const SYN_REPORT: u16 = 0; pub(crate) const SYN_DROPPED: u16 = 3;
+pub(crate) const EV_SW: u16 = 5; const SW_TABLET_MODE: u16 = 1; // how the Brick's gamepad program (padbridge) reports its FN slider, which Specular uses as the mute switch
 const ABS_Z: u16 = 2; const ABS_RZ: u16 = 5; const ABS_HAT0X: u16 = 16; const ABS_HAT0Y: u16 = 17;
 
 /// The d-pad's hat axes (X, Y) and the button for each end (-1, +1).
@@ -50,6 +50,23 @@ pub struct Input { devices: Vec<InputDevice>, next_retry: Instant }
 const RETRY: Duration = Duration::from_secs(1);
 const EVIOCSCLOCKID: libc::c_ulong = 0x4004_45a0; // _IOW('E', 0xa0, int)
 const EVIOCGSW_4: libc::c_ulong = 0x8004_451b; // _IOC(_IOC_READ, 'E', 0x1b, 4): the switches' states, as 4 bytes of bits
+
+/// The size of a `struct input_event` on 64-bit Linux: a timeval (16 bytes), type, code, value.
+pub(crate) const EVENT_SIZE: usize = 24;
+
+/// A `struct input_event`'s time, type, code and value.
+pub(crate) fn parse_event(buf: &[u8; EVENT_SIZE]) -> (Duration, u16, u16, i32) {
+    let n = |r: std::ops::Range<usize>| u64::from_ne_bytes(buf[r].try_into().unwrap());
+    let time = Duration::new(n(0..8), n(8..16) as u32 * 1000);
+    (time, u16::from_ne_bytes([buf[16], buf[17]]), u16::from_ne_bytes([buf[18], buf[19]]), i32::from_ne_bytes(buf[20..24].try_into().unwrap()))
+}
+
+/// The positions of an input device's first 32 switches (bit n is switch n), or None if they
+/// can't be read.
+pub(crate) fn switches(file: &File) -> Option<u32> {
+    let mut bits = [0u8; 4];
+    (unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGSW_4, bits.as_mut_ptr()) } >= 0).then(|| u32::from_le_bytes(bits))
+}
 
 fn open_by_name(name: &str) -> Option<File> {
     for entry in std::fs::read_dir("/sys/class/input").ok()?.flatten() {
@@ -99,18 +116,14 @@ impl Input {
     /// `retry` brings it back. (`Mute` isn't released: the switch is still where it was, and `retry` re-reads it.)
     pub fn read(&mut self, out: &mut Vec<ButtonEvent>) {
         for d in &mut self.devices {
-            let mut buf = [0u8; 24]; // struct input_event on 64-bit: timeval (16), type, code, value
+            let mut buf = [0u8; EVENT_SIZE];
             while let Some(file) = d.file.as_mut() {
                 match file.read(&mut buf) {
-                    Ok(24) => {}
+                    Ok(EVENT_SIZE) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     _ => { eprintln!("input: {} gone", d.name); d.file = None; d.release_all(out, clock(libc::CLOCK_MONOTONIC)); break; }
                 }
-                let n = |r: std::ops::Range<usize>| u64::from_ne_bytes(buf[r].try_into().unwrap());
-                let time = Duration::new(n(0..8), n(8..16) as u32 * 1000);
-                let kind = u16::from_ne_bytes([buf[16], buf[17]]);
-                let code = u16::from_ne_bytes([buf[18], buf[19]]);
-                let value = i32::from_ne_bytes(buf[20..24].try_into().unwrap());
+                let (time, kind, code, value) = parse_event(&buf);
                 d.event(kind, code, value, time, out);
             }
         }
@@ -137,8 +150,7 @@ impl InputDevice {
     /// and after events were lost). A device without the switch, or where the query fails, counts as off.
     fn sync_switch(&mut self, out: &mut Vec<ButtonEvent>, time: Duration) {
         let Some(file) = self.file.as_ref() else { return };
-        let mut bits = [0u8; 4];
-        let on = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGSW_4, bits.as_mut_ptr()) } >= 0 && bits[0] & (1 << SW_TABLET_MODE) != 0;
+        let on = switches(file).is_some_and(|bits| bits & (1 << SW_TABLET_MODE) != 0);
         self.set(Button::Mute, on, time, out);
     }
 

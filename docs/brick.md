@@ -13,6 +13,7 @@ The TrimUI Brick port (`devices/brick`): how Specular draws on the Brick's displ
 - **Backlight levels 1–10 map to 16–255 on a curve** (2026-10-12), since perceived brightness is roughly logarithmic; level 1 stays readable indoors.
 - **The LEDs are limited to about 40/255** (2026-10-12), as TrimUI's firmware does: they are very bright at full power.
 - **Volume steps are 2 dB apart, the top one at 0 dB** (2026-10-13). Louder only clips.
+- **Headphones are detected through the codec's jack input device, and the kernel switches the speaker** (2026-10-18). Specular only sets the DAC volume to the level of the output playing. Rejected: the card's "Headphone Jack" control (the same state, but following it needs ALSA's control API and event subscription, where evdev is already read); switching the speaker from Specular (the driver already does it).
 - **Long or detached runs on the device go over SSH, not adb** (2026-10-12). The stock adbd kills a session's processes when the session exits.
 
 ## Design
@@ -40,7 +41,8 @@ Buttons come from two evdev devices: padbridge's virtual pad (`TRIMUI Player1`),
 | Battery | power-supply class (`specular-linux`) |
 | Backlight, panel on/off | Allwinner's `/dev/disp` ioctls (`DISP_LCD_SET_BRIGHTNESS`, `DISP_DEVICE_SWITCH`); the kernel has no `/sys/class/backlight` |
 | LEDs | LED class (`specular-linux`), capped as above |
-| Volume | the codec's digital "DAC volume" through `amixer` (0.75 dB per step, 159 = 0 dB); one level for speaker and headphone jack. Bluetooth volume through bluez-alsa |
+| Volume | the codec's digital "DAC volume" through `amixer` (0.75 dB per step, 159 = 0 dB), shared by the speaker and the headphone jack: set to the level of whichever plays. Bluetooth volume through bluez-alsa |
+| Headphone jack | the input device `audiocodec sunxi Audio Jack` (`SW_HEADPHONE_INSERT`, `specular-linux`); the codec driver turns the speaker off while headphones are in |
 | Sound | ALSA `default`; Bluetooth through bluez-alsa |
 | Vsync | `FBIO_WAITFORVSYNC` on `/dev/fb0`; without it, a timer paces games and the swap the menus |
 | Sleep | `/usr/bin/sleepnow`, which also stops WiFi around sleep (its driver can't suspend while connected) |
@@ -77,7 +79,14 @@ Unless noted, measured with the CPU at the 600–816 MHz the `ondemand` governor
 - (2026-10-12, inferred) Press to photons: a press waits about 8 ms on average for the next frame to read it, the frame then takes 32 ms (draw-then-swap) or about 6 ms (paced, 10 ms frame delay) to go on screen, and scanout takes up to 16 ms to reach a given row: about 48 ms or about 22 ms to the middle of the screen. Source: the measurements above.
 - (2026-10-13, device) TrimUI's ALSA set-up has a software volume ("Soft Volume Master"), but the driver refuses writes to it. The DAC volume control goes up to +72 dB. Source: `amixer` on the Brick.
 - (2026-10-14, device) The XR829 carries WiFi and Bluetooth on one chip; loading and unloading the WiFi driver powers only the WiFi part. Source: `devices/brick/src/wifi.rs`.
+- (2026-10-18, upstream) Our kernel's codec machine driver reports the jack through ASoC (`snd_soc_card_jack_new("sunxi Audio Jack")`, `snd_soc_jack_report`). That makes an input device named `audiocodec sunxi Audio Jack` (card short name, then jack name) with `SW_HEADPHONE_INSERT` and `SW_MICROPHONE_INSERT`, and the card controls "Headphone Jack" and "HpSpeaker Jack". The report also switches the DAPM pins: "Headphone" on and "HpSpeaker" off while headphones are in, and powering "HpSpeaker" down drops the speaker amplifier's enable GPIO (PH6). Source: Crystaline OS's `linux/sound/soc/sunxi/sun50iw10-sndcodec.c` (`sunxi_jack_pins`, `sunxi_card_init`), `sun50iw10-codec.c` (`sunxi_codec_hpspeaker_event`), `sound/core/jack.c` (`snd_jack_dev_register`), `sound/soc/soc-jack.c`.
+- (2026-10-18, upstream) The jack state arrives about 110 ms after plugging in (a 10 ms delayed work, then 100 ms before the jack type is read) and 10 ms after unplugging. The switch, the speaker and the input event change in the same report, so the DAC volume follows a moment later: until then the speaker's level plays in the headphones. Source: `sun50iw10-sndcodec.c` (`jack_interrupt`, `sunxi_check_hs_detect_status`).
+- (2026-10-18, inferred) Headphones already in at boot are only known if the codec raises its jack-in interrupt when detection is switched on; otherwise the kernel, and so Specular, take the jack as empty until it is next plugged in. After resume the driver reports "empty" unless that interrupt comes within 10 ms (`sunxi_hs_init_work` with `RESUME_IRQ`). Specular follows whatever the kernel reports, so its level always matches the kernel's routing. Source: `sun50iw10-sndcodec.c` (`sunxi_card_dev_probe`, `sunxi_card_resume`).
+- (2026-10-18, inferred) On TrimUI's stock kernel the jack detection is inverted (device tree `hp_detect_case` 0, which Crystaline OS corrects to 1), so there the headphones' and speaker's levels would be swapped. Not handled. Source: Crystaline OS `docs/audio.md`, `system/board/brick/dt-tweaks.sh`.
 
 ## Open questions
 
 - Do animations get exactly one frame per refresh, at 16.6 ms from start to screen, paced by the vsync (built 2026-10-18, not yet measured)? And does a game keep its 60.2 fps and latency with a toast or the volume gauge animating over it? The frame statistics and `s1_slint --vsync` answer it (see DEVELOPMENT.md); `s5_scanout vsync 0` measured the same pacing without Slint.
+- Does the jack work as the kernel source suggests? On the Brick: the log's `input: headphone jack: audiocodec sunxi Audio Jack` at start-up, `input: headphones plugged in`/`unplugged` and `sound: output Headphones` when plugging, mid-game too; the speaker silent with headphones in; the gauge showing the headphones mark; each output keeping its level.
+- Are headphones already in at boot, or through sleep, reported (see Findings)? Start up and wake with them in, and check the log and which level plays.
+- Is the speaker's level heard in the headphones for a moment after plugging in, and is it loud enough to matter?

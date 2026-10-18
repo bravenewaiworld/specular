@@ -126,7 +126,8 @@ impl DataRoot {
 }
 
 /// Runs Specular on `device` until the event loop ends. `platform` sets up the device's platform;
-/// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`).
+/// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`)
+/// and the headphone jack (`HEADPHONES_KEY`).
 /// The device is also used from other threads, to open sound outputs (which can block).
 /// `credits` are what the binary ships (worked out by its build script; see specular-credits).
 /// Must be called before any other thread starts (see `use_fallback_fonts`).
@@ -145,9 +146,14 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
 
     let (io, io_thread) = io_thread(data.clone());
     let systems = playable_systems();
-    // The radios get threads of their own; the rest of the hardware goes to the hardware thread.
+    // The radios and the headphone jack get threads of their own; the rest of the hardware goes
+    // to the hardware thread.
     let mut hardware = device.hardware();
     let (wifi, bluetooth, installer) = (hardware.wifi.take(), hardware.bluetooth.take(), hardware.installer.take());
+    match hardware.headphones.take() {
+        Some(jack) => { std::thread::spawn(move || jack.watch(Box::new(|plugged| post(Msg::Headphones(plugged))))); }
+        None => eprintln!("input: this device has no headphone detection; headphones get the speaker's volume"),
+    }
     let mut app = App::new(systems.clone(), builtin::settings());
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
@@ -176,7 +182,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         io,
         data,
         device: Arc::from(device),
-        output: RefCell::new(Output::Builtin),
+        output: RefCell::new(Output::Speaker),
         sound_requests: Cell::new(0),
         playing: RefCell::default(),
         game_screen: RefCell::default(),
@@ -216,8 +222,17 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     }).map_err(|e| format!("this window can't show games: {e:?}"))?;
     RUNNER.with(|r| *r.borrow_mut() = Some(runner.clone()));
     if keyboard {
-        window.on_key(|text, pressed| match key_button(&text) {
+        let headphones = Cell::new(false);
+        window.on_key(move |text, pressed| match key_button(&text) {
             Some(button) => { post(Msg::Button(ButtonEvent { button, pressed, time: now() })); true }
+            None if text.to_lowercase() == HEADPHONES_KEY => {
+                if pressed {
+                    headphones.set(!headphones.get());
+                    eprintln!("input: simulated headphones {}", if headphones.get() { "plugged in" } else { "unplugged" });
+                    post(Msg::Headphones(headphones.get()));
+                }
+                true
+            }
             None => false,
         });
     }
@@ -302,8 +317,8 @@ fn post(msg: Msg) { on_ui(move |r| r.handle(msg)); }
 enum HwCmd {
     Brightness(u8),
     Lights(Vec<Rgb>),
-    /// Sets the level of the device's own output, or of Bluetooth outputs when `bluetooth`.
-    Volume { bluetooth: bool, level: u8 },
+    /// Sets the level of the outputs whose volume is `setting` (`Output::volume_setting`).
+    Volume { setting: &'static str, level: u8 },
     Muted(bool),
     /// Sound goes to this output now: its level (or silence, if muted) is applied to it.
     Output(Output),
@@ -312,16 +327,17 @@ enum HwCmd {
     Restart,
 }
 
-/// The volume as the hardware thread keeps it. Muting sets the current output's volume to 0, so
-/// the levels and the mute state are kept apart. Every output other than `Output::Builtin` is a
-/// Bluetooth one, and they all share one level.
-struct Volume { builtin: u8, bluetooth: u8, output: Output, muted: bool }
+/// The volume as the hardware thread keeps it: the level for each volume setting
+/// (`Output::volume_setting`), with mute held separately, since muting sets the hardware to 0
+/// without losing the level.
+struct Volume { levels: HashMap<&'static str, u8>, output: Output, muted: bool }
 
 impl Volume {
     /// Sets the current output's volume to what it should be now.
     fn apply(&self, audio: &dyn specular_core::device::Audio) -> std::io::Result<()> {
-        let level = if self.output == Output::Builtin { self.builtin } else { self.bluetooth };
-        audio.set_volume(&self.output, if self.muted { 0 } else { level })
+        let level = if self.muted { 0 } else { self.levels.get(self.output.volume_setting()).copied().unwrap_or(0) };
+        eprintln!("sound: {:?} volume {level}{}", self.output, if self.muted { " (muted)" } else { "" });
+        audio.set_volume(&self.output, level)
     }
 }
 
@@ -333,7 +349,7 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut next_battery = Instant::now();
-        let mut volume = Volume { builtin: 0, bluetooth: 0, output: Output::Builtin, muted: false };
+        let mut volume = Volume { levels: HashMap::new(), output: Output::Speaker, muted: false };
         loop {
             if Instant::now() >= next_battery {
                 if let Ok(b) = hw.power.battery() { post(Msg::Battery(b)); }
@@ -342,10 +358,10 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
             let result = match rx.recv_timeout(next_battery.saturating_duration_since(Instant::now())) {
                 Ok(HwCmd::Brightness(l)) => hw.display.set_brightness(l),
                 Ok(HwCmd::Lights(c)) => hw.lights.show(&c),
-                Ok(HwCmd::Volume { bluetooth, level }) => {
-                    *(if bluetooth { &mut volume.bluetooth } else { &mut volume.builtin }) = level;
-                    // The other output's level is applied when sound moves to it.
-                    if bluetooth == (volume.output != Output::Builtin) { volume.apply(&*hw.audio) } else { Ok(()) }
+                Ok(HwCmd::Volume { setting, level }) => {
+                    volume.levels.insert(setting, level);
+                    // Another output's level is applied when sound moves to it.
+                    if setting == volume.output.volume_setting() { volume.apply(&*hw.audio) } else { Ok(()) }
                 }
                 Ok(HwCmd::Muted(m)) => { volume.muted = m; volume.apply(&*hw.audio) }
                 Ok(HwCmd::Output(o)) => { volume.output = o; volume.apply(&*hw.audio) }
@@ -601,12 +617,12 @@ impl Runner {
             Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok("") }),
             Effect::Notice(text) => self.toast(&text),
             Effect::Mute(muted) => { let _ = self.hardware.send(HwCmd::Muted(muted)); }
-            Effect::ShowVolume { level, muted, bluetooth } => {
+            Effect::ShowVolume { level, muted, output } => {
                 let Some(w) = self.window.upgrade() else { return };
                 w.set_volume(level as f32 / builtin::VOLUME_MAX as f32);
                 w.set_volume_text(level.to_string().into());
                 w.set_volume_muted(muted);
-                w.set_volume_bluetooth(bluetooth);
+                w.set_volume_mark(match output { Output::Speaker => IconKind::None, Output::Headphones => IconKind::Headphones, Output::Bluetooth(_) => IconKind::Bluetooth });
                 w.set_volume_shown(true);
                 let weak = self.window.clone();
                 self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
@@ -654,19 +670,24 @@ impl Runner {
 
     /// Sends sound to `output` from now on: its volume, the next game, and the game being played.
     fn set_output(&self, output: Output) {
+        eprintln!("sound: output {output:?}");
         let _ = self.hardware.send(HwCmd::Output(output.clone()));
         *self.output.borrow_mut() = output;
         self.route_sound();
     }
 
-    /// Moves the running game's sound to `self.output` if it plays elsewhere. The output is opened
-    /// on a thread of its own (a Bluetooth one can take a second), then handed over by
-    /// `sound_opened`. Each call makes any earlier open still in progress stale.
+    /// Moves the running game's sound to `self.output` if it plays on another stream (see
+    /// `Output::same_stream`). The output is opened on a thread of its own (a Bluetooth one can
+    /// take a second), then handed over by `sound_opened`. Each call makes any earlier open still
+    /// in progress stale.
     fn route_sound(&self) {
         let request = self.sound_requests.get() + 1;
         self.sound_requests.set(request);
         let wanted = self.output.borrow().clone();
-        if self.playing.borrow().as_ref().is_none_or(|p| *p.output.borrow() == wanted) { return; }
+        let playing = self.playing.borrow();
+        let Some(p) = playing.as_ref() else { return };
+        // Reopening isn't needed, and would fail: the game still holds the ALSA device, which doesn't mix.
+        if p.output.borrow().same_stream(&wanted) { *p.output.borrow_mut() = wanted; return; }
         let device = self.device.clone();
         std::thread::spawn(move || {
             let sound = game::open_sound(device.as_ref(), &wanted);
@@ -682,7 +703,7 @@ impl Runner {
         if request != self.sound_requests.get() { return; }
         let playing = self.playing.borrow();
         let Some(p) = playing.as_ref() else { return };
-        if sound.is_none() && output != Output::Builtin { return post(Msg::SoundFailed(output)); }
+        if sound.is_none() && matches!(output, Output::Bluetooth(_)) { return post(Msg::SoundFailed(output)); }
         eprintln!("sound: the game's sound goes to {output:?}{}", if sound.is_none() { ", which didn't open: silence" } else { "" });
         p.session.set_sound(sound);
         *p.output.borrow_mut() = output;
@@ -790,12 +811,11 @@ impl Runner {
     }
 
     /// Carries out the settings the device acts on; ignores the rest.
-    fn apply_setting(&self, key: &str, value: &serde_json::Value) {
+    fn apply_setting(&self, key: &'static str, value: &serde_json::Value) {
         let level = value.as_i64().unwrap_or(0);
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
-            builtin::VOLUME => HwCmd::Volume { bluetooth: false, level: level as u8 },
-            builtin::BLUETOOTH_VOLUME => HwCmd::Volume { bluetooth: true, level: level as u8 },
+            builtin::VOLUME | builtin::HEADPHONE_VOLUME | builtin::BLUETOOTH_VOLUME => HwCmd::Volume { setting: key, level: level as u8 },
             builtin::FRAME_STATS => { self.show_frame_stats(value.as_bool().unwrap_or(false)); return; }
             builtin::SCALING => {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
@@ -1102,6 +1122,9 @@ const KEYS: &[(&str, Button, &str)] = &[
     ("2", Button::R2, "r2"), ("\n", Button::Start, "start"), ("\t", Button::Select, "select"),
     ("\u{1b}", Button::Menu, "menu"), ("-", Button::VolDown, "voldown"), ("=", Button::VolUp, "volup"), ("p", Button::Power, "power"),
 ];
+
+/// The desktop key that plugs simulated headphones into the jack, or unplugs them (`Msg::Headphones`).
+const HEADPHONES_KEY: &str = "h";
 
 fn key_button(text: &str) -> Option<Button> {
     let t = text.to_lowercase();

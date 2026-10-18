@@ -9,11 +9,14 @@ pub const BRIGHTNESS: &str = "display.brightness";
 /// How a game's picture fills the screen: "integer" (the largest whole multiple of its size),
 /// "fit" (as large as fits, keeping its shape) or "stretch" (the whole screen).
 pub const SCALING: &str = "video.scaling";
-/// Sound volume, 0 (silent) to `VOLUME_MAX`; the volume keys step it.
+/// The speaker's volume, 0 (silent) to `VOLUME_MAX`. The volume keys step the volume of whichever
+/// output sound goes to (see `device::Output::volume_setting`).
 pub const VOLUME: &str = "sound.volume";
 pub const VOLUME_MAX: i64 = 20;
-/// The volume of Bluetooth headphones and speakers (all of them share it), 0 to `VOLUME_MAX`;
-/// `VOLUME` is the device's own speaker and jack.
+/// The volume of headphones in the device's jack, 0 to `VOLUME_MAX`. Unused on a device that
+/// can't tell when headphones are in: they get `VOLUME`.
+pub const HEADPHONE_VOLUME: &str = "sound.headphone_volume";
+/// The volume of Bluetooth headphones and speakers (all of them share it), 0 to `VOLUME_MAX`.
 pub const BLUETOOTH_VOLUME: &str = "sound.bluetooth_volume";
 /// WiFi: "on", "off", or "auto" (on only while something needs it: see `app::WifiNeed`). Shown
 /// on the Wi-Fi screen.
@@ -53,9 +56,13 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "How a game's picture fills the screen: \"integer\" makes it the largest whole multiple of its size that fits, for the sharpest pixels; \"fit\" makes it as large as fits, keeping its shape; \"stretch\" fills the whole screen.",
             kind: SettingKind::Choice(&[("integer", "Integer"), ("fit", "Fit"), ("stretch", "Stretch")]), default: json!("integer"),
             visibility: Visibility::User, deepest: Scope::Game },
-        SettingDecl { key: VOLUME, section: "Sound", label: "Volume",
-            help: "The volume of the device's own speaker and headphone jack, from 0 (silent) to 20. The volume keys change it.",
+        SettingDecl { key: VOLUME, section: "Sound", label: "Speaker volume",
+            help: "The volume of the device's own speaker, from 0 (silent) to 20. The volume keys change it while the speaker plays.",
             kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(12),
+            visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: HEADPHONE_VOLUME, section: "Sound", label: "Headphone volume",
+            help: "The volume of headphones in the jack, from 0 (silent) to 20. The volume keys change it while headphones are in.",
+            kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(10),
             visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: BLUETOOTH_VOLUME, section: "Sound", label: "Bluetooth volume",
             help: "The volume of Bluetooth headphones and speakers (all of them share it), from 0 (silent) to 20. The volume keys change it while sound goes to one.",

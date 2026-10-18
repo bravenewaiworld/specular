@@ -14,6 +14,7 @@ How Specular is put together: the toolkit, the crates and threads, the boundary 
 - **Emulation runs in Specular's process** (2026-10-12). The core runs on its own thread and its frames are shown in the UI's scene. This is what lets box art zoom straight into the live game and the in-game menu animate over it. The cost: a crashing core takes the UI down with it. The service manager restarts Specular, and a launch record says which core crashed (2026-10-18): when a game starts, Specular writes `cache/launch.json` (core, game, start time) and removes it on a clean quit; at start-up, if it is still there, Specular logs it, says which core stopped with which game, then removes it. The runtime writes and removes it on the game's thread (2026-10-18): one game runs at a time, so a launch quit while loading can't remove the record of the next, and a crash while loading the core is caught too. The watchdog adds why it ended the game before ending Specular. A power cut during a game leaves it too, and is reported the same way. Rejected: the UI writing it (two launches overlapping could mix up their records); the app doing so (it never touches files: it gets the record in a message and shows a notice).
 - **Game frames always go through the UI's scene** (2026-10-12). On the Brick this costs about 1 ms of CPU per frame more than a direct blit and adds no latency (see [brick.md](brick.md)). Rejected: drawing plain gameplay straight to the screen and handing over to the UI only for menus and transitions (a second drawing path for no gain).
 - **Device-independent** (2026-10-12). A port is a device crate, `devices/<name>`, holding its profile, hardware services and display platform. Device names appear nowhere else. `specular-linux` implements the standard Linux interfaces, so most ports override only their quirks.
+- **Wired headphones are an output with their own volume** (2026-10-18), like Bluetooth: the speaker and headphones each keep their level, and plugging in or out switches at once, also mid-game. The kernel's sound driver switches the speaker itself; a port only says when headphones are plugged in (`HeadphoneJack`, from the evdev switch `SW_HEADPHONE_INSERT` in `specular-linux`). Rejected: one level for both (headphones at the ear want far less than a small speaker at arm's length, so every plug meant re-adjusting); reopening the game's sound when the jack changes (the kernel already routes it, and with no mixing the device is busy while the old stream is open).
 - **No async runtime** (2026-10-12). Plain threads and channels.
 - **Memory: at most 50 MB for Specular itself while a game runs** (2026-10-12). Everything except the core and its game; a ceiling, not a goal. Idle memory matters less, but the design is low-memory throughout, so there is one way of working rather than two.
 - **Startup is not a priority** (2026-10-12). 10–15 s is fine, as long as a good loading screen shows meanwhile.
@@ -87,6 +88,7 @@ pub trait Screen {
 | Scan | library scans, then moving saves of renamed ROMs |
 | Hardware | the device's hardware services; reads the battery every 10 s |
 | One per radio | WiFi and Bluetooth commands, which can block for seconds |
+| Headphone jack | waits for plugging and unplugging |
 | Installer | the device's installer |
 | Art worker, art loader | finding and storing box art; decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
@@ -126,8 +128,20 @@ pub struct Hardware {
     pub wifi: Option<Box<Wifi>>,                  // see wireless.md
     pub bluetooth: Option<Box<Bluetooth>>,
     pub installer: Option<Box<dyn Installer>>,    // see installer.md
+    pub headphones: Option<Box<dyn HeadphoneJack>>,
+}
+
+/// Where sound plays. Each has its own volume setting (all Bluetooth devices share one). The
+/// speaker and the jack are one sound stream, which the kernel's driver routes.
+pub enum Output { Speaker, Headphones, Bluetooth(BtAddress) }
+
+pub trait HeadphoneJack: Send {
+    /// Blocks on a thread of its own: the state at the start, then each change.
+    fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>);
 }
 ```
+
+Sound goes to the first connected Bluetooth device taking sound, else to headphones in the jack, else to the speaker; the volume keys and the gauge act on that output's level.
 
 The display platform is passed to `run` separately, since it is Slint-specific. It installs a Slint platform (how pixels reach the screen) and delivers button events on the UI thread; without one, Slint's default window is used with the keyboard as buttons.
 

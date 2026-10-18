@@ -2,7 +2,7 @@
 // The core decides what rows there are and where they sit; this file only draws and animates them.
 
 import { Theme, Motion } from "theme.slint";
-import { Icon, IconData, IconKind, BluetoothMark } from "icons.slint";
+import { Icon, IconData, IconKind } from "icons.slint";
 export { Theme, IconData, IconKind }
 
 // What a row is (the core's row kinds; a row with a picture is drawn as text in a list).
@@ -384,12 +384,13 @@ export component AppWindow inherits Window {
     in property <string> toast;
     in property <bool> toast-shown;
     // The volume (0–1, and as the number shown), shown over everything while `volume-shown`.
-    // While `volume-muted`, the gauge is dimmed and says MUTE instead of the number; while
-    // `volume-bluetooth`, it is a Bluetooth device's volume, and has the Bluetooth mark on top.
+    // While `volume-muted`, the gauge is dimmed and says MUTE instead of the number. `volume-mark`
+    // says whose volume it is, drawn on top: `none` for the speaker, `headphones` for the jack,
+    // `bluetooth` for a Bluetooth device.
     in property <float> volume;
     in property <string> volume-text;
     in property <bool> volume-muted;
-    in property <bool> volume-bluetooth;
+    in property <IconKind> volume-mark;
     in property <bool> volume-shown;
     // The letter L2 or R2 last jumped to, shown over the list while `letter-shown`.
     in property <string> letter;
@@ -563,13 +564,13 @@ export component AppWindow inherits Window {
         border-radius: Theme.radius; background: Theme.raised;
         opacity: root.volume-shown ? 1 : 0;
         animate opacity { duration: Motion.fade; }
-        // The Bluetooth mark
-        if root.volume-bluetooth : BluetoothMark {
-            x: (parent.width - self.width) / 2; y: 18px * Theme.u; width: 28px * Theme.u; paint: Theme.fg;
+        if root.volume-mark != IconKind.none : Icon {
+            x: (parent.width - self.width) / 2; y: 18px * Theme.u; size: 28px * Theme.u; compact: true;
+            data: { kind: root.volume-mark, lit: true }; paint: Theme.fg;
         }
         Rectangle {
             x: (parent.width - self.width) / 2; width: 8px * Theme.u;
-            y: (root.volume-bluetooth ? 62px : 20px) * Theme.u; height: parent.height - self.y - 52px * Theme.u;
+            y: (root.volume-mark != IconKind.none ? 62px : 20px) * Theme.u; height: parent.height - self.y - 52px * Theme.u;
             border-radius: self.width / 2; background: Theme.faint; clip: true;
             Rectangle {
                 y: parent.height * (1 - root.volume); height: parent.height * root.volume;

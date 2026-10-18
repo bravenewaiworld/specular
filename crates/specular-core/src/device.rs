@@ -86,16 +86,42 @@ pub trait Lights: Send {
 /// Where sound plays.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Output {
-    /// The device's own speaker or headphone jack.
-    Builtin,
+    /// The device's own speaker; also its headphone jack on a device that can't tell when
+    /// headphones are plugged in (`Hardware::headphones` is None).
+    Speaker,
+    /// Headphones in the device's jack.
+    Headphones,
     /// A connected Bluetooth audio device.
     Bluetooth(BtAddress),
+}
+
+impl Output {
+    /// The setting holding this output's volume (all Bluetooth devices share one).
+    pub fn volume_setting(&self) -> &'static str {
+        use crate::settings::builtin;
+        match self { Output::Speaker => builtin::VOLUME, Output::Headphones => builtin::HEADPHONE_VOLUME, Output::Bluetooth(_) => builtin::BLUETOOTH_VOLUME }
+    }
+
+    /// Whether a game's open `SoundOut` can carry on unchanged when sound moves between these
+    /// outputs. True for the speaker and the jack: the device's sound driver switches one stream
+    /// between them.
+    pub fn same_stream(&self, other: &Output) -> bool {
+        self == other || !matches!(self, Output::Bluetooth(_)) && !matches!(other, Output::Bluetooth(_))
+    }
 }
 
 /// Sound output.
 pub trait Audio: Send {
     /// An output's volume, 0–20 (Specular's scale; the device maps it to its own controls).
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()>;
+}
+
+/// Whether headphones are plugged into the device's jack. The kernel's sound driver moves the
+/// sound between the speaker and the jack by itself; this only says which volume applies.
+pub trait HeadphoneJack: Send {
+    /// Follows the jack until it can't any more, blocking (the UI crate gives it a thread of its
+    /// own): calls `plugged` with the state at the start, if it can be read, then on each change.
+    fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>);
 }
 
 /// Where a game's sound goes: a queue of 16-bit stereo frames, played at a fixed rate.
@@ -129,6 +155,8 @@ pub struct Hardware {
     pub bluetooth: Option<Box<wireless::Bluetooth>>,
     /// None on devices without internal storage to install onto.
     pub installer: Option<Box<dyn crate::install::Installer>>,
+    /// None on devices that can't tell when headphones are plugged in.
+    pub headphones: Option<Box<dyn HeadphoneJack>>,
 }
 
 /// A device: what it is, and its hardware.
@@ -137,7 +165,7 @@ pub trait Device {
     /// The hardware services. Called once; they then move to the UI crate's hardware thread.
     fn hardware(&self) -> Hardware;
     /// Opens a sound output for a game (each game opens its own and closes it when it ends, and
-    /// opens another when the output changes while it plays).
+    /// opens another when the output changes while it plays, unless `Output::same_stream`).
     fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>>;
     /// The display's refresh, if the device can wait for it; without, games are paced by a
     /// timer at their own frame rate. Each call opens a separate one: give each waiting thread its
@@ -146,7 +174,8 @@ pub trait Device {
 }
 
 /// Simulated hardware, for the desktop build: it prints what it is asked to do, its battery
-/// drains from 80 % by 1 % a minute, and its radios follow a scenario (`wireless::scenario`): the
+/// drains from 80 % by 1 % a minute, it has no headphone jack (a desktop key simulates one, see
+/// `specular_ui::run`), and its radios follow a scenario (`wireless::scenario`): the
 /// file named by $SPECULAR_SCENARIO, `{"wifi": <script>, "bluetooth": <script>}`, else a built-in
 /// one with a few networks and devices.
 pub mod simulated {
@@ -187,6 +216,7 @@ pub mod simulated {
             wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", radio(&script, "bluetooth")))),
             installer: Some(Box::new(crate::install::Simulated)),
+            headphones: None,
         }
     }
 

@@ -29,7 +29,7 @@ Completed:
 TODO:
  - Rumble from games
  - Menus paced by vsync too (built; to measure on the Brick)
- - Separate volume levels for speaker and headphones
+ - Separate volume levels for speaker and headphones (built; to check on the Brick)
 
 ### Core Integration and Support
 
@@ -88,7 +88,7 @@ Completed:
 Completed:
  - Accent and second accent colours from a palette; they also tint the light bar and the device's LEDs
  - Games as a list or grid
- - Brightness, volume, Bluetooth volume, LED brightness, scaling, sleep time
+ - Brightness, speaker, headphone and Bluetooth volume, LED brightness, scaling, sleep time
  - Developer details: developer-only settings and screens
  - Settings are declared once (key, type, default, who sees them); the settings screens are generated from them
  - Settings stored as JSON on the SD card: only values that differ from the default, unknown keys kept, writes safe against power cuts, a damaged file set aside

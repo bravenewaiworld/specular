@@ -335,18 +335,44 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
     tap(&mut a, Button::A, 20); // playing
     assert_eq!(level(&tap(&mut a, Button::VolDown, 30)), Some(12));
     for t in 0..30 { tap(&mut a, Button::VolDown, 40 + t); }
-    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume { level: 0, muted: false, bluetooth: false }]); // nothing changed to save
+    assert_eq!(tap(&mut a, Button::VolDown, 100), vec![Effect::ShowVolume { level: 0, muted: false, output: Output::Speaker }]); // nothing changed to save
 }
 
 #[test]
 fn the_mute_switch_mutes_without_touching_the_volume() {
     let mut a = app();
     let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t) }));
-    assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true, bluetooth: false }]);
+    assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true, output: Output::Speaker }]);
     assert_eq!(switch(&mut a, true, 10), vec![]); // already on
     // The volume keys still work, and say the sound is muted.
-    assert!(tap(&mut a, Button::VolUp, 20).contains(&Effect::ShowVolume { level: 13, muted: true, bluetooth: false }));
-    assert_eq!(switch(&mut a, false, 30), vec![Effect::Mute(false), Effect::ShowVolume { level: 13, muted: false, bluetooth: false }]);
+    assert!(tap(&mut a, Button::VolUp, 20).contains(&Effect::ShowVolume { level: 13, muted: true, output: Output::Speaker }));
+    assert_eq!(switch(&mut a, false, 30), vec![Effect::Mute(false), Effect::ShowVolume { level: 13, muted: false, output: Output::Speaker }]);
+}
+
+#[test]
+fn headphones_in_the_jack_have_their_own_volume_also_mid_game() {
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10); // playing
+    assert_eq!(a.handle(Msg::Headphones(true)), vec![Effect::SoundTo(Output::Headphones)]);
+    assert_eq!(a.input_target(), InputTarget::Game);
+    let e = tap(&mut a, Button::VolUp, 20);
+    assert!(e.contains(&Effect::Apply { key: builtin::HEADPHONE_VOLUME, value: json!(11) }), "{e:?}");
+    assert!(e.contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Headphones }));
+    assert_eq!(a.handle(Msg::Headphones(true)), vec![]); // no change
+    // Unplugged: back to the speaker, at its own level.
+    assert_eq!(a.handle(Msg::Headphones(false)), vec![Effect::SoundTo(Output::Speaker)]);
+    assert!(tap(&mut a, Button::VolDown, 30).contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Speaker }));
+}
+
+#[test]
+fn headphones_in_at_start_up_take_over_once_the_settings_load() {
+    let mut a = app();
+    assert_eq!(a.handle(Msg::Headphones(true)), vec![]);
+    let e = a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    assert!(e.contains(&Effect::Apply { key: builtin::HEADPHONE_VOLUME, value: json!(10) }));
+    assert_eq!(e.last(), Some(&Effect::SoundTo(Output::Headphones)));
 }
 
 #[test]
@@ -741,11 +767,11 @@ mod wireless {
         // The volume keys now set the headset's volume.
         let e = tap(&mut a, Button::VolUp, 0);
         assert!(e.contains(&Effect::Apply { key: builtin::BLUETOOTH_VOLUME, value: json!(11) }), "{e:?}");
-        assert!(e.contains(&Effect::ShowVolume { level: 11, muted: false, bluetooth: true }));
+        assert!(e.contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Bluetooth(address.clone()) }));
         // A headset whose sound doesn't open is left until it reconnects.
         let e = a.handle(Msg::SoundFailed(Output::Bluetooth(address.clone())));
         assert_eq!(e[0], Effect::Notice("Couldn't play sound on Buds".into()));
-        assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Builtin)]);
+        assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Speaker)]);
         let gone = BtDevice { connected: false, audio: false, ..connected.clone() };
         assert_eq!(radio_effects(&a.handle(Msg::Bluetooth(BtEvent::Devices(vec![gone])))), Vec::<&Effect>::new());
         let e = a.handle(Msg::Bluetooth(BtEvent::Devices(vec![connected])));
@@ -755,7 +781,29 @@ mod wireless {
         assert_eq!(focused(&a), "Bluetooth"); // its link on the settings screen
         tap(&mut a, Button::A, 0);
         let e = tap(&mut a, Button::A, 0);
-        assert_eq!(radio_effects(&e), [&Effect::Bluetooth(BtCmd::Search(false)), &Effect::Bluetooth(BtCmd::Power(false)), &Effect::SoundTo(Output::Builtin)]);
+        assert_eq!(radio_effects(&e), [&Effect::Bluetooth(BtCmd::Search(false)), &Effect::Bluetooth(BtCmd::Power(false)), &Effect::SoundTo(Output::Speaker)]);
+    }
+
+    #[test]
+    fn a_bluetooth_headset_comes_before_headphones_in_the_jack() {
+        let mut a = radio_app();
+        let mut on = serde_json::Map::new();
+        on.insert(builtin::BLUETOOTH.into(), json!(true));
+        a.handle(Msg::SettingsLoaded(Layer::Global, on));
+        assert_eq!(radio_effects(&a.handle(Msg::Headphones(true))), [&Effect::SoundTo(Output::Headphones)]);
+        let address = BtAddress("00:11:22:33:44:55".into());
+        let headset = BtDevice { address: address.clone(), name: "Buds".into(), kind: BtKind::Headphones, paired: true, connected: true, audio: true };
+        let e = a.handle(Msg::Bluetooth(BtEvent::Devices(vec![headset.clone()])));
+        assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Bluetooth(address.clone()))]);
+        // The jack changes nothing while the headset plays.
+        assert_eq!(radio_effects(&a.handle(Msg::Headphones(false))), Vec::<&Effect>::new());
+        assert_eq!(radio_effects(&a.handle(Msg::Headphones(true))), Vec::<&Effect>::new());
+        // A headset that fails, or goes, leaves the sound to the headphones.
+        assert_eq!(radio_effects(&a.handle(Msg::SoundFailed(Output::Bluetooth(address.clone())))), [&Effect::SoundTo(Output::Headphones)]);
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![])));
+        assert_eq!(radio_effects(&a.handle(Msg::Bluetooth(BtEvent::Devices(vec![headset])))), [&Effect::SoundTo(Output::Bluetooth(address))]);
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![])));
+        assert!(tap(&mut a, Button::VolUp, 0).contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Headphones }));
     }
 }
 

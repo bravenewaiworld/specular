@@ -11,7 +11,7 @@ WiFi and Bluetooth: the services that drive the radios, how the app keeps them a
 - **A network is saved only once it has connected** (2026-10-14), so a wrong password is never kept.
 - **Failures are shown only on the radio's own screen** (2026-10-14), where the user asked for something. Elsewhere they are only in the trace.
 - **Every exchange with a radio is traced, always** (2026-10-14). It is a few lines per user action, so it costs the same everywhere and there is no separate mode in which behaviour could differ. Passwords are never written.
-- **Bluetooth headphones and speakers are a sound output** (2026-10-14), through bluez-alsa, with one volume they all share. A game's sound can switch to them mid-game, and falls back to the speaker if they fail.
+- **Bluetooth headphones and speakers are a sound output** (2026-10-14), through bluez-alsa, with one volume they all share. A game's sound can switch to them mid-game, and falls back to the device's own output (headphones in the jack, or the speaker) if they fail.
 - **The Wi-Fi screen shows the device's address while connected; with Developer details, also its other interfaces' addresses** (2026-10-18), so files can be sent to it, and a developer can find it over the USB link even with WiFi off. The other interfaces come from the WiFi service, as an event, so they are traced and can be scripted like the rest. Only IPv4 addresses are shown. Rejected: a network service of its own (a third beside WiFi and Bluetooth, with its own trace and scenario, for one list); IPv6 addresses (long, and a link-local one can't be typed without its interface).
 - **Addresses are kept current by reading the interfaces every 5 s** (2026-10-18), with getifaddrs. The other interfaces are reported when they change; when WiFi's interface no longer has the link's address (a renewal gave a new one, or the lease ran out), wpa_supplicant's status is read again. Rejected: netlink address notifications (more code than a poll, for a screen that can wait 5 s); reading the status with every signal reading (twice the trace lines while connected, all the time, for a change that is rare).
 - **On the keyboard, Select shows or hides masked text, and a hint says which** (2026-10-18). The text is hidden each time the keyboard opens. Rejected: a key among the keys (one more to walk past; Y and X are already Shift and Symbols); remembering it shown (a password on screen by surprise).
@@ -80,7 +80,7 @@ After every message, the app works out what the radios and sound output should b
 
 - **WiFi on Auto** is on while something needs it, then for 60 s more, so needs that come and go don't keep restarting the radio. A need made while WiFi isn't connected lapses after 30 s unless it connects by then, so a place with no known network doesn't keep the radio on; once connected, a need holds until dropped.
 - **Bluetooth search** runs only while the Bluetooth screen is open: it costs power, and slows WiFi, which may share the antenna. It starts after powering on and stops before powering off.
-- **Sound output** is the first connected Bluetooth device taking sound, else the speaker. An output that failed to open isn't tried again until its device disconnects, so a reconnection tries it afresh.
+- **Sound output** is the first connected Bluetooth device taking sound, else headphones in the jack, else the speaker (see [architecture.md](architecture.md)). An output that failed to open isn't tried again until its device disconnects, so a reconnection tries it afresh.
 
 ### The trace
 

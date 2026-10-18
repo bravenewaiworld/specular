@@ -50,12 +50,14 @@ impl Device for Brick {
             wifi: Some(Box::new(Traced::new("wifi", WpaSupplicant::new(crate::wifi::SOCKET, Box::new(crate::wifi::BrickWifi))))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
             installer: Some(Box::new(crate::install::BrickInstaller)),
+            // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
+            headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
         }
     }
 
     fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>> {
         Ok(Box::new(match output {
-            Output::Builtin => Alsa::open("default")?,
+            Output::Speaker | Output::Headphones => Alsa::open("default")?,
             Output::Bluetooth(address) => Alsa::bluetooth(address)?,
         }))
     }
@@ -123,8 +125,9 @@ impl Lights for BrickLights {
 /// The volume: the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), set
 /// with amixer. Specular's levels are 2 dB apart, the top one at 0 dB (louder only clips); 0 is
 /// the control's lowest, -119 dB. (TrimUI's ALSA set-up also has a software volume, "Soft Volume
-/// Master", but the driver refuses writes to it.) One level for the speaker and headphones alike;
-/// Bluetooth headphones and speakers have their own (through bluez-alsa).
+/// Master", but the driver refuses writes to it.) The speaker and the headphone jack share this
+/// control, so it is set to the level of whichever one the kernel plays on (it switches as
+/// headphones are plugged in). Bluetooth headphones and speakers have their own (through bluez-alsa).
 struct Volume;
 
 impl Audio for Volume {

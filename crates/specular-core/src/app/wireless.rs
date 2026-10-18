@@ -1,5 +1,6 @@
 //! WiFi and Bluetooth in the app: what the radios report (`WifiState`, `BtState`), their screens,
-//! and keeping the radios as the settings and screens want them (`App::reconcile_radios`).
+//! and `App::reconcile_radios`: the radios as the settings and screens want them, and the sound
+//! output as the radios and the headphone jack allow (also on a device without radios).
 //!
 //! WiFi on Auto is on while something needs it (`WifiNeed`, or the Wi-Fi screen being open),
 //! then for `WIFI_GRACE` more, so needs that come and go don't keep restarting the radio. A need
@@ -97,7 +98,7 @@ pub(super) struct Radios {
 
 impl Default for Radios {
     fn default() -> Self {
-        Self { settings_loaded: false, wifi_power: None, scanned: false, bt_power: None, bt_search: false, output: Output::Builtin, failed: None,
+        Self { settings_loaded: false, wifi_power: None, scanned: false, bt_power: None, bt_search: false, output: Output::Speaker, failed: None,
                needs: HashMap::new(), needed: false, grace_until: Duration::ZERO }
     }
 }
@@ -220,6 +221,7 @@ impl App {
             if want && screen && !self.radios.scanned { e.push(Effect::Wifi(WifiCmd::Scan)); }
             self.radios.scanned = want && screen;
         }
+        let mut headsets = vec![];
         if let Some(b) = &self.ctx.bluetooth {
             let power = bluetooth_on(&self.ctx);
             let search = power && self.nav.contains(&screens::BLUETOOTH);
@@ -229,13 +231,15 @@ impl App {
             if self.radios.bt_search != search { cmds.insert(if search { cmds.len() } else { 0 }, BtCmd::Search(search)); }
             (self.radios.bt_power, self.radios.bt_search) = (Some(power), search);
             e.extend(cmds.into_iter().map(Effect::Bluetooth));
-            let headsets: Vec<Output> = b.devices.iter().filter(|d| d.audio && power).map(|d| Output::Bluetooth(d.address.clone())).collect();
-            if self.radios.failed.as_ref().is_some_and(|f| !headsets.contains(f)) { self.radios.failed = None; }
-            let output = headsets.into_iter().find(|o| Some(o) != self.radios.failed.as_ref()).unwrap_or(Output::Builtin);
-            if self.radios.output != output {
-                self.radios.output = output.clone();
-                e.push(Effect::SoundTo(output));
-            }
+            headsets = b.devices.iter().filter(|d| d.audio && power).map(|d| Output::Bluetooth(d.address.clone())).collect();
+        }
+        // A Bluetooth device taking sound comes first, then headphones in the jack.
+        if self.radios.failed.as_ref().is_some_and(|f| !headsets.contains(f)) { self.radios.failed = None; }
+        let wired = if self.headphones { Output::Headphones } else { Output::Speaker };
+        let output = headsets.into_iter().find(|o| Some(o) != self.radios.failed.as_ref()).unwrap_or(wired);
+        if self.radios.output != output {
+            self.radios.output = output.clone();
+            e.push(Effect::SoundTo(output));
         }
         e
     }

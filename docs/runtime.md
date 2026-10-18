@@ -75,7 +75,7 @@ Each display refresh, the game's thread waits for the vsync, then sleeps for the
 
 ### Sound
 
-Every game's sound is resampled, by linear interpolation, to the output's rate (48 kHz through ALSA). The ratio absorbs two drifts: the speed-up from running at the display's rate, and the clocks of the core and the sound card disagreeing. For the second, the ratio follows how full the output's queue is, aiming at half full (what RetroArch calls dynamic rate control), changing by at most 0.5 % so the pitch change can't be heard. ALSA queues 64 ms; Bluetooth 100 ms, since bluez-alsa takes sound in chunks of 10 ms or more behind its own rate converter. The output can change mid-game, and falls back to the speaker if Bluetooth headphones fail (see [wireless.md](wireless.md)).
+Every game's sound is resampled, by linear interpolation, to the output's rate (48 kHz through ALSA). The ratio absorbs two drifts: the speed-up from running at the display's rate, and the clocks of the core and the sound card disagreeing. For the second, the ratio follows how full the output's queue is, aiming at half full (what RetroArch calls dynamic rate control), changing by at most 0.5 % so the pitch change can't be heard. ALSA queues 64 ms; Bluetooth 100 ms, since bluez-alsa takes sound in chunks of 10 ms or more behind its own rate converter. The output can change mid-game, and falls back to the device's own if Bluetooth headphones fail (see [wireless.md](wireless.md)); moving between the speaker and the headphone jack keeps the stream, which the kernel routes.
 
 ### Saves and states
 
