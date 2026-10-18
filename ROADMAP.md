@@ -27,12 +27,9 @@ Completed:
 
 TODO:
  - Rumble from games
- - Screen off without sleeping
  - Menus paced by vsync too (today only gameplay is)
  - Show the device's network address, for file transfer
- - USB audio output (headset dongles, USB-C DACs)
  - Separate volume levels for speaker and headphones
- - Confirm the press-to-photon latency estimate with a camera of at least 240 fps (an LED and the screen in one shot), once one is available
 
 ### Core Integration and Support
 
@@ -51,7 +48,7 @@ Completed:
 
 TODO:
  - User added/pluggable libretro cores (loaded from `{sd card}/cores/{name}`)
- - NES, SNES, Mega Drive and PS1 cores, from QuickNES or Nestopia, bsnes, BlastEm and SwanStation (each needs a licence, speed and save-memory check)
+ - NES and PS1 cores, from QuickNES or Nestopia, and SwanStation (each needs a licence, speed and save-memory check)
  - Protect battery saves from cores whose save states also restore the save memory, by storing a hash of the `.srm` with each state and renaming a newer `.srm` to `<name>.newer.srm` before it is overwritten
  - 3D cores, with a shared GL context
  - Check that zipped ROMs launch (they are listed, but mGBA is built without zip support)
@@ -127,6 +124,17 @@ TODO:
  - Pluggable LED and rumble effects (e.g. the light bar reacting to low battery or a save in game, rumble following sound peaks)
 
 ## V1
+
+### Hardware/Kernel Integration
+
+TODO:
+ - USB audio output (headset dongles, USB-C DACs)
+ - Confirm the press-to-photon latency estimate with a camera of at least 240 fps (an LED and the screen in one shot), once one is available
+
+### Core Integration and Support
+
+TODO:
+ - SNES and Mega Drive cores (each needs a licence, speed and save-memory check). bsnes is likely too slow for a Cortex-A53, and BlastEm's 68000 emulation is an x86 recompiler; also consider Beetle Supafaust (SNES) and ClownMDEmu (Mega Drive)
 
 ### Library and Game Management
 
