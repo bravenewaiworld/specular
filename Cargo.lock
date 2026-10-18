@@ -3984,8 +3984,8 @@ version = "0.1.0"
 dependencies = [
  "fontique",
  "glow",
+ "image",
  "libc",
- "png",
  "serde_json",
  "slint",
  "slint-build",

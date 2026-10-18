@@ -19,6 +19,7 @@
 
 - **Log.** Messages go to stderr, prefixed by area (`game:`, `sound:`, `art:`, `saves:`, `settings:`, `input:`, `install:`, `core:`, `fonts:`, …). On a device they end up in the system log. At start-up, `fonts:` says which of the SD card's fonts are used, and why any aren't.
   - The running core's own messages come as `core: <core> <level>: <message>` (e.g. `core: mGBA warn: …`), without its debug ones and at most 30 a second; `core: <core>: N more messages dropped` says how many were left out.
+  - `art:` has a line for each game identified by fuzzy name, and for each it couldn't identify, with the reason (e.g. several similar names, or only sequels'), plus disc serials that can't be read or aren't in the table. Each time the art worker runs out of work it adds how many games it identified by each method. Identifications are cached, so delete `cache/identify/` to see them again.
 - **Wireless trace.** Every call to and event from the WiFi and Bluetooth services is logged with a timestamp. Passwords are redacted. The trace is always on.
 - **Frame statistics** (a developer setting): fps, the core's median and 95th-percentile time per frame, and how much sound is queued, drawn over the game.
 - **Developer details** (a setting): shows developer-only settings, an icon gallery, the other network interfaces' IPv4 addresses (on the Wi-Fi screen, to find the device over USB), and why installing to internal storage isn't possible.

@@ -8,29 +8,21 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime};
 
 use slint::{Rgba8Pixel, SharedPixelBuffer};
-use specular_core::art::{self, ArtError, ArtIndex, ArtSource, Entry, GameDb, Identity, IMAGE_SIZE};
+use specular_core::art::{self, ArtError, ArtIndex, ArtSource, Entry, GameDb, Identity, Method, IMAGE_SIZE};
 use specular_core::library::{Game, SystemDecl};
 
 /// A decoded picture, 8-bit RGBA.
 pub struct Picture { pub width: u32, pub height: u32, pub rgba: Vec<u8> }
 
-/// Decodes a PNG file's bytes.
-pub fn decode(bytes: &[u8]) -> Result<Picture, png::DecodingError> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-    // Palettes and small bit depths become 8-bit channels.
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
-    let mut reader = decoder.read_info()?;
-    let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
-    let info = reader.next_frame(&mut buf)?;
-    buf.truncate(info.buffer_size());
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => buf.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-        png::ColorType::GrayscaleAlpha => buf.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
-        // Grayscale (an indexed image is already expanded to RGB or RGBA).
-        _ => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
-    };
-    Ok(Picture { width: info.width, height: info.height, rgba })
+/// Decodes a PNG or JPEG file's bytes (told apart by their contents). A picture that would take
+/// more than 64 MB to decode (a large photo) is refused rather than risk the device's memory.
+pub fn decode(bytes: &[u8]) -> image::ImageResult<Picture> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(64 << 20);
+    reader.limits(limits);
+    let rgba = reader.decode()?.into_rgba8();
+    Ok(Picture { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
 }
 
 /// Shrinks `p` to fit in `max` × `max`, keeping its shape, by averaging the pixels each new pixel
@@ -56,12 +48,10 @@ pub fn shrink(p: Picture, max: u32) -> Picture {
     Picture { width: w, height: h, rgba: out }
 }
 
-fn encode(p: &Picture) -> Result<Vec<u8>, png::EncodingError> {
+fn encode(p: &Picture) -> image::ImageResult<Vec<u8>> {
+    use image::ImageEncoder;
     let mut out = Vec::new();
-    let mut e = png::Encoder::new(&mut out, p.width, p.height);
-    e.set_color(png::ColorType::Rgba);
-    e.set_depth(png::BitDepth::Eight);
-    e.write_header()?.write_image_data(&p.rgba)?;
+    image::codecs::png::PngEncoder::new(&mut out).write_image(&p.rgba, p.width, p.height, image::ExtendedColorType::Rgba8)?;
     Ok(out)
 }
 
@@ -127,7 +117,8 @@ pub fn worker(roms: PathBuf, cache: PathBuf, systems: Vec<SystemDecl>, sources: 
               stored: impl Fn(PathBuf) + Send + 'static, need_network: impl Fn(bool) + Send + 'static) -> mpsc::Sender<ArtCmd> {
     let (tx, rx) = mpsc::channel();
     let queue = Queue { online, ..Queue::default() };
-    std::thread::spawn(move || Worker { roms, cache, systems, sources, tables: HashMap::new() }.run(rx, queue, stored, need_network));
+    let worker = Worker { roms, cache, systems, sources, tables: HashMap::new(), identified: Default::default() };
+    std::thread::spawn(move || worker.run(rx, queue, stored, need_network));
     tx
 }
 
@@ -139,6 +130,9 @@ struct Worker {
     /// Each system's game table and index, loaded when first needed and dropped when the worker
     /// has nothing left to do, to free their memory.
     tables: HashMap<&'static str, (GameDb, ArtIndex)>,
+    /// How many games were identified by each of `Method::ALL`, then how many weren't, since the
+    /// worker last ran out of work (for one line in the log).
+    identified: [usize; Method::ALL.len() + 1],
 }
 
 /// What became of one game.
@@ -193,6 +187,7 @@ impl Worker {
             let Some(game) = queue.next().filter(|_| !waiting) else {
                 // Nothing to do until told something, or until it's time to try again (never
                 // while paused). The tables are kept while a retry is due.
+                self.report_identified();
                 self.save();
                 if retry_at.is_none() { self.tables.clear(); }
                 let cmd = match retry_at.filter(|_| !queue.paused) {
@@ -218,6 +213,17 @@ impl Worker {
         }
     }
 
+    /// Logs how the games identified since the last report were found, e.g. "identified 12
+    /// games: 9 by crc, 1 by fuzzy name, 2 unknown".
+    fn report_identified(&mut self) {
+        let total: usize = self.identified.iter().sum();
+        if total == 0 { return; }
+        let names = Method::ALL.iter().map(|m| format!("by {}", m.name())).chain(["unknown".to_string()]);
+        let counts: Vec<String> = self.identified.iter().zip(names).filter(|(n, _)| **n > 0).map(|(n, how)| format!("{n} {how}")).collect();
+        eprintln!("art: identified {total} games: {}", counts.join(", "));
+        self.identified = Default::default();
+    }
+
     fn save(&mut self) {
         for (_, index) in self.tables.values_mut() {
             if let Err(e) = index.save() { eprintln!("art: saving the index: {e}"); }
@@ -228,12 +234,12 @@ impl Worker {
     /// index entry is missing or out of date. Without the network (not `online`), it stops short
     /// of asking the sources.
     fn process(&mut self, game: &Game, online: bool) -> Outcome {
-        if art::user_image(&self.roms, &game.path).exists() || art::cached_image(&self.cache, &game.path).exists() { return Outcome::Nothing; }
+        if art::user_image(&self.roms, &game.path).is_some() || art::cached_image(&self.cache, &game.path).exists() { return Outcome::Nothing; }
         let Some(system) = self.systems.iter().find(|s| s.id == game.system).cloned() else { return Outcome::Nothing };
         let rom = self.roms.join(&game.path);
         let Ok(meta) = std::fs::metadata(&rom) else { return Outcome::Nothing };
         let modified = meta.modified().map_or(0, unix_secs);
-        let cache = &self.cache;
+        let (cache, identified) = (&self.cache, &mut self.identified);
         let (db, index) = self.tables.entry(system.id).or_insert_with(|| {
             let db = GameDb::parse(system.game_db);
             let index = ArtIndex::load(art::index_path(cache, system.id), &db.version);
@@ -241,6 +247,7 @@ impl Worker {
         });
         let mut entry = index.get(&game.path, meta.len(), modified).unwrap_or_else(|| {
             let identity = art::identify(&rom, &system, db).unwrap_or_else(|e| { eprintln!("art: {}: {e}", rom.display()); None });
+            identified[identity.as_ref().and_then(|id| Method::ALL.iter().position(|&m| m == id.by)).unwrap_or(Method::ALL.len())] += 1;
             let e = Entry { size: meta.len(), modified, identity, missing_since: None };
             index.set(&game.path, &e);
             e
@@ -299,7 +306,7 @@ pub fn loader(roms: PathBuf, cache: PathBuf, loaded: impl Fn(PathBuf, Option<Sha
             if wanted.is_empty() { continue; }
             let rom = wanted.remove(0);
             let cached = art::cached_image(&cache, &rom);
-            let picture = [art::user_image(&roms, &rom), cached.clone()].into_iter().find_map(|path| {
+            let picture = art::user_image(&roms, &rom).into_iter().chain([cached.clone()]).find_map(|path| {
                 let bytes = std::fs::read(&path).ok()?;
                 match decode(&bytes) {
                     Ok(p) => Some(shrink(p, IMAGE_SIZE)),
@@ -331,5 +338,15 @@ mod tests {
         assert_eq!(small.rgba, [px(0), px(255)].concat());
         let back = decode(&encode(&small).unwrap()).unwrap();
         assert_eq!((back.width, back.height, back.rgba), (2, 1, small.rgba));
+    }
+
+    #[test]
+    fn decodes_jpeg() {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode(&[200; 8 * 4 * 3], 8, 4, image::ExtendedColorType::Rgb8).unwrap();
+        let p = decode(&jpeg).unwrap();
+        assert_eq!((p.width, p.height, p.rgba.len()), (8, 4, 8 * 4 * 4));
+        assert!(p.rgba.chunks(4).all(|px| px[0].abs_diff(200) < 4 && px[3] == 255));
+        assert!(decode(b"neither").is_err());
     }
 }

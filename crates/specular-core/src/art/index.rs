@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use super::{Identity, Method};
+use super::{IDENTIFY_VERSION, Identity, Method};
 use crate::settings::store;
 
 /// What is known about one ROM file, valid while its size and modification time are unchanged.
@@ -32,14 +32,16 @@ pub struct ArtIndex {
 
 impl ArtIndex {
     /// Loads the index at `path`. It starts empty if the file is missing or unreadable, or was
-    /// made with a game table other than `version` (`GameDb::version`).
-    pub fn load(path: PathBuf, version: &str) -> Self {
+    /// made with a game table other than `table` (`GameDb::version`) or another
+    /// `IDENTIFY_VERSION`.
+    pub fn load(path: PathBuf, table: &str) -> Self {
+        let version = format!("identify {IDENTIFY_VERSION}, {table}");
         let file = store::load_layer(&path).unwrap_or_default();
         let games = match (file.get("version").and_then(Value::as_str), file.get("games")) {
             (Some(v), Some(Value::Object(g))) if v == version => g.clone(),
             _ => Map::new(),
         };
-        Self { path, version: version.to_string(), games, dirty: false }
+        Self { path, version, games, dirty: false }
     }
 
     /// The entry for `rom`, if it was made for a file of this size and modification time.

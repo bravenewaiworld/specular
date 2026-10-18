@@ -9,8 +9,9 @@ publish = false
 # Slint's text layout (fontique) uses fontconfig for system fonts; load it at runtime, if present,
 # instead of linking it, since Specular ships its own fonts. Must match the fontique Slint uses.
 fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
+# Box art: PNG and JPEG in, PNG out. Slint itself uses image with these two formats.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 libc = "0.2"
-png = "0.18.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 specular-core = { path = "../specular-core" }

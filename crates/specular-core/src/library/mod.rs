@@ -34,6 +34,9 @@ pub struct SystemDecl {
     /// Where its ROM header holds a game code that the table lists as a serial: (offset, length).
     /// Identifies ROMs no checksum matches, such as hacks, which keep their base game's code.
     pub header_code: Option<(u64, usize)>,
+    /// Reads a disc image's serial, as the table lists it (see `art::ps1_serial`). Its files are
+    /// never hashed: an image is too large, and a .cue or .m3u isn't the disc itself.
+    pub disc_serial: Option<fn(&Path) -> std::io::Result<Option<String>>>,
     /// The libretro core that plays its games; None while there is none (its games can't be
     /// played yet).
     pub core: Option<&'static CoreDecl>,
@@ -69,19 +72,20 @@ const MGBA: &CoreDecl = &CoreDecl { name: "mGBA", library: "mgba_libretro", opti
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
         SystemDecl { id: "gb", name: "Game Boy", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
-            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some(MGBA), header_code: None, dump_header: 0 },
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some(MGBA), header_code: None, disc_serial: None, dump_header: 0 },
         SystemDecl { id: "gbc", name: "Game Boy Color", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
-            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some(MGBA), header_code: None, dump_header: 0 },
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some(MGBA), header_code: None, disc_serial: None, dump_header: 0 },
         SystemDecl { id: "gba", name: "Game Boy Advance", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
-            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some(MGBA), header_code: Some((0xac, 4)), dump_header: 0 },
+            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some(MGBA), header_code: Some((0xac, 4)), disc_serial: None, dump_header: 0 },
         SystemDecl { id: "nes", name: "NES", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
-            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: None, header_code: None, dump_header: 0 },
+            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 0 },
         SystemDecl { id: "snes", name: "Super Nintendo", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
-            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, header_code: None, dump_header: 512 },
+            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 512 },
         SystemDecl { id: "md", name: "Mega Drive", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
-            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, header_code: None, dump_header: 0 },
+            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 0 },
         SystemDecl { id: "ps1", name: "PlayStation", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
-            screen: (320, 240), game_db: "", core: None, header_code: None, dump_header: 0 },
+            screen: (320, 240), game_db: include_str!("../../../../data/db/ps1.tsv"), core: None, header_code: None,
+            disc_serial: Some(crate::art::ps1_serial), dump_header: 0 },
     ]
 }
 
@@ -187,17 +191,23 @@ fn parts_of_other_games(roms: &Path, files: &[PathBuf]) -> HashSet<PathBuf> {
         if !matches!(ext.as_deref(), Some("cue" | "m3u")) { continue; }
         let Ok(text) = std::fs::read_to_string(roms.join(f)) else { continue };
         let dir = f.parent().unwrap_or(Path::new(""));
-        for line in text.lines().map(str::trim) {
-            let name = if ext.as_deref() == Some("cue") {
-                // FILE "Track 01.bin" BINARY
-                line.strip_prefix("FILE ").and_then(|r| r.split('"').nth(1))
-            } else {
-                Some(line).filter(|l| !l.is_empty() && !l.starts_with('#'))
-            };
-            if let Some(n) = name { parts.insert(lower(&dir.join(n.trim_start_matches("./")))); }
-        }
+        parts.extend(listed_files(ext.as_deref() == Some("cue"), &text).map(|n| lower(&dir.join(n))));
     }
     parts
+}
+
+/// The files a .cue sheet (if `cue`) or else an .m3u playlist lists, in order, relative to its
+/// folder. A byte order mark (which Windows tools often write) is skipped.
+pub(crate) fn listed_files(cue: bool, text: &str) -> impl Iterator<Item = &str> {
+    text.trim_start_matches('\u{feff}').lines().map(str::trim).filter_map(move |line| {
+        let name = if cue {
+            // FILE "Track 01.bin" BINARY
+            line.strip_prefix("FILE ").and_then(|r| r.split('"').nth(1))
+        } else {
+            Some(line).filter(|l| !l.is_empty() && !l.starts_with('#'))
+        };
+        name.map(|n| n.trim_start_matches("./"))
+    })
 }
 
 #[cfg(test)]

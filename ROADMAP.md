@@ -62,13 +62,16 @@ Completed:
  - Games shown as a list or a box art grid
  - Games identified by checksum (also inside zips), GBA header code (ROM hacks get their base game's art) and file name, against compiled-in libretro-database tables
  - Box art: the user's own PNG beside the ROM, then the cache, then downloaded from libretro-thumbnails over WiFi. Games on screen first, then the rest in the background, paused while a game runs
+ - Fuzzy name matching, only when unambiguous: one title holding every word of the file's name, with the same numbers ("II" is "2"), so sequels never collapse; the ROM's own region preferred. The log names each fuzzy match and each game not identified (with why), and counts the rest by method
+ - The user's own art may be JPEG as well as PNG
+ - PS1 discs identified by serial: from `SYSTEM.CNF` in a `.bin`, `.iso`, `.cue` or `.m3u`, or a `.pbp`'s `DISC_ID`, against a compiled-in Redump table
  - Saves follow a renamed or moved ROM
  - "No SD card" and "no games" shown when they apply
  - Search: from Home, or X in any game list, across every system, best matches first; case, accents and punctuation ignored
  - A letter index: L2/R2 jump between first letters in game lists and grids, with the letter shown large for a moment
 
 TODO:
- - Fuzzy name matching for box art (only when unambiguous: one candidate after dropping region and revision tags, every number and roman numeral agreeing, the ROM's own region preferred), JPEG user images, PS1 disc serials
+ - PS1 `.chd` discs identified by serial (today by name only)
 
 ### Installer
 

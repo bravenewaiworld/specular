@@ -11,11 +11,17 @@ How Specular finds the games on the card, works out their systems, identifies ea
 - **Box art comes from libretro-thumbnails, downloaded on the device over WiFi** (2026-10-12). Box art only to start with; no PC companion yet. The art is the publishers' copyright, so it is never bundled or mirrored; RetroArch's on-demand download is the precedent we follow. Rejected: LaunchBox (no licence for third-party use), IGDB (its secret can't ship in open source), MobyGames (paid), TheGamesDB (name search only).
 - **Plain HTTP** (2026-10-13). The server sends the same files either way. Rejected: TLS (about 1.5 MB more, root certificates to keep current, and a dependence on the clock being set).
 - **Identification is offline, from tables compiled in** (2026-10-13). `tools/trim-db.py` trims libretro-database, pinned to one commit, to checksum, serial and name per system, in `data/db/`. The data is CC-BY-SA: it is credited in `data/db/NOTICE`, and the trimmed tables keep that licence.
-- **The user's own art goes next to the ROM, with the same name** (2026-10-13): `roms/gba/Golden Sun.png`. PNG only for now. It is never replaced by downloaded art.
+- **The user's own art goes next to the ROM, with the same name** (2026-10-13): `roms/gba/Golden Sun.png`. PNG or JPEG (2026-10-18): `.png`, else `.jpg`, else `.jpeg`, so a PNG wins if several are there (it is lossless, and most likely made for the purpose). It is never replaced by downloaded art. Decoding uses the `image` crate with only its PNG and JPEG features, which Slint already builds in. Rejected: the JPEG decoder (`zune-jpeg`) on its own beside the `png` crate (the same code, plus our own glue for each format).
 - **The whole library is fetched** (2026-10-13): games on screen first, then the rest in the background, one at a time, paused while a game runs.
 - **Header codes identify ROM hacks as their base game** (2026-10-13), which gives them the base game's art. A GBA header's 4-letter game code is kept by hacks. Hacks and translations without one are matched by name with tags stripped (2026-10-18).
 - **Other unusual games** (2026-10-18): an `.m3u` set is identified by its first disc; betas and prototypes by name with tags stripped. Arcade short names need a lookup table, added with the first arcade core.
 - **A fuzzy name match is used only when it is unambiguous** (2026-10-18): one candidate left after dropping region and revision tags, and every number and roman numeral agrees, so sequels never collapse. Among region variants, the ROM's own region tag is preferred, else any region will do (box art differs little).
+  - A candidate is a title: a normalised name, which drops every tag, so a game's discs, betas and language variants are one candidate, chosen between as for exact matches (2026-10-18). Rejected: dropping only region and revision tags (a game with a beta, or several discs, would always be ambiguous).
+  - A title is a candidate when it holds every word of the file's name, in order (2026-10-18): "Zelda Minish Cap" finds "Legend of Zelda, The - The Minish Cap". Rejected: the reverse, a title inside the file's name (a short title such as "Tank" would claim "Super Tank Battle"), and edit distance (hard to predict, and similar names are often different games).
+  - Roman numerals from I to XXXIX count as numbers, in normalised names too, so "Mega Man II" and "Mega Man 2" are the same name (2026-10-18). Rejected: larger numerals (words such as "Mix" and "DC" would become numbers).
+  - The ROM's own region is also preferred among exact normalised matches, and is read from No-Intro tags ("(Europe)") and GoodTools' letters ("(E)", "(UE)") (2026-10-18).
+- **How each game was found is recorded** (2026-10-18): the identify cache keeps the method; the log names each fuzzy match and each game not found (with why), and counts the rest. Rejected: a log line per game (thousands on a first scan). The cache carries the version of the matcher as well as the table's, so a Specular that matches differently identifies every game again (art already stored is kept).
+- **PS1 discs are identified by the serial their boot file is named after** (2026-10-18), read from `SYSTEM.CNF` (or a PBP's `DISC_ID`), which only takes a few sectors. Redump lists some serials with suffixes (`SLUS-01272GH`, `SLES-02375-P`); `tools/trim-db.py` cuts them to the boot file's form. A `.chd` isn't read; it is matched by name. Rejected for now: the `chd` crate (pure Rust, but it brings its own LZMA, zlib and FLAC decoders to read two sectors).
 - **ScreenScraper is not used in V0** (2026-10-18). It may become an optional source later; it needs a developer ID for the project, each user's own account, and quota handling (see Findings).
 - **Search covers every system, and shows its results on a screen of their own** (2026-10-18). Search on Home, or X in any game list, opens the on-screen keyboard; confirming the text (Start) shows the matching games, best first, each with its system, as a list or grid like a system's games. Rejected: searching only the system being shown (narrower, and the game you search for is often one whose system you don't remember), filtering the list as you type (needs a new layout with the keyboard and a list on one screen).
 - **Search matches titles the way people type them** (2026-10-18). Case, accents, spaces and punctuation are ignored. Titles that start with the query come first, then those with a word that starts with it (or, for several words, a word starting with each, in any order), then those that contain it anywhere, even across words; by title within each.
@@ -40,6 +46,7 @@ pub struct SystemDecl {
     pub screen: (u32, u32),                   // native size, to place the game before its first frame
     pub game_db: &'static str,                // the trimmed table, compiled in
     pub header_code: Option<(u64, usize)>,    // where the header holds a game code (GBA: 0xAC, 4)
+    pub disc_serial: Option<fn(&Path) -> io::Result<Option<String>>>,  // reads a disc's serial (PS1)
     pub core: Option<&'static CoreDecl>,      // None: its games aren't listed
     pub dump_header: u64,                     // a copier header left out of checksums (SNES: 512)
 }
@@ -58,20 +65,30 @@ pub fn index_letter(title: &str) -> char;                             // 'A'–'
 
 ### Identifying a ROM
 
-Once per file, offline. The result is the game's No-Intro/Redump name and how it was found (which says how sure the match is). It is kept in `cache/identify/<system>.json`, keyed by path and valid while the file's size and modification time are unchanged; the whole file is dropped when the game table's version changes.
+Once per file, offline. The result is the game's No-Intro/Redump name and how it was found (which says how sure the match is). It is kept in `cache/identify/<system>.json`, keyed by path and valid while the file's size and modification time are unchanged; the whole file is dropped when the game table's version or the matcher's (`IDENTIFY_VERSION`) changes.
 
-Methods, in order (the later ones are planned):
+Methods, in order:
 
 1. **Checksum (CRC32).** From a zip's directory for free; otherwise hashed, for files of 64 MB or less. A dump header is skipped when the file's size is that much over a multiple of 1 KiB.
 2. **Header game code**, where the system has one. Only codes of upper-case letters and digits are looked up (a homebrew ROM's header may be blank).
-3. *Planned:* **disc serial**, for discs too large to hash: PS1 `SYSTEM.CNF`, PSP `PARAM.SFO`, the Saturn and Dreamcast headers.
-4. **File name**: exact, then normalised (tags in brackets dropped, "the" dropped, "&" as "and", lower case, only letters and digits). Among equal matches, released games beat betas, prototypes and the like, then by region (USA, World, Europe, Japan), then originals before revisions. *Planned:* numerals made consistent, then fuzzy matching.
+3. **Disc serial**, for systems on discs, which aren't hashed (an image is too large, and a `.cue` or `.m3u` isn't the disc itself). PS1: the boot file `SYSTEM.CNF` names (`BOOT = cdrom:\SLUS_012.34;1` is `SLUS-01234`), from the ISO 9660 filesystem of a `.bin` or `.iso` (raw 2352-byte sectors, Mode 1 or 2, or 2048-byte ones), a `.cue`'s first file or an `.m3u`'s first disc; or the `DISC_ID` in a `.pbp`'s `PARAM.SFO`. A disc that boots `PSX.EXE` has no serial. *Planned:* PSP `PARAM.SFO`, the Saturn and Dreamcast headers.
+4. **File name**: exact, then normalised (tags in brackets dropped, "the" dropped, "&" as "and", roman numerals up to XXXIX as digits, lower case, only letters and digits). Among equal matches, released games beat betas, prototypes and the like, then the ROM's own region (from its tags), then by region (USA, World, Europe, Japan), then originals before revisions.
+5. **Fuzzy name**: the one title (normalised name) that holds every word of the file's, in order, and the same numbers. None if several do (ambiguous), or only titles with other numbers (a sequel, or the first game of a series).
 
 ```rust
 pub struct Identity { pub name: String, pub by: Method }
-pub enum Method { Crc, HeaderCode, Name }
+pub enum Method { Crc, HeaderCode, DiscSerial, Name, FuzzyName }
 pub fn identify(path: &Path, system: &SystemDecl, db: &GameDb) -> io::Result<Option<Identity>>;
+
+impl GameDb {
+    pub fn by_code(&self, code: &str) -> Option<&str>;   // header codes and disc serials
+    pub fn by_name(&self, stem: &str) -> Result<(&str, Method), NoMatch>;
+}
+pub enum NoMatch { Unknown, Ambiguous(usize, Vec<String>), Numbers(String) }  // why, for the log
+pub fn ps1_serial(path: &Path) -> io::Result<Option<String>>;
 ```
+
+The log has a line for each game found by fuzzy name, and for each not found, saying why; the art worker adds a count per method each time it runs out of work. The other methods are certain enough to only be counted.
 
 Today the per-system parts of identification are data in `SystemDecl`. With plugins, each step becomes an interface registered per system:
 
@@ -84,18 +101,18 @@ pub trait Identifier: Send + Sync { fn identify(&self, rom: &RomFile, db: &GameD
 
 Sources are tried in order; the first hit wins.
 
-1. The user's image, next to the ROM.
+1. The user's image, next to the ROM (PNG or JPEG).
 2. `cache/art/`, which mirrors `roms/`.
 3. *Planned:* art inside the ROM, for systems that have any: PSP `ICON0`/`PIC1`, DS and 3DS icons, the GameCube banner. Cartridge systems up to the SNES and Mega Drive have none.
 4. libretro-thumbnails (needs the network).
 5. *Planned:* a screenshot Specular takes when you leave a game.
 
-Images are shrunk to at most 400×400 px as they are stored, so the UI only loads small, ready-to-use files. A loader thread decodes them for display, always working on the newest request, so scrolling never queues stale work.
+Images are shrunk to at most 400×400 px as they are stored (as PNG), so the UI only loads small, ready-to-use files; the user's own are shrunk as they are loaded. A loader thread decodes them for display, always working on the newest request, so scrolling never queues stale work. A picture that would take more than 64 MB to decode (a large photo) is refused.
 
 ```rust
 pub trait ArtSource: Send {
     fn name(&self) -> &'static str;   // for logs
-    /// The game's picture as PNG bytes, or None if this source has none.
+    /// The game's picture as PNG or JPEG bytes, or None if this source has none.
     fn find(&self, game: &Game, identity: Option<&Identity>, system: &SystemDecl) -> Result<Option<Vec<u8>>, ArtError>;
 }
 pub enum ArtError {
@@ -111,12 +128,18 @@ How the download queue behaves:
 - Missing art is fetched whenever WiFi is up; with WiFi on Auto, the queue asks for WiFi while it has downloads waiting (see [wireless.md](wireless.md)).
 - Downloads go one at a time, with an identifying User-Agent. *Planned:* honour ETags, so stored art can be refreshed without fetching unchanged images.
 - After a network error the queue waits a minute. A game every source said it has no image for isn't asked about again for 30 days.
-- A fuzzy name match must never replace an image the user supplied.
+- A game with the user's own image is skipped before it is identified, so no match, fuzzy or not, replaces it.
 
 ## Findings
 
 - (2026-10-12, upstream) The libretro-database data for one system is mostly 1–8 MB. Source: libretro-database.
-- (2026-10-13, desktop) The trimmed tables in `data/db/` are 0.1–0.6 MB each. Source: `data/db/`.
+- (2026-10-13, desktop) The trimmed tables in `data/db/` are 0.1–0.6 MB each; PS1's is 0.65 MB (11,000 discs). Source: `data/db/`.
+- (2026-10-18, upstream) Redump's PS1 list has a serial for nearly every disc, though some carry suffixes (`SLUS-00975GH`, `SLES-01324/P`) or aren't serials (`Part-905154`, demo discs' `LSP-990123-0.1`). Source: libretro-database `metadat/redump/Sony - PlayStation.dat`.
+- (2026-10-18, desktop) Against the real tables, shortened names match by fuzzy name ("Pokemon Emerald", "Zelda Minish Cap", "Castlevania II", "Advance Wars 2"); generic ones are rejected as ambiguous ("Metroid", "Kirby", "Mario Kart" on GBA), and "Super Mario Advance 4" because the title has more numbers. Words split or joined differently aren't matched ("Pokemon Fire Red" for "FireRed", "Megaman 2"). A fuzzy search takes under 1 ms per game in a release build on a PC (PS1, the largest table). Source: a throwaway test over `data/db/`.
+
+## Open questions
+
+- Should fuzzy matching also compare names with spaces removed, or accents folded ("Pokémon")? Only if it adds no wrong matches; the log's unidentified games from real cards would show how often it matters.
 - (2026-10-12, upstream) A CHD's built-in checksum matches Redump only if it was made from the same tracks. Source: Redump (redump.org).
 - (2026-10-18, desktop) Searching 3,000 titles takes about 0.5 ms in a release build (the fastest of 100 runs on a busy PC). Source: the ignored benchmark in `crates/specular-core/src/library/search.rs`.
 - (2026-10-12, upstream) ScreenScraper has better art and checksum lookups, but needs a developer ID for the project (requested from them), each user's own account, and has daily quotas. Source: ScreenScraper (screenscraper.fr).
