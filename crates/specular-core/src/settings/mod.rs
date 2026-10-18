@@ -8,6 +8,8 @@
 //! ignored, as if absent.
 
 pub mod builtin;
+pub mod migrate;
+pub mod schema;
 pub mod store;
 
 use std::collections::HashMap;
@@ -53,15 +55,33 @@ impl Layer {
         }
     }
 
-    /// The layer's file under the `configs/` folder. Games' files mirror the `roms/` tree.
-    pub fn path(&self, configs: &Path) -> PathBuf {
+    /// The layer's file in the config folder (`migrate::config_dir`). Games' files mirror the
+    /// `roms/` tree.
+    pub fn path(&self, config: &Path) -> PathBuf { config.join(self.file()) }
+
+    /// Relative to the config folder.
+    fn file(&self) -> PathBuf {
         match self {
-            Layer::Global => configs.join("specular.json"),
-            Layer::System(s) => configs.join("systems").join(format!("{s}.json")),
-            Layer::Game { game, .. } => configs.join("games").join(format!("{game}.json")),
+            Layer::Global => "specular.json".into(),
+            Layer::System(s) => Path::new("systems").join(format!("{s}.json")),
+            Layer::Game { game, .. } => Path::new("games").join(format!("{game}.json")),
         }
     }
+
+    /// Its file's `$schema`: the path of its schema (`schema::file`) relative to its file. The
+    /// schema is in the file's folder or a folder above it (a game's is in `games/`, however deep
+    /// the game's file), so the path is a run of `../` and its name.
+    fn schema_ref(&self) -> String {
+        let system = match self { Layer::Global => "", Layer::System(system) | Layer::Game { system, .. } => system };
+        let schema = schema::file(self.scope(), system);
+        let up = self.file().components().count() - schema.components().count();
+        format!("{}{}", "../".repeat(up), schema.file_name().unwrap().to_string_lossy())
+    }
 }
+
+/// The key in a settings file that tells editors where its schema is. Not a setting: it is
+/// dropped on reading and written afresh on saving.
+pub const SCHEMA_KEY: &str = "$schema";
 
 /// What values a setting takes.
 #[derive(Clone, Copy, Debug)]
@@ -98,6 +118,9 @@ pub struct SettingDecl {
     /// The section it is listed under, e.g. "Display".
     pub section: &'static str,
     pub label: &'static str,
+    /// What it does and what its values mean, in a sentence or two, for people editing the files
+    /// by hand (it documents the setting in its schema).
+    pub help: &'static str,
     pub kind: SettingKind,
     pub default: Value,
     pub visibility: Visibility,
@@ -142,15 +165,20 @@ impl Settings {
     /// The declared settings.
     pub fn decls(&self) -> &[SettingDecl] { &self.decls }
 
-    /// Adds a layer's contents as loaded from its file (`store::load_layer`). Values already set
-    /// in memory win: they were changed after the file was written.
+    /// Adds a layer's contents as loaded from its file (`store::load_layer`), less `SCHEMA_KEY`.
+    /// Values already set in memory win: they were changed after the file was written.
     pub fn set_layer(&mut self, layer: Layer, values: Map<String, Value>) {
         let map = self.layers.entry(layer).or_default();
-        for (k, v) in values { map.entry(k).or_insert(v); }
+        for (k, v) in values.into_iter().filter(|(k, _)| k != SCHEMA_KEY) { map.entry(k).or_insert(v); }
     }
 
-    /// A layer's contents, for `store::store_layer`.
-    pub fn layer(&self, layer: &Layer) -> Map<String, Value> { self.layers.get(layer).cloned().unwrap_or_default() }
+    /// A layer's contents as its file holds them, for `store::store_layer`: its `$schema` first
+    /// (`SCHEMA_KEY`; the map keeps insertion order), then its values. Empty if it has no values,
+    /// so the file is removed.
+    pub fn layer(&self, layer: &Layer) -> Map<String, Value> {
+        let Some(values) = self.layers.get(layer).filter(|m| !m.is_empty()) else { return Map::new() };
+        std::iter::once((SCHEMA_KEY.to_string(), Value::from(layer.schema_ref()))).chain(values.clone()).collect()
+    }
 
     /// A setting's value as seen at `at`, and the layer it comes from (None = the default).
     /// None if no such setting is declared.

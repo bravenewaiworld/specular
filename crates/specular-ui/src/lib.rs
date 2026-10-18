@@ -27,7 +27,7 @@ use specular_core::palette;
 use specular_core::model::{Icon, ImageRef, Layout, Row, RowKind, ScreenView};
 use specular_core::wireless::bluetooth::BtKind;
 use specular_core::nav::Transition;
-use specular_core::settings::{Layer, builtin, store};
+use specular_core::settings::{self, Layer, builtin, store};
 use specular_core::wireless::Wireless;
 use specular_core::wireless::wifi::WifiLink;
 
@@ -114,7 +114,8 @@ pub struct DataRoot(pub PathBuf);
 
 impl DataRoot {
     pub fn roms(&self) -> PathBuf { self.0.join("roms") }
-    pub fn configs(&self) -> PathBuf { self.0.join("configs") }
+    /// The settings files, in the folder of their current format.
+    pub fn config(&self) -> PathBuf { settings::migrate::config_dir(&self.0) }
     pub fn cache(&self) -> PathBuf { self.0.join("cache") }
     pub fn saves(&self) -> PathBuf { self.0.join("saves") }
     pub fn bios(&self) -> PathBuf { self.0.join("bios") }
@@ -171,7 +172,6 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
         installer: installer.map(installer_thread),
         io,
-        configs: data.configs(),
         data,
         device: Arc::from(device),
         output: RefCell::new(Output::Builtin),
@@ -389,15 +389,33 @@ fn installer_thread(installer: Box<dyn specular_core::install::Installer>) -> mp
 /// A settings file to write.
 struct Save(PathBuf, serde_json::Map<String, serde_json::Value>);
 
-/// The I/O thread: loads the settings at start, then saves settings. Saves queued together are
-/// merged, so holding a button that changes a value writes the file once rather than once per
-/// step. The library scan, which then moves the saves of renamed ROMs, runs on a thread of its own.
+/// The I/O thread: brings the config folder up to date and loads the settings at start, then
+/// saves settings. Saves queued together are merged, so holding a button that changes a value
+/// writes the file once rather than once per step. The library scan, which then moves the saves of
+/// renamed ROMs, runs on a thread of its own.
 fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<Save>();
     let handle = std::thread::spawn(move || {
+        // False if migrating failed: then nothing is written to the config folder (see `migrate`),
+        // and changes stay in memory.
+        let writable = settings::migrate::migrate(&data.0);
+        if !writable { on_ui(|r| r.toast("Settings can't be saved until Specular restarts. The log says why.")); }
+        let config = data.config();
         // A corrupt file has been moved aside; either way, start from what could be read.
-        let values = store::load_layer(&Layer::Global.path(&data.configs())).unwrap_or_else(|e| { eprintln!("settings: {e:?}"); Default::default() });
+        let values = store::load_layer(&Layer::Global.path(&config)).unwrap_or_else(|e| { eprintln!("settings: {e:?}"); Default::default() });
         post(Msg::SettingsLoaded(Layer::Global, values));
+        // No schemas without a card: the data folder is then the bare mount point, which must stay
+        // empty (see `card_found`).
+        if writable && card_found(&data) {
+            for (file, schema) in settings::schema::all(&builtin::settings(), &playable_systems()) {
+                let path = config.join(file);
+                match store::store_generated(&path, &schema) {
+                    Ok(true) => eprintln!("settings: wrote {}", path.display()),
+                    Ok(false) => {}
+                    Err(e) => eprintln!("settings: can't write {}: {e}", path.display()),
+                }
+            }
+        }
         // The library: scanned now, and again whenever the games on the card change.
         std::thread::spawn(move || {
             let (roms, saves) = (data.roms(), data.saves());
@@ -408,17 +426,14 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
                 for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
                     eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
                 }
-                // Without its SD card, a device's data folder is an empty (or missing) mount point.
-                // That only holds while nothing is written there: fine on a read-only system,
-                // where Specular's own writes (settings, cache) fail.
-                let card_found = std::fs::read_dir(&data.0).is_ok_and(|mut d| d.next().is_some());
-                post(Msg::Library { games, card_found });
+                post(Msg::Library { games, card_found: card_found(&data) });
                 let Some(w) = &watch else { return };
                 w.wait_for_change();
             }
         });
         while let Ok(first) = rx.recv() {
             let latest: HashMap<PathBuf, _> = std::iter::once(first).chain(rx.try_iter()).map(|Save(p, v)| (p, v)).collect();
+            if !writable { continue; }
             for (path, values) in latest {
                 if let Err(e) = store::store_layer(&path, &values) { eprintln!("settings: {}: {e}", path.display()); }
             }
@@ -426,6 +441,11 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
     });
     (tx, handle)
 }
+
+/// Whether the SD card is in. Without it, a device's data folder is an empty (or missing) mount
+/// point. That only holds while nothing is written there: fine on a read-only system, where
+/// Specular's own writes (settings, cache) fail.
+fn card_found(data: &DataRoot) -> bool { std::fs::read_dir(&data.0).is_ok_and(|mut d| d.next().is_some()) }
 
 /// Power-key presses are ignored from the request to sleep until this long after waking. The
 /// press that woke the device is delivered as it resumes, before the sleep command returns (it
@@ -446,7 +466,6 @@ struct Runner {
     /// The installer's thread (None on a device without one).
     installer: Option<mpsc::Sender<specular_core::app::InstallCmd>>,
     io: mpsc::Sender<Save>,
-    configs: PathBuf,
     data: DataRoot,
     device: game::SharedDevice,
     /// Where sound goes: what the app last asked for (`Effect::SoundTo`). Games launched later
@@ -556,7 +575,7 @@ impl Runner {
             Effect::Redraw(t) => self.refresh(t),
             Effect::SaveSettings(layer) => {
                 let values = self.app.borrow().ctx().settings.layer(&layer);
-                let _ = self.io.send(Save(layer.path(&self.configs), values));
+                let _ = self.io.send(Save(layer.path(&self.data.config()), values));
             }
             Effect::Apply { key, value } => self.apply_setting(key, &value),
             Effect::Launch(game) => self.launch(&game),

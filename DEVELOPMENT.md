@@ -2,7 +2,7 @@
 
 ## Running Specular
 
-- **On the desktop.** The desktop build runs Specular in a 1024×768 window, against a data folder on your PC that stands in for the SD card (default `./sdcard`). Sound is real. Everything else is simulated:
+- **On the desktop.** The desktop build runs Specular in a 1024×768 window, against a data folder on your PC that stands in for the SD card (its argument: `specular <folder>`; default `./sdcard`). Sound is real. Everything else is simulated:
   - The battery drains slowly.
   - Hardware actions are printed instead of performed.
   - WiFi and Bluetooth follow a recorded or hand-written scenario (see Wireless traces and scenarios).

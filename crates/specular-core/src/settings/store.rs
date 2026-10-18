@@ -1,6 +1,6 @@
-//! JSON files on the SD card (settings, and indexes in `cache/`), written so a power cut can't
-//! destroy them. FAT32 has no journal, so a file is never rewritten in place: the new content
-//! goes to `<file>.tmp`, is flushed, and replaces the file with a rename.
+//! JSON files on the SD card (settings, their schemas, and Specular's own records in `cache/` and
+//! `saves/`), written so a power cut can't destroy them. FAT32 has no journal, so a file is never rewritten in place: the
+//! new content goes to `<file>.tmp`, is flushed, and replaces the file with a rename.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -56,20 +56,49 @@ pub fn load_layer(path: &Path) -> Result<Map<String, Value>, LoadError> {
 /// Writes one settings file safely (see the module doc). An empty layer removes the file.
 pub fn store_layer(path: &Path, map: &Map<String, Value>) -> io::Result<()> {
     if map.is_empty() {
-        // Also a stale .tmp, which `load_layer` would otherwise bring back.
-        for p in [path.to_path_buf(), tmp(path)] {
+        // Also a stale .tmp, which `load_layer` would otherwise bring back; first, so a power cut
+        // between the two can't leave it alone.
+        for p in [tmp(path), path.to_path_buf()] {
             if let Err(e) = fs::remove_file(p) && e.kind() != io::ErrorKind::NotFound { return Err(e); }
         }
         return Ok(());
     }
+    replace(path, &json_text(map), false)
+}
+
+/// Writes a generated file (a settings schema) safely, and read-only, as a hint that edits to it
+/// are ignored. Left alone if it already holds `content`, to spare the card (even if its
+/// read-only mark was cleared). Returns whether it was written.
+pub fn store_generated(path: &Path, content: &Value) -> io::Result<bool> {
+    let text = json_text(content);
+    if fs::read(path).is_ok_and(|old| old == text.as_bytes()) { return Ok(false); }
+    replace(path, &text, true).map(|()| true)
+}
+
+fn json_text(v: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(v).expect("JSON values always serialize") + "\n"
+}
+
+/// Replaces `path` with `text` through `<file>.tmp` (see the module doc).
+fn replace(path: &Path, text: &str, read_only: bool) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
     let tmp = tmp(path);
+    // One left by a cut-off `store_generated` is already read-only, so it couldn't be opened.
+    let _ = fs::remove_file(&tmp);
     let mut f = File::create(&tmp)?;
-    f.write_all(serde_json::to_string_pretty(map).expect("JSON values always serialize").as_bytes())?;
-    f.write_all(b"\n")?;
+    f.write_all(text.as_bytes())?;
     f.sync_all()?;
+    if read_only {
+        // Only a hint, so a card that refuses it (exFAT can) doesn't stop the write.
+        let marked = f.metadata().and_then(|m| { let mut p = m.permissions(); p.set_readonly(true); f.set_permissions(p) });
+        if let Err(e) = marked { eprintln!("settings: can't mark {} read-only: {e}", path.display()); }
+    }
+    // Renaming over a read-only file takes write access to the folder only (POSIX; checked on
+    // the PC, not yet on a FAT32 card).
     fs::rename(&tmp, path)?;
-    // Make the rename itself durable.
-    File::open(dir)?.sync_all()
+    sync_dir(dir)
 }
+
+/// Makes the changes to a folder's entries (files created, renamed or removed) durable.
+pub fn sync_dir(dir: &Path) -> io::Result<()> { File::open(dir)?.sync_all() }

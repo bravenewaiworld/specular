@@ -2,7 +2,7 @@
 //! hardware, sound through ALSA, and the keyboard as the gamepad (see `specular_ui::run` for the
 //! keys). Games are paced by a timer (a desktop window can't wait for the display's refresh).
 //!
-//! Usage: specular [data folder, with roms/ and configs/ (default ./sdcard)]
+//! Usage: specular [data folder, with roms/ and config/ (default ./sdcard)]
 //! Cores are looked for in `cores/` next to the binary, or in $SPECULAR_CORES.
 
 use std::io;

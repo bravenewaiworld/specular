@@ -61,7 +61,7 @@ fn saves_mirror_the_rom_tree() {
     let g = Game { system: "gba", path: "gba/RPG/Golden Sun (USA, Europe).gba".into(), title: "Golden Sun".into(), sort_key: String::new() };
     assert_eq!(g.save_path(Path::new("/sd/saves"), "srm"), Path::new("/sd/saves/gba/RPG/Golden Sun (USA, Europe).srm"));
     assert_eq!(g.stem(), "Golden Sun (USA, Europe)");
-    assert_eq!(g.settings_layer().path(Path::new("/sd/configs")), Path::new("/sd/configs/games/gba/RPG/Golden Sun (USA, Europe).json"));
+    assert_eq!(g.settings_layer().path(Path::new("/sd/config/v0")), Path::new("/sd/config/v0/games/gba/RPG/Golden Sun (USA, Europe).json"));
 }
 
 #[test]

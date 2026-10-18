@@ -1,6 +1,9 @@
 use serde_json::{Map, json};
 
-use super::store::{LoadError, load_layer, store_layer};
+use std::fs;
+use std::path::Path;
+
+use super::store::{LoadError, load_layer, store_generated, store_layer};
 use super::*;
 use crate::input::{Button, Press};
 
@@ -8,11 +11,11 @@ const SCALING: &[(&str, &str)] = &[("integer", "Integer"), ("fit", "Fit"), ("str
 
 fn decls() -> Vec<SettingDecl> {
     vec![
-        SettingDecl { key: "display.brightness", section: "Display", label: "Brightness", kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" },
+        SettingDecl { key: "display.brightness", section: "Display", label: "Brightness", help: "How bright.", kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" },
             default: json!(7), visibility: Visibility::User, deepest: Scope::Global },
-        SettingDecl { key: "video.scaling", section: "Display", label: "Scaling", kind: SettingKind::Choice(SCALING),
+        SettingDecl { key: "video.scaling", section: "Display", label: "Scaling", help: "How big.", kind: SettingKind::Choice(SCALING),
             default: json!("integer"), visibility: Visibility::User, deepest: Scope::Game },
-        SettingDecl { key: "dev.frame_stats", section: "Developer", label: "Frame stats", kind: SettingKind::Bool,
+        SettingDecl { key: "dev.frame_stats", section: "Developer", label: "Frame stats", help: "How fast.", kind: SettingKind::Bool,
             default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global },
     ]
 }
@@ -108,7 +111,7 @@ fn presses_change_values() {
 
 #[test]
 fn colours_step_through_the_palette_and_can_follow_another() {
-    let colour = |key, same_as, default| SettingDecl { key, section: "Look", label: key, kind: SettingKind::Colour { same_as },
+    let colour = |key, same_as, default| SettingDecl { key, section: "Look", label: key, help: "", kind: SettingKind::Colour { same_as },
         default: json!(default), visibility: Visibility::User, deepest: Scope::Global };
     let mut s = Settings::new(vec![colour("Accent", None, "teal"), colour("second", Some("Accent"), "coral")]);
     let g = Layer::Global;
@@ -169,4 +172,161 @@ fn a_corrupt_file_is_moved_aside() {
         other => panic!("{other:?}"),
     }
     assert!(!path.exists());
+}
+
+#[test]
+fn schemas_document_what_each_file_may_hold() {
+    let gba = crate::library::builtin_systems().into_iter().find(|s| s.id == "gba").unwrap();
+    let all = schema::all(&decls(), &[gba]);
+    let files: Vec<_> = all.iter().map(|(f, _)| f.to_str().unwrap()).collect();
+    assert_eq!(files, ["specular.schema.json", "systems/gba.schema.json", "games/gba.schema.json"]);
+    let (global, system, game) = (&all[0].1, &all[1].1, &all[2].1);
+    assert_eq!(global["$schema"], "https://json-schema.org/draft/2020-12/schema");
+    assert!(global["$comment"].as_str().unwrap().contains("read-only"));
+    assert_eq!(global["properties"]["display.brightness"],
+        json!({"title": "Display: Brightness", "description": "How bright.", "type": "integer", "minimum": 1, "maximum": 10, "default": 7}));
+    assert_eq!(global["properties"]["video.scaling"]["enum"], json!(["integer", "fit", "stretch"]));
+    assert_eq!(global["properties"]["dev.frame_stats"]["type"], "boolean");
+    // a system's and its games' files hold only what may be set that specifically
+    for s in [system, game] {
+        assert_eq!(s["properties"].as_object().unwrap().keys().collect::<Vec<_>>(), ["video.scaling"]);
+    }
+    assert_eq!(game["title"], "Game Boy Advance game settings");
+    // a colour lists the palette, after "same" if it can follow another
+    let colour = SettingDecl { key: "c", section: "", label: "", help: "", kind: SettingKind::Colour { same_as: Some("a") },
+        default: json!("same"), visibility: Visibility::User, deepest: Scope::Global };
+    let s = schema::schema(&[colour], Scope::Global, "", "");
+    assert_eq!(s["properties"]["c"]["enum"].as_array().unwrap()[..2], [json!("same"), json!("teal")]);
+}
+
+#[test]
+fn files_point_to_their_schema_which_is_not_a_setting() {
+    assert_eq!(Layer::Global.schema_ref(), "specular.schema.json");
+    assert_eq!(gba().schema_ref(), "gba.schema.json");
+    assert_eq!(Layer::Game { system: "gba".into(), game: "Tetris".into() }.schema_ref(), "gba.schema.json");
+    assert_eq!(Layer::Game { system: "gba".into(), game: "gba/RPG/Golden Sun".into() }.schema_ref(), "../../gba.schema.json");
+    let dir = tempfile::tempdir().unwrap();
+    let path = golden_sun().path(dir.path());
+    let mut s = Settings::new(decls());
+    // on reading, `$schema` (here a stale one) is dropped, not kept as an unknown key; saving
+    // writes the current one
+    s.set_layer(golden_sun(), Map::from_iter([(SCHEMA_KEY.into(), json!("old.json")), ("video.scaling".into(), json!("fit"))]));
+    store_layer(&path, &s.layer(&golden_sun())).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("{\n  \"$schema\": \"../gba.schema.json\",\n  \"video.scaling\": \"fit\""), "{text}");
+    let mut again = Settings::new(decls());
+    again.set_layer(golden_sun(), load_layer(&path).unwrap());
+    assert_eq!(again.layers[&golden_sun()], Map::from_iter([("video.scaling".into(), json!("fit"))]));
+    // with no values left, there is no `$schema` either, so saving removes the file
+    s.set("video.scaling", &golden_sun(), json!("integer")).unwrap();
+    assert!(s.layer(&golden_sun()).is_empty());
+}
+
+#[test]
+fn a_read_only_schema_is_replaced_only_when_it_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("games/gba.schema.json");
+    let tmp = path.with_extension("json.tmp");
+    assert!(store_generated(&path, &json!({"a": 1})).unwrap());
+    assert!(fs::metadata(&path).unwrap().permissions().readonly());
+    assert!(!store_generated(&path, &json!({"a": 1})).unwrap());
+    // a read-only .tmp left by a cut-off write is no obstacle either
+    fs::write(&tmp, "").unwrap();
+    let mut ro = fs::metadata(&tmp).unwrap().permissions();
+    ro.set_readonly(true);
+    fs::set_permissions(&tmp, ro).unwrap();
+    assert!(store_generated(&path, &json!({"a": 2})).unwrap());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\n  \"a\": 2\n}\n");
+    assert!(fs::metadata(&path).unwrap().permissions().readonly());
+}
+
+/// A data root with settings in the legacy `configs/` folder, a damaged game file among them.
+fn legacy_card() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let configs = root.path().join("configs");
+    fs::create_dir_all(configs.join("systems")).unwrap();
+    fs::create_dir_all(configs.join("games/gba/RPG")).unwrap();
+    fs::write(configs.join("specular.json"), r#"{"display.brightness": 3}"#).unwrap();
+    fs::write(configs.join("systems/gba.json"), r#"{"video.scaling": "fit"}"#).unwrap();
+    fs::write(configs.join("games/gba/RPG/Golden Sun.json"), "{ damaged").unwrap();
+    root
+}
+
+/// Every file under `dir`, relative to it, sorted.
+fn files_under(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for e in fs::read_dir(d).unwrap().map(Result::unwrap) {
+            if e.path().is_dir() { dirs.push(e.path()); } else { files.push(e.path().strip_prefix(dir).unwrap().to_string_lossy().into_owned()); }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn legacy_settings_are_copied_and_kept() {
+    let root = legacy_card();
+    let root = root.path();
+    let before = files_under(&root.join("configs"));
+    assert!(migrate::migrate(root));
+    let config = migrate::config_dir(root);
+    assert_eq!(config, root.join("config/v0"));
+    assert_eq!(files_under(&config), before);
+    assert_eq!(files_under(&root.join("configs")), before);
+    assert_eq!(load_layer(&Layer::Global.path(&config)).unwrap().get("display.brightness"), Some(&json!(3)));
+    assert!(!root.join("config/v0.tmp").exists());
+    // a damaged file is copied as it is, and then set aside when read, as any other
+    let game = Layer::Game { system: "gba".into(), game: "gba/RPG/Golden Sun".into() }.path(&config);
+    assert_eq!(fs::read_to_string(&game).unwrap(), "{ damaged");
+    assert!(matches!(load_layer(&game), Err(LoadError::Corrupt { .. })));
+}
+
+#[test]
+fn once_migrated_the_legacy_folder_is_ignored() {
+    let root = legacy_card();
+    let root = root.path();
+    migrate::migrate(root);
+    // changes to configs/ after migrating, and files removed from v0, aren't copied again
+    fs::write(root.join("configs/specular.json"), r#"{"display.brightness": 9}"#).unwrap();
+    fs::remove_file(root.join("config/v0/systems/gba.json")).unwrap();
+    assert!(migrate::migrate(root));
+    assert_eq!(fs::read_to_string(root.join("config/v0/specular.json")).unwrap(), r#"{"display.brightness": 3}"#);
+    assert!(!root.join("config/v0/systems/gba.json").exists());
+}
+
+#[test]
+fn a_migration_cut_off_is_done_again() {
+    let root = legacy_card();
+    let root = root.path();
+    // a half-built v0.tmp, with stale and extra files, is discarded rather than merged
+    fs::create_dir_all(root.join("config/v0.tmp/systems")).unwrap();
+    fs::write(root.join("config/v0.tmp/systems/gba.json"), "{").unwrap();
+    fs::write(root.join("config/v0.tmp/leftover.json"), "{}").unwrap();
+    assert!(migrate::migrate(root));
+    assert_eq!(files_under(&root.join("config/v0")), files_under(&root.join("configs")));
+    assert_eq!(fs::read_to_string(root.join("config/v0/systems/gba.json")).unwrap(), r#"{"video.scaling": "fit"}"#);
+    assert!(!root.join("config/v0.tmp").exists());
+}
+
+#[test]
+fn a_failed_migration_says_so_and_leaves_no_folder() {
+    let root = legacy_card();
+    let root = root.path();
+    // the config folder can't be made: a file is in its place
+    fs::write(root.join("config"), "").unwrap();
+    assert!(!migrate::migrate(root));
+    assert!(!migrate::config_dir(root).exists());
+    // once it can, the next start migrates
+    fs::remove_file(root.join("config")).unwrap();
+    assert!(migrate::migrate(root));
+    assert!(migrate::config_dir(root).join("specular.json").exists());
+}
+
+#[test]
+fn a_fresh_card_has_nothing_to_migrate() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(migrate::migrate(root.path()));
+    assert!(!root.path().join("config").exists());
 }
