@@ -327,6 +327,33 @@ fn the_game_menu_pauses_and_quits() {
 }
 
 #[test]
+fn a_systems_game_list_and_its_games_take_its_colour() {
+    let mut a = app();
+    let (indigo, violet) = (crate::palette::find("indigo"), crate::palette::find("violet"));
+    assert_eq!(a.tint(), None);
+    tap(&mut a, Button::A, 0);
+    assert_eq!(a.tint(), indigo);
+    // The keyboard over the list isn't the list, and search results span systems...
+    tap(&mut a, Button::X, 10);
+    assert_eq!(a.tint(), None);
+    type_text(&mut a, "metroid");
+    tap(&mut a, Button::Start, 20);
+    assert_eq!((a.view().title.as_str(), a.tint()), ("“metroid”", None));
+    // ...but a game played from them takes its system's colour, also under its menu.
+    tap(&mut a, Button::A, 30);
+    assert_eq!(a.tint(), violet);
+    tap(&mut a, Button::Menu, 40);
+    assert_eq!(a.tint(), violet);
+    for (i, b) in [Button::Up, Button::A].into_iter().enumerate() { tap(&mut a, b, 50 + i as u64 * 10); } // wraps to "Quit game"
+    assert_eq!(a.tint(), None);
+    tap(&mut a, Button::B, 70);
+    assert_eq!((a.view().title.as_str(), a.tint()), ("Game Boy Advance", indigo));
+    // Off, nothing is tinted.
+    a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::from_iter([("appearance.tint_by_system".into(), json!(false))])));
+    assert_eq!(a.tint(), None);
+}
+
+#[test]
 fn volume_keys_work_in_games_and_stop_at_the_ends() {
     let mut a = app();
     let level = |e: &[Effect]| e.iter().find_map(|e| match e { Effect::ShowVolume { level, .. } => Some(*level), _ => None });
@@ -430,11 +457,12 @@ mod credits {
     use super::*;
 
     const PROJECTS: &[Credit] = &[
-        Credit { kind: CreditKind::Specular, name: "Specular", version: None, licence: "GPL-3.0-only", url: None },
-        Credit { kind: CreditKind::Core, name: "mGBA", version: Some("7a12d6d4b9ac"), licence: "MPL-2.0", url: Some("https://github.com/libretro/mgba") },
-        Credit { kind: CreditKind::Font, name: "Geist", version: None, licence: "OFL-1.1", url: Some("https://github.com/vercel/geist-font") },
-        Credit { kind: CreditKind::Library, name: "Slint", version: None, licence: "GPL-3.0-only", url: Some("https://slint.dev") },
-        Credit { kind: CreditKind::Library, name: "serde", version: Some("1.0.219"), licence: "MIT OR Apache-2.0", url: None },
+        Credit { kind: CreditKind::Specular, name: "Specular", version: None, licence: "GPL-3.0-only", url: None, copyright: None },
+        Credit { kind: CreditKind::Core, name: "mGBA", version: Some("7a12d6d4b9ac"), licence: "MPL-2.0", url: Some("https://github.com/libretro/mgba"),
+                 copyright: Some("Copyright © 2013 – 2026 Jeffrey Pfau") },
+        Credit { kind: CreditKind::Font, name: "Geist", version: None, licence: "OFL-1.1", url: Some("https://github.com/vercel/geist-font"), copyright: None },
+        Credit { kind: CreditKind::Library, name: "Slint", version: None, licence: "GPL-3.0-only", url: Some("https://slint.dev"), copyright: None },
+        Credit { kind: CreditKind::Library, name: "serde", version: Some("1.0.219"), licence: "MIT OR Apache-2.0", url: None, copyright: None },
     ];
 
     /// The app on its credits screen, opened from Settings.
@@ -479,6 +507,20 @@ mod credits {
     fn credits_say_when_the_licence_texts_are_missing() {
         let a = credits_app(None);
         assert_eq!(a.view().rows[0].label, "The licence texts weren't installed with Specular");
+    }
+
+    #[test]
+    fn the_splash_names_the_core_of_the_game_played_with_its_credit() {
+        let mut a = app();
+        tap(&mut a, Button::A, 0);
+        assert_eq!(a.splash(), None);
+        tap(&mut a, Button::A, 10);
+        assert_eq!(a.splash(), Some(Splash { core: "mGBA", copyright: None, url: None })); // no credits given
+        a.set_credits(Credits { projects: PROJECTS, texts: None });
+        assert_eq!(a.splash(), Some(Splash { core: "mGBA", copyright: Some("Copyright © 2013 – 2026 Jeffrey Pfau"), url: Some("https://github.com/libretro/mgba") }));
+        // A game that can't start takes its splash with it, and says why.
+        assert_eq!(a.handle(Msg::GameEnded(Some("no such file".into()))), vec![Effect::Notice("The game couldn't start: no such file".into()), Effect::Redraw(None)]);
+        assert_eq!(a.splash(), None);
     }
 }
 

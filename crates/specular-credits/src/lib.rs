@@ -50,6 +50,8 @@ struct Project {
     url: Option<String>,
     /// For a core: where the source of the build we ship is.
     source: Option<String>,
+    /// For a core: its copyright notice.
+    copyright: Option<String>,
     texts: Vec<PathBuf>,
 }
 
@@ -148,20 +150,24 @@ fn parse_listed(tsv: &str, root: &Path) -> Result<Listed, String> {
     for (n, line) in tsv.lines().enumerate().filter(|(_, l)| !l.trim().is_empty() && !l.starts_with('#')) {
         let given = |s: &str| (s != "-").then(|| s.to_string());
         let texts = |s: &str| s.split(' ').filter(|p| !p.is_empty() && *p != "-").map(|p| root.join(p)).collect::<Vec<_>>();
-        match line.split('\t').collect::<Vec<_>>()[..] {
-            ["crate", name, licence, files] => { listed.crates.insert(name.into(), (given(licence), texts(files))); }
-            [kind, name, licence, url, files] => {
-                let kind = match kind {
-                    "specular" => Kind::Specular, "font" => Kind::Font, "data" => Kind::Data, "library" => Kind::Library,
-                    _ => match kind.strip_prefix("core:") {
-                        Some(core) => { listed.cores.push((core.into(), listed.projects.len())); Kind::Core }
-                        None => return Err(format!("data/credits.tsv:{}: unknown kind {kind:?}", n + 1)),
-                    },
-                };
-                listed.projects.push(Project { kind, name: name.into(), version: None, licence: licence.into(), declared: None, url: given(url), source: None, texts: texts(files) });
+        let columns: Vec<&str> = line.split('\t').collect();
+        let core = columns[0].strip_prefix("core:");
+        let (kind, name, licence, url, copyright, files) = match (core, &columns[..]) {
+            (_, ["crate", name, licence, files]) => { listed.crates.insert(name.to_string(), (given(licence), texts(files))); continue; }
+            (Some(core), [_, name, licence, url, copyright, files]) => {
+                listed.cores.push((core.into(), listed.projects.len()));
+                (Kind::Core, name, licence, url, given(copyright), files)
             }
-            _ => return Err(format!("data/credits.tsv:{}: expected 5 columns separated by tabs (4 on a crate line)", n + 1)),
-        }
+            (None, [kind, name, licence, url, files]) => {
+                let kind = match *kind {
+                    "specular" => Kind::Specular, "font" => Kind::Font, "data" => Kind::Data, "library" => Kind::Library,
+                    _ => return Err(format!("data/credits.tsv:{}: unknown kind {kind:?}", n + 1)),
+                };
+                (kind, name, licence, url, None, files)
+            }
+            _ => return Err(format!("data/credits.tsv:{}: expected 5 columns separated by tabs (6 on a core line, 4 on a crate line)", n + 1)),
+        };
+        listed.projects.push(Project { kind, name: name.to_string(), version: None, licence: licence.to_string(), declared: None, url: given(url), source: None, copyright, texts: texts(files) });
     }
     Ok(listed)
 }
@@ -216,7 +222,7 @@ fn crates(metadata: &Value, linked: &HashSet<(String, String)>, listed: &Listed,
             warnings.push(format!("the crate {name} {version} ({licence}) ships no licence text: put its text in data/licences/ and name it on a crate line in data/credits.tsv"));
         }
         let url = s("repository").or(s("homepage")).map(str::to_string);
-        projects.push(Project { kind: Kind::Library, name: name.into(), version: Some(version.into()), licence, declared: chosen.and(declared), url, source: None, texts });
+        projects.push(Project { kind: Kind::Library, name: name.into(), version: Some(version.into()), licence, declared: chosen.and(declared), url, source: None, copyright: None, texts });
     }
     projects.sort_by(|a, b| (a.name.to_lowercase(), &a.version).cmp(&(b.name.to_lowercase(), &b.version)));
     Ok(projects)
@@ -246,8 +252,8 @@ fn credits_rs(projects: &[Project]) -> String {
     let mut rs = String::from("&[\n");
     for p in projects {
         // Debug-formatted strings and options are Rust literals.
-        let _ = writeln!(rs, "    specular_core::app::Credit {{ kind: specular_core::app::CreditKind::{:?}, name: {:?}, version: {:?}, licence: {:?}, url: {:?} }},",
-                         p.kind, p.name, p.version, p.licence, p.url);
+        let _ = writeln!(rs, "    specular_core::app::Credit {{ kind: specular_core::app::CreditKind::{:?}, name: {:?}, version: {:?}, licence: {:?}, url: {:?}, copyright: {:?} }},",
+                         p.kind, p.name, p.version, p.licence, p.url, p.copyright);
     }
     rs + "]\n"
 }
@@ -279,6 +285,7 @@ fn licences_txt(projects: &[Project]) -> Result<String, String> {
         if let Some(d) = &p.declared { let _ = write!(out, " (chosen from {d})"); }
         if let Some(u) = &p.url { let _ = write!(out, ", {u}"); }
         out.push('\n');
+        if let Some(c) = &p.copyright { let _ = writeln!(out, "    {c}"); }
         if let Some(s) = &p.source { let _ = writeln!(out, "    Source: {s}"); }
     }
     let missing: Vec<String> = projects.iter().filter(|p| p.texts.is_empty()).map(Project::label).collect();
@@ -314,18 +321,21 @@ mod tests {
         let built = cores_built(script);
         assert_eq!(built, [("mgba".into(), "https://example.com/mgba.git".into(), "0123456789abcdef".into())]);
         let tsv = |lines: &str| parse_listed(lines, Path::new("/")).unwrap();
-        let mut listed = tsv("core:mgba\tmGBA\tMPL-2.0\t-\tdata/licences/MPL-2.0.txt\n");
+        let mut listed = tsv("core:mgba\tmGBA\tMPL-2.0\t-\tCopyright © 2013 Jeffrey Pfau\tdata/licences/MPL-2.0.txt\n");
         add_cores(&mut listed, &built).unwrap();
         let p = &listed.projects[0];
         assert_eq!((p.version.as_deref(), p.url.as_deref()), (Some("0123456789ab"), Some("https://example.com/mgba")));
+        assert_eq!(p.copyright.as_deref(), Some("Copyright © 2013 Jeffrey Pfau"));
         assert!(add_cores(&mut tsv(""), &built).unwrap_err().contains("no core:mgba line"));
-        assert!(add_cores(&mut tsv("core:nes\tNES\tGPL-2.0\t-\t-\n"), &[]).unwrap_err().contains("doesn't build"));
+        assert!(add_cores(&mut tsv("core:nes\tNES\tGPL-2.0\t-\t-\t-\n"), &[]).unwrap_err().contains("doesn't build"));
     }
 
     #[test]
     fn bad_lines_are_named() {
         assert!(parse_listed("# a comment\n\nfont\tGeist\n", Path::new("/")).unwrap_err().starts_with("data/credits.tsv:3:"));
         assert!(parse_listed("fonts\tGeist\tOFL-1.1\t-\t-\n", Path::new("/")).unwrap_err().contains("unknown kind"));
+        // A core's line without its copyright notice.
+        assert!(parse_listed("core:mgba\tmGBA\tMPL-2.0\t-\t-\n", Path::new("/")).unwrap_err().contains("6 on a core line"));
     }
 
     #[test]

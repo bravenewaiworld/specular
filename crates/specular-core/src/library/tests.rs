@@ -132,3 +132,20 @@ fn reads_zip_directories() {
     let entries: Vec<(String, u32)> = zip::entries(&p).unwrap().into_iter().map(|e| (e.name, e.crc32)).collect();
     assert_eq!(entries, [("a.gb".into(), 0x1000), ("b.txt".into(), 0x1001)]);
 }
+
+#[test]
+fn each_system_has_a_colour_of_its_own_that_isnt_the_default_accent() {
+    let tints: Vec<&str> = builtin_systems().iter().map(|s| s.tint).collect();
+    for t in &tints { assert!(crate::palette::find(t).is_some(), "{t} isn't in the palette"); }
+    assert_eq!(tints.iter().collect::<std::collections::HashSet<_>>().len(), tints.len(), "two systems share a colour: {tints:?}");
+    assert!(!tints.contains(&"teal")); // `ACCENT`'s default
+}
+
+/// The splash shown while a game starts finds its core's credit by name: each `CoreDecl::name`
+/// must be the name on a `core:` line.
+#[test]
+fn every_core_is_in_the_credits_by_its_name() {
+    let tsv = include_str!("../../../../data/credits.tsv");
+    let listed: Vec<&str> = tsv.lines().filter_map(|l| l.strip_prefix("core:")?.split('\t').nth(1)).collect();
+    for core in builtin_systems().iter().filter_map(|s| s.core) { assert!(listed.contains(&core.name), "data/credits.tsv has no core named {}", core.name); }
+}

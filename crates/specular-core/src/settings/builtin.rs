@@ -36,6 +36,9 @@ pub const ACCENT: &str = "appearance.accent";
 /// The second accent (a palette id, or `SAME`): the focus marks, and the LEDs marked
 /// `Accent::Second`.
 pub const SECOND_ACCENT: &str = "appearance.second_accent";
+/// Whether the light bar and the LEDs showing the first accent take each system's colour on its
+/// game list and while its games are played (see `App::tint`).
+pub const TINT_BY_SYSTEM: &str = "appearance.tint_by_system";
 /// Sleep after this many seconds without a button press, outside a running game ("never" for
 /// never).
 pub const SLEEP_AFTER: &str = "power.sleep_after_seconds";
@@ -80,6 +83,9 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "The second accent colour, by name, or \"same\" for the main accent colour. It marks what is selected, and colours the rest of the device's lights.",
             kind: SettingKind::Colour { same_as: Some(ACCENT) }, default: json!("coral"),
             visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: TINT_BY_SYSTEM, section: "Appearance", label: "Tint by system",
+            help: "Whether the glowing bar along the top of the screen, and the lights that show the main accent colour, take each system's own colour while its games are listed or one of them is played.",
+            kind: SettingKind::Bool, default: json!(true), visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: LIBRARY_VIEW, section: "Library", label: "Games shown as",
             help: "How a system's games are shown: \"list\" lists them beside the selected game's box art; \"grid\" shows their box art side by side.",
             kind: SettingKind::Choice(&[("list", "List"), ("grid", "Grid")]), default: json!("list"),

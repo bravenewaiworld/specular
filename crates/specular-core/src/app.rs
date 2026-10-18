@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::device::{Battery, Output};
+use crate::device::{Battery, Output, Rgb};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
 use crate::library::{self, Game, SystemDecl};
@@ -27,7 +27,7 @@ mod install;
 mod wireless;
 pub use wireless::{BtState, WifiNeed, WifiState};
 pub use install::{InstallCmd, InstallState, TaskView};
-pub use credits::{Credit, CreditKind, Credits};
+pub use credits::{Credit, CreditKind, Credits, Splash};
 
 /// Something that happened.
 #[derive(Debug)]
@@ -304,6 +304,21 @@ impl App {
 
     /// The game being played, if any.
     pub fn playing(&self) -> Option<&Game> { self.playing.as_ref() }
+
+    /// The colour the light bar and the LEDs showing the first accent take instead of the accent,
+    /// while "Tint by system" is on: the system's, while one of its games is played (its menu
+    /// open or not) or its game list is the current screen. None elsewhere, search results
+    /// included (they span systems).
+    pub fn tint(&self) -> Option<Rgb> {
+        if !self.ctx.settings.get(builtin::TINT_BY_SYSTEM, &Layer::Global).is_some_and(|(v, _)| *v == true) { return None; }
+        let top = self.nav.top();
+        let system = match &self.playing {
+            Some(game) => game.system,
+            None if top.id == screens::GAMES => top.params.as_deref()?,
+            None => return None,
+        };
+        crate::palette::find(self.ctx.systems.iter().find(|s| s.id == system)?.tint)
+    }
 
     /// Who buttons are for now: the game while one is played and no menu is open over it.
     pub fn input_target(&self) -> InputTarget {

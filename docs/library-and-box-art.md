@@ -41,6 +41,7 @@ Display titles come from file names, which mostly follow No-Intro and Redump nam
 pub struct SystemDecl {
     pub id: &'static str,                     // stable; used in paths and settings, e.g. "gba"
     pub name: &'static str,
+    pub tint: &'static str,                   // a palette colour, for its screens (look-and-motion.md)
     pub extensions: &'static [&'static str],
     pub libretro_name: &'static str,          // e.g. "Nintendo - Game Boy Advance"
     pub screen: (u32, u32),                   // native size, to place the game before its first frame

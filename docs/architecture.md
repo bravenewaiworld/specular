@@ -154,7 +154,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
 
 ### Credits
 
-`specular_credits::generate`, run by each `devices/<name>/build.rs`, writes two files to `$OUT_DIR`: `credits.rs`, the projects as Rust, and `licences.txt`. It also copies `licences.txt` into the folder the binary is built in, so a development build finds it beside itself as an installed one does; `make install` takes it from there. A core's version (its commit) and web address come from `tools/build-cores.sh`. A crate line in `data/credits.tsv` can choose which of a crate's licences Specular uses (Slint's crates: GPL-3.0-only), or give the licence texts its package lacks.
+`specular_credits::generate`, run by each `devices/<name>/build.rs`, writes two files to `$OUT_DIR`: `credits.rs`, the projects as Rust, and `licences.txt`. It also copies `licences.txt` into the folder the binary is built in, so a development build finds it beside itself as an installed one does; `make install` takes it from there. A core's version (its commit) and web address come from `tools/build-cores.sh`, and its copyright notice from its line in `data/credits.tsv`. A crate line in `data/credits.tsv` can choose which of a crate's licences Specular uses (Slint's crates: GPL-3.0-only), or give the licence texts its package lacks.
 
 ```rust
 // devices/<name>/src/main.rs
@@ -167,13 +167,18 @@ pub struct Credit {
     pub version: Option<&'static str>, // a crate's version, or a core's commit
     pub licence: &'static str,         // SPDX
     pub url: Option<&'static str>,
+    pub copyright: Option<&'static str>, // cores only
 }
 pub enum CreditKind { Specular, Core, Font, Data, Library }
 pub struct Credits { pub projects: &'static [Credit], pub texts: Option<PathBuf> }
-impl App { pub fn set_credits(&mut self, credits: Credits); }
+pub struct Splash { pub core: &'static str, pub copyright: Option<&'static str>, pub url: Option<&'static str> }
+impl App {
+    pub fn set_credits(&mut self, credits: Credits);
+    pub fn splash(&self) -> Option<Splash>; // for the game being played
+}
 ```
 
-The UI gives the app the credits with `licences.txt`'s path, if it is beside the binary. Settings → Credits (in the System section, for everyone) lists Specular, then the cores, fonts, data and libraries, each with its licence; A shows a project's web address.
+The UI gives the app the credits with `licences.txt`'s path, if it is beside the binary. Settings → Credits (in the System section, for everyone) lists Specular, then the cores, fonts, data and libraries, each with its licence; A shows a project's web address. The splash shown while a game starts names its core with the core's credit, found by the core's name (`CoreDecl::name`; a test checks that every core has one).
 
 ### The launch record
 

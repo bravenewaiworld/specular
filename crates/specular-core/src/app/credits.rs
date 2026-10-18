@@ -1,5 +1,6 @@
 //! Settings → Credits: every project Specular ships and its licence, grouped by kind. The list is
-//! worked out when the binary is built (the `specular-credits` crate) and given to the app.
+//! worked out when the binary is built (the `specular-credits` crate) and given to the app. The
+//! splash shown while a game starts names its core from the same list.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,6 +17,8 @@ pub struct Credit {
     /// The licence it is used under, as an SPDX expression.
     pub licence: &'static str,
     pub url: Option<&'static str>,
+    /// A core's copyright notice; None for other kinds.
+    pub copyright: Option<&'static str>,
 }
 
 /// What a project is: the credits screen's groups, in the order the build lists them. The variants
@@ -34,9 +37,24 @@ pub struct Credits {
 
 pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) { screens.insert(screens::CREDITS, Box::new(CreditsScreen)); }
 
+/// What the splash shown while a game starts says about the core that runs it: its name (as its
+/// `CoreDecl` gives it), and its credit's copyright notice and web address (None when the credits
+/// don't list the core).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Splash { pub core: &'static str, pub copyright: Option<&'static str>, pub url: Option<&'static str> }
+
 impl App {
     /// Gives the app the credits screen's contents (empty until given).
     pub fn set_credits(&mut self, credits: Credits) { self.ctx.credits = credits; self.changed(); }
+
+    /// The splash for the game being played; None while none is, or its system has no core. A
+    /// core's credit is the one of kind `Core` with the core's name.
+    pub fn splash(&self) -> Option<Splash> {
+        let game = self.playing.as_ref()?;
+        let core = self.ctx.systems.iter().find(|s| s.id == game.system)?.core?.name;
+        let credit = self.ctx.credits.projects.iter().find(|c| c.kind == CreditKind::Core && c.name == core);
+        Some(Splash { core, copyright: credit.and_then(|c| c.copyright), url: credit.and_then(|c| c.url) })
+    }
 }
 
 /// Settings' row opening the credits.

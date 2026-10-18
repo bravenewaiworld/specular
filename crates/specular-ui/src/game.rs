@@ -122,23 +122,24 @@ pub struct Screen {
 
 impl Screen {
     /// Before Slint draws: uploads the newest of the game's `frames`, if any, into the texture
-    /// (making a new one, and showing it, when the size changes). With no game, frees the
-    /// texture (here, where the GL context is current) and stops showing it.
-    pub fn before_render(&mut self, api: &slint::GraphicsAPI, frames: Option<&FrameSlot>, window: &AppWindow) {
-        let slint::GraphicsAPI::NativeOpenGL { get_proc_address } = api else { return };
+    /// (making a new one, and showing it, when the size changes); returns whether a frame was
+    /// uploaded. With no
+    /// game, frees the texture (here, where the GL context is current) and stops showing it.
+    pub fn before_render(&mut self, api: &slint::GraphicsAPI, frames: Option<&FrameSlot>, window: &AppWindow) -> bool {
+        let slint::GraphicsAPI::NativeOpenGL { get_proc_address } = api else { return false };
         let gl = self.gl.get_or_insert_with(|| unsafe { glow::Context::from_loader_function_cstr(|n| get_proc_address(n)) });
         let Some(frames) = frames else {
             if let Some((t, _, _)) = self.texture.take() {
                 window.set_game_frame(slint::Image::default());
                 unsafe { gl.delete_texture(t) };
             }
-            return;
+            return false;
         };
-        let Some(frame) = frames.take() else { return };
+        let Some(frame) = frames.take() else { return false };
         unsafe {
             if self.texture.is_none_or(|(_, w, h)| (w, h) != (frame.width, frame.height)) {
                 if let Some((t, _, _)) = self.texture.take() { gl.delete_texture(t); }
-                let Ok(t) = gl.create_texture() else { frames.give_back(frame); return };
+                let Ok(t) = gl.create_texture() else { frames.give_back(frame); return false };
                 gl.bind_texture(glow::TEXTURE_2D, Some(t));
                 gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA as i32, frame.width as i32, frame.height as i32, 0,
                     glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelUnpackData::Slice(None));
@@ -157,5 +158,6 @@ impl Screen {
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
         frames.give_back(frame);
+        true
     }
 }

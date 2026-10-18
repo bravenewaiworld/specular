@@ -116,10 +116,10 @@ Completed:
  - The design mockup (`design/mockup.html`) shows the Light Bar look only
  - Credits in Settings: every project shipped (cores, fonts, data, libraries) and its licence, worked out when the binary is built; the full licence texts installed beside it
  - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
+ - A splash while a game starts: "Powered by" its core, the core's copyright notice and web address (from the credits), over the zooming box art until the game's first frame, for at least 1 s
+ - The light bar, and the LEDs showing the accent, take each system's colour on its game list and while its games are played ("Tint by system", on by default)
 
 TODO:
- - Pre-game splash screen with `Powered By: ` core name, core's copyright notice, and repo URL.
- - Light bar tinted per system
  - Sounds
  - Title screens and screenshots as art
  - Profile FemtoVG's per-frame cost while scrolling (about 47 % of a core on the Brick): text layout cache hits, how many row slots redraw, whether off-screen slots draw

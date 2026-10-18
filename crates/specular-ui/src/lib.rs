@@ -200,6 +200,9 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         toast_timer: slint::Timer::default(),
         volume_timer: slint::Timer::default(),
         letter_timer: slint::Timer::default(),
+        launched: Cell::new(None),
+        splash_timer: slint::Timer::default(),
+        tint: Cell::new(None),
         stats_timer: slint::Timer::default(),
         frame_times: RefCell::default(),
         art_worker,
@@ -533,6 +536,13 @@ struct Runner {
     toast_timer: slint::Timer,
     volume_timer: slint::Timer,
     letter_timer: slint::Timer,
+    /// When the game launched last was launched, until its first frame is in (see `SPLASH_TIME`).
+    launched: Cell<Option<Duration>>,
+    /// Shows the launched game once its splash has had `SPLASH_TIME`.
+    splash_timer: slint::Timer,
+    /// `App::tint` as last read (None: the first accent): the light bar's colour, and the LEDs'
+    /// that show the first accent.
+    tint: Cell<Option<Rgb>>,
     /// Updates the frame statistics each second while they are on.
     stats_timer: slint::Timer,
     /// The UI's animation frames, measured while the frame statistics are on.
@@ -547,6 +557,9 @@ struct Runner {
     requested: RefCell<Vec<PathBuf>>,
 }
 
+/// The shortest time a launched game's splash shows: it hides the game until its first frame is
+/// in and this long after the launch. The game runs meanwhile; only showing it waits.
+const SPLASH_TIME: Duration = Duration::from_millis(1000);
 /// How long the core may take over one frame before the game counts as stuck (`watch_game`).
 const STUCK_LIMIT: Duration = Duration::from_secs(6);
 /// How long a toast shows.
@@ -743,8 +756,9 @@ impl Runner {
     }
 
     /// Starts `game`: its cover flies to where the game will be while it loads (once the redraw
-    /// that follows shows it playing). Art work stops while it runs, and loaded pictures are
-    /// dropped once it has started, to leave it the memory and the CPU.
+    /// that follows shows it playing), with the splash over it until the game is shown
+    /// (`SPLASH_TIME`). Art work stops while it runs, and loaded pictures are dropped once it has
+    /// started, to leave it the memory and the CPU.
     fn launch(self: &Rc<Self>, game: &Game) {
         let _ = self.art_worker.send(art::ArtCmd::Paused(true));
         let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
@@ -754,7 +768,13 @@ impl Runner {
             let (gw, gh) = system.as_ref().map_or((0, 0), |s| s.screen);
             w.set_game_width(gw as i32);
             w.set_game_height(gh as i32);
+            w.set_splash(self.app.borrow().splash().map(|s| SplashText {
+                core: s.core.into(), copyright: s.copyright.unwrap_or_default().into(), url: s.url.unwrap_or_default().into(),
+            }).unwrap_or_default());
+            w.set_game_revealed(false);
         }
+        self.launched.set(Some(now()));
+        self.splash_timer.stop(); // an earlier launch's mustn't show this game
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
@@ -799,7 +819,14 @@ impl Runner {
     fn before_render(&self, api: &slint::GraphicsAPI) {
         let Some(w) = self.window.upgrade() else { return };
         let playing = self.playing.borrow();
-        self.game_screen.borrow_mut().before_render(api, playing.as_ref().map(|p| &*p.frames), &w);
+        // The launched game's first frame: it shows once its splash has had its time.
+        if self.game_screen.borrow_mut().before_render(api, playing.as_ref().map(|p| &*p.frames), &w) && let Some(launched) = self.launched.take() {
+            let first = now() - launched;
+            let wait = SPLASH_TIME.saturating_sub(first);
+            eprintln!("game: first frame {} ms after the launch; the splash hides it {} ms more", first.as_millis(), wait.as_millis());
+            let weak = self.window.clone();
+            self.splash_timer.start(slint::TimerMode::SingleShot, wait, move || { if let Some(w) = weak.upgrade() { w.set_game_revealed(true); } });
+        }
     }
 
     /// After each frame is drawn (before it is presented): records it for the frame statistics,
@@ -821,18 +848,9 @@ impl Runner {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
                 return;
             }
-            builtin::ACCENT | builtin::SECOND_ACCENT | builtin::LED_BRIGHTNESS => {
-                // The theme and the LEDs each depend on several settings, so they are read back
-                // from the settings (already updated) rather than taken from `value`.
-                self.show_theme();
-                let (first, second) = self.accents();
-                let level = self.app.borrow().ctx().settings.get(builtin::LED_BRIGHTNESS, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
-                let scale = |c: u8| (c as i64 * level / builtin::LED_BRIGHTNESS_MAX) as u8;
-                HwCmd::Lights(self.profile.leds.iter().map(|led| {
-                    let Rgb(r, g, b) = match led { Accent::First => first, Accent::Second => second };
-                    Rgb(scale(r), scale(g), scale(b))
-                }).collect())
-            }
+            // The theme and the LEDs each depend on several settings, so they read them back from
+            // the settings (already updated) rather than taking `value`.
+            builtin::ACCENT | builtin::SECOND_ACCENT | builtin::LED_BRIGHTNESS => { self.show_theme(); self.show_lights(); return; }
             _ => return,
         };
         let _ = self.hardware.send(cmd);
@@ -846,16 +864,29 @@ impl Runner {
         (first, s.colour(builtin::SECOND_ACCENT, &Layer::Global).unwrap_or(first))
     }
 
-    /// Sets the theme's colours (the on-screen light bar's tint is the accent for now).
+    /// Sets the theme's colours: the light bar's is the tint, if there is one.
     fn show_theme(&self) {
         let Some(w) = self.window.upgrade() else { return };
         let (first, second) = self.accents();
         let colour = |Rgb(r, g, b): Rgb| slint::Color::from_rgb_u8(r, g, b);
         let theme = w.global::<Theme>();
         theme.set_accent(colour(first));
-        theme.set_tint(colour(first));
+        theme.set_tint(colour(self.tint.get().unwrap_or(first)));
         theme.set_focus(colour(second));
         theme.set_warning(colour(palette::WARNING));
+    }
+
+    /// Sets the LEDs to the accents at the LED brightness, with the tint, if there is one, in place
+    /// of the first accent.
+    fn show_lights(&self) {
+        let (first, second) = self.accents();
+        let first = self.tint.get().unwrap_or(first);
+        let level = self.app.borrow().ctx().settings.get(builtin::LED_BRIGHTNESS, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
+        let scale = |c: u8| (c as i64 * level / builtin::LED_BRIGHTNESS_MAX) as u8;
+        let _ = self.hardware.send(HwCmd::Lights(self.profile.leds.iter().map(|led| {
+            let Rgb(r, g, b) = match led { Accent::First => first, Accent::Second => second };
+            Rgb(scale(r), scale(g), scale(b))
+        }).collect()));
     }
 
     /// Arms `timer` to give the app a `Tick` at `due`, or stops it if nothing is due. Re-armed
@@ -931,8 +962,10 @@ impl Runner {
             w.set_shift(if t == Transition::Push { 64.0 } else { -64.0 });
             w.set_transitions(w.get_transitions() + 1);
         }
-        let (held, playing) = (self.repeating.get(), app.playing().is_some());
+        let (held, playing, tint) = (self.repeating.get(), app.playing().is_some(), app.tint());
         drop(app);
+        // Recoloured only when the tint changes (LED writes can be slow).
+        if tint != self.tint.replace(tint) { self.show_theme(); self.show_lights(); }
         // While a game is played the library is hidden and its menu has no art, so no art is
         // loaded (see `launch`).
         if !playing { self.update_art(&w, &view, focus, &layout.drawn, held); }

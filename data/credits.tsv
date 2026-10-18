@@ -5,7 +5,10 @@
 #
 # A project: kind, name, licence (SPDX), web address, licence texts. The kind is specular, core:<name>,
 # font, data or library. A core's <name> is the one tools/build-cores.sh builds it as, and its version
-# and web address come from there; every core that script builds needs a line here.
+# and web address come from there; every core that script builds needs a line here. A core's line has
+# one more column, before the licence texts: its copyright notice, copied from the core's source, which
+# the splash shows while one of its games starts. The splash finds the line by its name, which must be
+# the core's name in Specular (CoreDecl::name).
 #
 # A crate: "crate", its name, the licence it is used under (when it offers several, or declares none),
 # and its licence texts (when its package ships none). A line covers every version of the crate, and
@@ -13,7 +16,7 @@
 #
 # Slint offers three licences; Specular uses it under GPL-3.0-only, whose text is Specular's LICENSE.
 specular	Specular	GPL-3.0-only	-	LICENSE
-core:mgba	mGBA	MPL-2.0	-	data/licences/MPL-2.0.txt
+core:mgba	mGBA	MPL-2.0	-	Copyright © 2013 – 2026 Jeffrey Pfau	data/licences/MPL-2.0.txt
 font	Geist	OFL-1.1	https://github.com/vercel/geist-font	assets/fonts/OFL-Geist.txt
 font	Geist Mono	OFL-1.1	https://github.com/vercel/geist-font	assets/fonts/OFL-Geist.txt
 font	Noto Emoji	OFL-1.1	https://github.com/googlefonts/noto-emoji	assets/fonts/OFL-NotoEmoji.txt

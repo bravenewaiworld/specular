@@ -12,7 +12,7 @@ export global Theme {
     in property <color> accent;
     // The second accent: the focus marks (the focus plate's stripe, the grid outline, a focused gauge).
     in property <color> focus;
-    // The on-screen light bar's colour (the accent for now).
+    // The on-screen light bar's colour: the accent, or a system's colour (see App::tint).
     in property <color> tint;
     // A low battery's colour, the one colour that is not an accent (set from Rust).
     in property <color> warning;
@@ -32,6 +32,8 @@ export global Theme {
     // The letter index's letter (its font size), and the square it sits on.
     out property <length> letter-size: 150px * u;
     out property <length> letter-plate: 220px * u;
+    // The splash's padding, at its sides (three quarters of it above and below).
+    out property <length> splash-pad: 40px * u;
     out property <length> title: 64px * u;
     out property <length> body: 42px * u;
     out property <length> secondary: 33px * u;

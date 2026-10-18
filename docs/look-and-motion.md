@@ -7,8 +7,10 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 ## Decisions
 
 - **The Light Bar look** (2026-10-11). Monochrome, with a thin glowing bar along the top edge that mirrors the device's LED bar. Geist for text, Geist Mono for numbers. Focus plates, cards, art and toasts copy the Brick Hammer's case (the all-aluminium edition of the TrimUI Brick): sharp top corners, rounded bottom corners, and a 2 u highlight along a raised surface's top edge, like light on a machined chamfer. Motion is short, with a slight overshoot. Rejected: the Instrument direction (stepped motion, an orange accent, monospace labels, ruled lines, a dot-matrix clock), which was cluttered, used too many typefaces, and was hard to read at real size. `design/mockup.html` shows the Light Bar look only.
-- **Two accent colours, each picked from a fixed palette** (2026-10-14). All UI colour comes from them. The accent colours the light bar, toggles and unfocused gauges; the second accent colours the focus marks, and can be set to follow the first. On devices with LEDs, the LEDs show them too. The only other colours are box art, the low-battery warning, and (planned) a per-system tint of the light bar.
+- **Two accent colours, each picked from a fixed palette** (2026-10-14). All UI colour comes from them. The accent colours the light bar, toggles and unfocused gauges; the second accent colours the focus marks, and can be set to follow the first. On devices with LEDs, the LEDs show them too. The only other colours are box art, the low-battery warning, and each system's colour, which the light bar takes on that system's screens (below).
+- **The light bar takes a system's colour on its screens** (2026-10-18). While "Tint by system" is on (the default), the light bar, and the LEDs that show the first accent, take a system's colour while its game list is the current screen or one of its games is played (its menu open or not). Search results span systems, so they keep the accent (a game played from them takes its system's colour), as does the keyboard over a game list. The second accent never changes, so the focus always looks the same. Each system has its own palette colour, after its hardware or logo, and none is teal, the default accent, so the change shows: GB lime (the original's green screen), GBC rose (its berry shell), GBA indigo, NES coral, SNES violet (the American pad's purple buttons), Mega Drive sky (Sega's blue), PS1 amber (the yellow of its logo). Rejected: tinting Home as the focus passes over each system, as the mockup does (the colour would flicker while scrolling); tinting search results when they all are one system's (the colour would depend on the query); colours outside the palette (its colours are checked to suit the dark UI and to read under dark text and on the LEDs).
 - **The game is the point** (2026-10-12). A game starts in a few presses, and nothing gets between you and it: box art zooms into the running game, and the game shrinks back into its box art when you quit.
+- **A splash names the core while its game starts** (2026-10-18). "Powered by" the core's name, its copyright notice and its web address, on a raised plate at the bottom of the zooming box art, from the launch until the game's first frame arrives, and for at least 1 s; then the game shows as usual. The core loads and the game runs meanwhile: only showing it waits, so its first second plays unseen. A game that fails to start takes the splash with it, and the notice says why. The notice and the web address come from the credits (`data/credits.tsv`, and `tools/build-cores.sh` for the address), so each is written once. Rejected: a splash screen before the zoom (it would come between you and the game); starting the core once the splash ends (a slower start for every game); the notice in `CoreDecl` (a second copy of what the credits hold).
 - **Nothing moves unless you asked it to** (2026-10-12). Animation follows input (focus, scrolling, opening or closing something) and then stops. An idle screen draws nothing, so the GPU can sleep. The one exception is the clock, once a minute.
 - **Sizes are in u, where u = ppi / 400** (2026-10-12). 1 u is one pixel of the Brick's panel (1024×768 at about 400 ppi). On another device text keeps its physical size, and a bigger screen shows more rows rather than bigger ones.
 - **A dark grey background, never pure black** (2026-10-12). On an IPS panel black saves no power, and it makes backlight bleed easier to see.
@@ -26,7 +28,7 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 
 ### Theme
 
-`theme.slint` has two globals: `Theme` (colours, type sizes, gutters, bar heights, all in u via `Theme.u`) and `Motion` (durations and easing curves). Row heights come from `specular_core::list`, because the core lays lists out. The accent colours come from the settings, set from Rust.
+`theme.slint` has two globals: `Theme` (colours, type sizes, gutters, bar heights, all in u via `Theme.u`) and `Motion` (durations and easing curves). Row heights come from `specular_core::list`, because the core lays lists out. The accent colours come from the settings, set from Rust, and the light bar's from `App::tint` (the accent, or the system's colour).
 
 The palette (`specular_core::palette`) is eight hues at about teal's saturation and lightness, so any of them suits the dark UI and reads on the LEDs. Each palette colour, and the warning colour, is light enough for dark text to be read on it; a test checks this.
 
@@ -43,11 +45,12 @@ The Light Bar timings, from the spec:
 | Fade (text, toggles) | 160 ms |
 | Screen change | 260 ms slide and fade |
 | Launch zoom | 420 ms, `cubic-bezier(.05, .7, .1, 1)` (fast start, long ease-out) |
+| Splash (over the box art while the game starts) | 160 ms fade in and out; up at least 1 s, until the first frame |
 | Zoom to live game | 160 ms crossfade |
 | Quit (game shrinks into its art) | 340 ms |
 | In-game menu (slides in, game moves aside) | 240 ms / 280 ms |
 
-The light bar's colour changes over 350 ms. Today the in-game menu sits on a panel down the left over the dimmed game; the blurred backdrop isn't drawn yet.
+The light bar's colour changes over 350 ms (also between the accent and a system's colour). Today the in-game menu sits on a panel down the left over the dimmed game; the blurred backdrop isn't drawn yet.
 
 ### Prefabs
 
@@ -56,6 +59,7 @@ Every screen is built from a few patterns, and any new screen has to be too:
 - **Lists of rows.** Each row is one of: header, note (explanatory text, never focused), text, image (a game with its art), toggle, choice (a colour choice also shows its swatch), number, action, or a key of the on-screen keyboard.
 - **A grid of box art.**
 - **The index letter**: one large letter (150 u) on a raised square shaped like the focus plate, centred over the list.
+- **The splash**: three centred lines (the core, its copyright notice, its web address) on a raised plate shaped like the focus plate, at the bottom of the screen over the box art of a game starting.
 - **A sheet**, a picker for long choices such as Language. No screen needs one yet.
 
 Layouts are `List`, `ListWithPicture` (a game list beside the focused game's art), `Grid` and `Keys` (the on-screen keyboard). Toasts show for 2.5 s; notes never take the focus; the volume gauge shows for 1.2 s after the last change, and the index letter for 0.7 s after the last jump. Games without box art get a generated cover, a gradient derived from the title so each game keeps its own.

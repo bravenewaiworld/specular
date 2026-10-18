@@ -22,6 +22,9 @@ pub struct SystemDecl {
     /// Short, stable id, used in file paths and settings (e.g. "gba").
     pub id: &'static str,
     pub name: &'static str,
+    /// Its colour, a palette id (`palette::PALETTE`): the light bar and the LEDs showing the first
+    /// accent take it on its game list and while its games are played (see `App::tint`).
+    pub tint: &'static str,
     /// Lower-case extensions of its game files, without the dot.
     pub extensions: &'static [&'static str],
     /// Its name in the libretro databases and thumbnail server (e.g. "Nintendo - Game Boy Advance").
@@ -68,22 +71,23 @@ pub struct CoreDecl {
 const MGBA: &CoreDecl = &CoreDecl { name: "mGBA", library: "mgba_libretro", options: &[("mgba_idle_optimization", "Remove Known")], rom_by_path: true };
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,
-/// .chd, .pbp or .m3u; a .bin is only a track of a .cue.
+/// .chd, .pbp or .m3u; a .bin is only a track of a .cue. Their colours differ, and none is teal,
+/// the default accent, so the change to a system's colour shows (see docs/look-and-motion.md).
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
-        SystemDecl { id: "gb", name: "Game Boy", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
+        SystemDecl { id: "gb", name: "Game Boy", tint: "lime", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
             screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some(MGBA), header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "gbc", name: "Game Boy Color", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
+        SystemDecl { id: "gbc", name: "Game Boy Color", tint: "rose", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
             screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some(MGBA), header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "gba", name: "Game Boy Advance", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
+        SystemDecl { id: "gba", name: "Game Boy Advance", tint: "indigo", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
             screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some(MGBA), header_code: Some((0xac, 4)), disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "nes", name: "NES", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
+        SystemDecl { id: "nes", name: "NES", tint: "coral", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
             screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "snes", name: "Super Nintendo", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
+        SystemDecl { id: "snes", name: "Super Nintendo", tint: "violet", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
             screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 512 },
-        SystemDecl { id: "md", name: "Mega Drive", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
+        SystemDecl { id: "md", name: "Mega Drive", tint: "sky", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
             screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "ps1", name: "PlayStation", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
+        SystemDecl { id: "ps1", name: "PlayStation", tint: "amber", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
             screen: (320, 240), game_db: include_str!("../../../../data/db/ps1.tsv"), core: None, header_code: None,
             disc_serial: Some(crate::art::ps1_serial), dump_header: 0 },
     ]

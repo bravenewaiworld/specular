@@ -52,6 +52,9 @@ export struct RowData {
 
 export struct Hint { button: string, label: string }
 
+// What the splash says about the core running a game that is starting ("" for what isn't known).
+export struct SplashText { core: string, copyright: string, url: string }
+
 // The focus plate: sharp top corners, rounded bottom ones (like the device's case), a chamfer
 // highlight along the top and the focus colour along its left edge.
 component FocusPlate inherits Rectangle {
@@ -67,20 +70,39 @@ component FocusPlate inherits Rectangle {
     }
 }
 
-// The letter index's letter (L2 and R2 jump between first letters), large on a raised square
-// shaped like the focus plate (sharp top corners, rounded bottom ones, a highlighted top edge),
-// over the middle of the list.
-component LetterPlate inherits Rectangle {
-    in property <string> letter;
-    width: Theme.letter-plate; height: self.width;
+// A raised plate shaped like the focus plate (sharp top corners, rounded bottom ones, a
+// highlighted top edge), casting a shadow on what is below.
+component RaisedPlate inherits Rectangle {
     background: Theme.raised;
     border-bottom-left-radius: Theme.radius;
     border-bottom-right-radius: Theme.radius;
     drop-shadow-offset-y: 10px * Theme.u; drop-shadow-blur: 40px * Theme.u; drop-shadow-color: #00000080;
     Rectangle { y: 0; height: Theme.line; background: Theme.edge; }
+}
+
+// The letter index's letter (L2 and R2 jump between first letters), large on a raised square,
+// over the middle of the list.
+component LetterPlate inherits RaisedPlate {
+    in property <string> letter;
+    width: Theme.letter-plate; height: self.width;
     Text {
         text: letter; horizontal-alignment: center; vertical-alignment: center;
         font-size: Theme.letter-size; font-weight: 600; color: Theme.fg;
+    }
+}
+
+// The splash while a game starts: what powers it, on a raised plate. Lines too long for `widest`
+// are cut short.
+component SplashPlate inherits RaisedPlate {
+    in property <SplashText> text;
+    in property <length> widest;
+    width: min(lines.preferred-width, widest); height: lines.preferred-height;
+    lines := VerticalLayout {
+        padding-left: Theme.splash-pad; padding-right: Theme.splash-pad; padding-top: Theme.splash-pad * 0.75; padding-bottom: Theme.splash-pad * 0.75;
+        spacing: 6px * Theme.u;
+        Text { text: "Powered by " + text.core; horizontal-alignment: center; overflow: elide; font-size: Theme.secondary; font-weight: 500; color: Theme.fg; }
+        if text.copyright != "" : Text { text: text.copyright; horizontal-alignment: center; overflow: elide; font-size: Theme.caption; color: Theme.dim; }
+        if text.url != "" : Text { text: text.url; horizontal-alignment: center; overflow: elide; font-family: Theme.mono; font-size: Theme.caption; color: Theme.dim; }
     }
 }
 
@@ -366,14 +388,20 @@ export component AppWindow inherits Window {
         easing: root.playing ? cubic-bezier(0.05, 0.7, 0.1, 1) : cubic-bezier(0.3, 0, 0.1, 1);
     }
     property <bool> flying: root.toward-game != (root.playing ? 1 : 0);
+    // The splash shown over the cover while the game starts (set with the flyer, before `playing`
+    // turns on, so it never shows the last game's).
+    in property <SplashText> splash;
+    // Set once the game's first frame is in and its splash has shown long enough (see
+    // SPLASH_TIME in Rust); cleared at each launch.
+    in property <bool> game-revealed;
     // Where the focused cover is on screen: the picture beside the list, or the grid's cell
     // (lifted 8px while focused, see GridCell).
     property <bool> in-grid: root.layout == ScreenLayout.grid;
     property <length> cover-size: root.in-grid ? root.plate-width * 1px * Theme.u : min(root.width * 0.42 - 16px * Theme.u - Theme.gutter, 400px * Theme.u);
     property <length> cover-x: root.in-grid ? Theme.gutter + root.plate-x * 1px * Theme.u : root.width * 0.58 + 16px * Theme.u;
     property <length> cover-y: Theme.status-bar + (root.in-grid ? Theme.title-area + (root.plate-top - root.scroll - 8) * 1px * Theme.u : 24px * Theme.u);
-    // The game shows once its cover has arrived and its first frame is in.
-    property <bool> game-shown: root.playing && !root.flying && root.has-frame;
+    // The game shows once its cover has arrived and it is revealed.
+    property <bool> game-shown: root.playing && !root.flying && root.game-revealed;
     // The flyer is up while it flies and while it stands in for a game that hasn't shown yet.
     property <bool> flyer-up: root.flying || (root.playing && !root.game-shown);
 
@@ -538,6 +566,14 @@ export component AppWindow inherits Window {
         y: root.cover-y + (root.game-y - root.cover-y) * root.toward-game;
         width: root.cover-size + (root.game-w - root.cover-size) * root.toward-game;
         height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
+    }
+    // Over the cover, from the launch until the game shows (or fails to start).
+    SplashPlate {
+        x: (root.width - self.width) / 2; y: root.height - self.height - Theme.gutter;
+        text: root.splash; widest: root.width - 2 * Theme.gutter;
+        visible: self.opacity > 0;
+        opacity: root.playing && !root.game-shown ? 1 : 0;
+        animate opacity { duration: Motion.fade; }
     }
 
     // The toast: a short message above the hint bar. A long one wraps to stay within the gutters.
