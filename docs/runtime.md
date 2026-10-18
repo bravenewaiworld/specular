@@ -67,7 +67,7 @@ Only the libretro environment calls Specular needs are accepted; the rest are re
 
 ### Frame pacing
 
-Each display refresh, the game's thread waits for the vsync, then sleeps for the frame delay, runs the core once and hands the frame to the UI, which draws as soon as it has it.
+Each display refresh, the game's thread waits for the vsync, then sleeps for the frame delay, runs the core once and hands the frame to the UI, which draws as soon as it has it. (On the Brick, the UI's animations are paced by the same vsync, one frame per refresh; while one runs over the game, the game's frame is drawn with its next frame, a refresh later. See [brick.md](brick.md).)
 
 - Every 60 frames the delay is set to the period minus the slowest runs (the 95th percentile) and 6 ms for the UI to draw and present, capped at half the period.
 - If waiting for the vsync fails, the game falls back to a timer.

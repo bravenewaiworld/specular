@@ -110,7 +110,8 @@ pub trait SoundOut: Send {
     fn capacity(&self) -> usize;
 }
 
-/// The display's refresh, for pacing game frames.
+/// The display's refresh, for pacing a game's frames, and the UI's where the device's Slint
+/// platform uses it.
 pub trait Vsync: Send {
     /// Waits until the display next starts showing a new frame.
     fn wait(&mut self) -> io::Result<()>;
@@ -139,7 +140,8 @@ pub trait Device {
     /// opens another when the output changes while it plays).
     fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>>;
     /// The display's refresh, if the device can wait for it; without, games are paced by a
-    /// timer at their own frame rate.
+    /// timer at their own frame rate. Each call opens a separate one: give each waiting thread its
+    /// own.
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
 }
 

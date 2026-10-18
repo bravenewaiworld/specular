@@ -9,6 +9,8 @@
 //!
 //! Usage: s1_slint [seconds (default 20)] [--continuous: animate all the time, to check vsync]
 //!        [--idle: never move the focus, to check that an unchanging screen costs nothing]
+//!        [--vsync: pace frames by /dev/fb0's FBIO_WAITFORVSYNC, as Specular does, rather than by
+//!         the swap alone; the time in the swap should then be about 1 ms]
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -101,7 +103,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let continuous = args.iter().any(|a| a == "--continuous");
     let idle = args.iter().any(|a| a == "--idle");
 
-    let platform = BrickPlatform::new()?;
+    let vsync: Option<Box<dyn specular_core::device::Vsync>> = if args.iter().any(|a| a == "--vsync") {
+        Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0"))?))
+    } else { None };
+    let platform = BrickPlatform::new(vsync)?;
     let m = Rc::new(RefCell::new(Measure::default()));
     // The scene exists only after the platform is handed to Slint, so the button handler finds
     // it through this slot.

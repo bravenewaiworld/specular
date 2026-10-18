@@ -5,6 +5,7 @@
 //! their results come back as messages to the app, or as calls on the UI thread.
 
 mod art;
+mod frames;
 mod game;
 mod keys;
 mod watch;
@@ -194,6 +195,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         volume_timer: slint::Timer::default(),
         letter_timer: slint::Timer::default(),
         stats_timer: slint::Timer::default(),
+        frame_times: RefCell::default(),
         art_worker,
         art_online: Cell::new(online),
         art_loader,
@@ -205,7 +207,12 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     window.set_hints(runner.hints.clone().into());
     window.set_status_icons(runner.status_icons.clone().into());
     window.window().set_rendering_notifier(|state, api| {
-        if let slint::RenderingState::BeforeRendering = state && let Some(r) = RUNNER.with(|r| r.borrow().clone()) { r.before_render(api); }
+        let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+        match state {
+            slint::RenderingState::BeforeRendering => r.before_render(api),
+            slint::RenderingState::AfterRendering => r.after_render(),
+            _ => {}
+        }
     }).map_err(|e| format!("this window can't show games: {e:?}"))?;
     RUNNER.with(|r| *r.borrow_mut() = Some(runner.clone()));
     if keyboard {
@@ -512,6 +519,8 @@ struct Runner {
     letter_timer: slint::Timer,
     /// Updates the frame statistics each second while they are on.
     stats_timer: slint::Timer,
+    /// The UI's animation frames, measured while the frame statistics are on.
+    frame_times: RefCell<Option<frames::FrameTimes>>,
     art_worker: mpsc::Sender<art::ArtCmd>,
     /// Whether the art worker was last told the network is there.
     art_online: Cell<bool>,
@@ -679,15 +688,21 @@ impl Runner {
         *p.output.borrow_mut() = output;
     }
 
-    /// Starts or stops the frame statistics shown over games.
+    /// Starts or stops the frame statistics: the game's, shown over it, and the UI's animation
+    /// frames (see the `frames` module), shown at the bottom right, also over a game, and
+    /// logged as each animation ends.
     fn show_frame_stats(&self, on: bool) {
         let Some(w) = self.window.upgrade() else { return };
         w.set_stats(Default::default());
+        w.set_ui_stats(Default::default());
+        *self.frame_times.borrow_mut() = on.then(|| frames::FrameTimes::new(self.profile.refresh_hz));
         if !on { self.stats_timer.stop(); return; }
         let mut last = 0;
         self.stats_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
             let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
             let Some(w) = r.window.upgrade() else { return };
+            // (Setting the same text doesn't redraw, so an idle screen stays idle.)
+            if let Some(f) = r.frame_times.borrow().as_ref() { w.set_ui_stats(f.summary().into()); }
             // (A game's frame count starts at 0.)
             let Some(s) = r.playing.borrow().as_ref().map(|p| p.session.stats()) else { last = 0; return w.set_stats("".into()) };
             let fps = s.frames.saturating_sub(last);
@@ -764,6 +779,14 @@ impl Runner {
         let Some(w) = self.window.upgrade() else { return };
         let playing = self.playing.borrow();
         self.game_screen.borrow_mut().before_render(api, playing.as_ref().map(|p| &*p.frames), &w);
+    }
+
+    /// After each frame is drawn (before it is presented): records it for the frame statistics,
+    /// if they are on.
+    fn after_render(&self) {
+        let mut times = self.frame_times.borrow_mut();
+        let (Some(times), Some(w)) = (times.as_mut(), self.window.upgrade()) else { return };
+        if let Some(line) = times.drawn(now(), w.window().has_active_animations()) { eprintln!("ui: {line}"); }
     }
 
     /// Carries out the settings the device acts on; ignores the rest.

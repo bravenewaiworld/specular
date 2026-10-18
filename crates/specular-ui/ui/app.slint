@@ -394,8 +394,10 @@ export component AppWindow inherits Window {
     // The letter L2 or R2 last jumped to, shown over the list while `letter-shown`.
     in property <string> letter;
     in property <bool> letter-shown;
-    // Developer frame statistics, shown over a game while not empty.
+    // Developer frame statistics, shown while not empty: the game's, over it, and the UI's, at
+    // the bottom right above the hint bar's place (also over a game).
     in property <string> stats;
+    in property <string> ui-stats;
     // Screen changes: Rust adds 1 for each, after setting `shift` to where the new screen comes
     // from (u). `phase` follows `transitions` with an animation, so `arriving` jumps to 1 on a
     // change and eases back to 0, sliding the screen in and fading it up.
@@ -519,6 +521,10 @@ export component AppWindow inherits Window {
     }
 
     HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
+    if root.ui-stats != "" : Text {
+        x: root.width - self.width - 16px * Theme.u; y: root.height - Theme.hint-bar - self.height - 8px * Theme.u;
+        text: root.ui-stats; font-family: Theme.mono; font-size: Theme.caption; color: Theme.accent;
+    }
 
     // The flying cover, over everything but the toast and the volume. It stays at the game's
     // place while the game loads, and fades as the game appears.

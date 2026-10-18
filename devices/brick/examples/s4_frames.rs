@@ -320,7 +320,7 @@ thread_local! {
 
 /// Composite: the frame is an image in the Slint scene; every new frame redraws the scene.
 fn run_composite(o: &Options, stats: Arc<Stats>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let platform = BrickPlatform::new()?;
+    let platform = BrickPlatform::new(None)?;
     let egl = platform.egl();
     let gl = Rc::new(unsafe { glow::Context::from_loader_function_cstr(|n| egl.proc_address(n)) });
     let ctx = egl.shared_context()?;

@@ -28,7 +28,7 @@ Completed:
 
 TODO:
  - Rumble from games
- - Menus paced by vsync too (today only gameplay is)
+ - Menus paced by vsync too (built; to measure on the Brick)
  - Separate volume levels for speaker and headphones
 
 ### Core Integration and Support

@@ -39,7 +39,7 @@ crates/
   specular-ui/       Slint theme, prefabs and screens; carries out the app's effects; owns the
                      threads; art service; run(device)
   specular-linux/    standard Linux implementations: evdev, power supply, LED class, ALSA,
-                     wpa_supplicant, BlueZ, framebuffer vsync
+                     wpa_supplicant, BlueZ, framebuffer vsync and frame pacing
 devices/
   desktop/           Slint's default window, simulated hardware, keyboard as gamepad
   brick/             the TrimUI Brick (see brick.md)
@@ -91,6 +91,7 @@ pub trait Screen {
 | Art worker, art loader | finding and storing box art; decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
 | Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written |
+| Vsync | in a display platform that paces animations by the display (the Brick's): after an animation's frame is presented, waits for the vsync that shows it and wakes the UI |
 
 Opening a sound output can block, so it happens on short-lived threads.
 
@@ -113,7 +114,7 @@ pub trait Device {
     /// Called once; the services then move to the hardware thread.
     fn hardware(&self) -> Hardware;
     fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>>;
-    /// None: games are paced by a timer at their own rate.
+    /// None: games are paced by a timer at their own rate. Each call opens a separate one.
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
 }
 

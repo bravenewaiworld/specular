@@ -1,7 +1,9 @@
 //! A Slint platform for the Brick: one full-screen window drawn with FemtoVG on our EGL display,
 //! and our own event loop. The loop draws only when something changed or an animation is
-//! running. Otherwise it sleeps in poll() until the next Slint timer, a wake-up from another
-//! thread, or a button (or, while an input device is missing, until the next try to open it).
+//! running. Given a vsync, an animation draws one frame per refresh, each started once the last
+//! is on screen (`FramePacer`). Otherwise it sleeps in poll() until the next Slint timer, that
+//! vsync, a wake-up from another thread, or a button (or, while an input device is missing,
+//! until the next try to open it).
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::VecDeque;
@@ -20,7 +22,9 @@ use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
 use slint::{PhysicalSize, Window};
 
 use crate::egl::EglDisplay;
+use specular_core::device::Vsync;
 use specular_linux::input::{ButtonEvent, Input, clock};
+use specular_linux::vsync::FramePacer;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -65,20 +69,26 @@ pub struct BrickPlatform {
     egl: Rc<EglDisplay>,
     window: OnceCell<Rc<BrickWindow>>,
     wake: Arc<Wake>,
+    pacer: FramePacer,
     input: RefCell<Input>,
     on_button: RefCell<Option<Box<dyn FnMut(ButtonEvent)>>>,
     on_present: RefCell<Option<Box<dyn FnMut(Duration)>>>,
 }
 
 impl BrickPlatform {
-    pub fn new() -> Result<Self, Error> {
+    /// Animations are paced by `vsync`; without it, by the swap alone, which waits for the frame
+    /// before the last to be on screen (a frame takes two refreshes to show; see docs/brick.md).
+    pub fn new(vsync: Option<Box<dyn Vsync>>) -> Result<Self, Error> {
         crate::fonts::work_around_empty_fontconfig()?;
         let fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
         if fd < 0 { return Err(std::io::Error::last_os_error().into()); }
+        let wake = Arc::new(Wake { jobs: Mutex::default(), quit: AtomicBool::new(false), fd: unsafe { File::from(OwnedFd::from_raw_fd(fd)) } });
+        let woken = wake.clone();
         Ok(Self {
             egl: Rc::new(EglDisplay::open()?),
             window: OnceCell::new(),
-            wake: Arc::new(Wake { jobs: Mutex::default(), quit: AtomicBool::new(false), fd: unsafe { File::from(OwnedFd::from_raw_fd(fd)) } }),
+            pacer: FramePacer::new(vsync, move || woken.wake()),
+            wake,
             input: RefCell::new(Input::new(INPUT_DEVICES)),
             on_button: RefCell::default(),
             on_present: RefCell::default(),
@@ -95,16 +105,27 @@ impl BrickPlatform {
     /// present returned (the same timeline as button times). For measuring.
     pub fn on_present(&self, f: impl FnMut(Duration) + 'static) { *self.on_present.borrow_mut() = Some(Box::new(f)); }
 
-    /// Draws if needed. Returns whether an animation is running (so another frame is due).
+    /// Draws if needed and the pacer allows. Returns whether another frame is due and may be
+    /// drawn at once (only when the swap alone paces drawing).
+    ///
+    /// The pacer waits only after a frame an animation is to follow, so only an animation's next
+    /// frame waits (taking along whatever else changed meanwhile, such as a game's new frame).
+    /// Any other frame is drawn at once: a game's thread paces its frames, and if a one-off
+    /// redraw between a vsync and the game's frame held that frame back to the next vsync,
+    /// every later game frame would be held back too, a refresh late.
     fn draw(&self) -> Result<bool, PlatformError> {
         let Some(w) = self.window.get() else { return Ok(false) };
-        if w.needs_redraw.replace(false) {
-            w.renderer.render()?;
-            if let Some(f) = self.on_present.borrow_mut().as_mut() { f(clock(libc::CLOCK_MONOTONIC)); }
-        }
-        let animating = w.window.has_active_animations();
-        if animating { w.needs_redraw.set(true); }
-        Ok(animating)
+        if !w.needs_redraw.get() || !self.pacer.ready() { return Ok(false); }
+        w.needs_redraw.set(false);
+        w.renderer.render()?;
+        if let Some(f) = self.on_present.borrow_mut().as_mut() { f(clock(libc::CLOCK_MONOTONIC)); }
+        // Slint knows an animation runs only while drawing it: once its clock moves on, it
+        // reports none until the next render. So ask now, and keep `needs_redraw` set until the
+        // pacer lets the next frame be drawn.
+        if !w.window.has_active_animations() { return Ok(false); }
+        w.needs_redraw.set(true);
+        self.pacer.presented();
+        Ok(self.pacer.ready())
     }
 
     /// Sleeps until there is something to do (at most `timeout`), then reads wake-ups and buttons.
@@ -147,9 +168,8 @@ impl Platform for BrickPlatform {
             let jobs: Vec<Job> = self.wake.jobs.lock().unwrap().drain(..).collect();
             jobs.into_iter().for_each(|job| job());
             if self.wake.quit.swap(false, Relaxed) { return Ok(()); }
-            // While animating, the swap in draw() paces the loop at the display's rate.
-            let animating = self.draw()?;
-            let timer = if animating { Some(Duration::ZERO) } else { slint::platform::duration_until_next_timer_update() };
+            let again = self.draw()?;
+            let timer = if again { Some(Duration::ZERO) } else { slint::platform::duration_until_next_timer_update() };
             let mut events = Vec::new(); // (opening a device can report a mute switch already on)
             let retry = self.input.borrow_mut().retry(&mut events);
             self.send_buttons(events);
