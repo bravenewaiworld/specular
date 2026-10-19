@@ -275,17 +275,13 @@ fn the_frame_delay_leaves_room_for_the_slowest_runs_and_the_ui() {
 }
 
 #[test]
-fn the_pacer_times_the_vsyncs_but_not_across_a_pause_and_measures_the_delay_afresh_when_told() {
+fn the_pacer_times_the_vsyncs_but_not_across_a_pause() {
     let mut p = Pacer::new(Some(Box::new(Instant0)), 60.0);
     assert_eq!(p.wait(), None, "the first");
     std::thread::sleep(Duration::from_millis(30));
     assert!(p.wait().is_some_and(|gap| gap >= Duration::from_millis(30)));
     p.paused();
     assert_eq!(p.wait(), None, "the first after a pause");
-    for _ in 0..60 { p.ran(Duration::from_millis(1)); }
-    assert!(p.delay > Duration::ZERO);
-    p.remeasure();
-    assert_eq!(p.delay, Duration::ZERO);
     assert_eq!(Pacer::new(None, 60.0).wait(), None, "a timer");
 }
 

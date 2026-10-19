@@ -3,9 +3,9 @@
 //! The system's governor sets the CPU's speed from how busy it is, but a game paced by the display
 //! idles for part of every refresh, and for a whole refresh more after a frame that missed one, so
 //! the governor can settle too low for the game to keep up (docs/runtime.md, Findings). Only
-//! Specular sees a missed refresh, so `CpuMin` raises a minimum speed when frames miss theirs and
-//! lowers it once they have had time to spare for a while. It only decides; the runtime measures
-//! the frames, and the device sets the speed.
+//! Specular sees a missed refresh, so `CpuMin` raises a minimum speed when frames miss theirs. It
+//! never lowers it during a game (docs/runtime.md, Decisions). It only decides; the runtime
+//! measures the frames, and the device sets the speed.
 
 use std::time::Duration;
 
@@ -14,23 +14,15 @@ pub const AUTO: &str = "auto";
 /// `settings::builtin::CPU_MIN`'s value for no minimum: the speed is the system's choice.
 pub const OFF: &str = "off";
 
-/// The lowest step `CpuMin::new` uses; it drops the steps below. So its first step up from the
-/// system's default is to this speed, and a step down from it goes back to the default. Chosen
-/// for the Brick: the steps up to 1008 MHz run at 900 mV and 1200 MHz at 937.5 mV (Crystaline OS's
-/// docs/power.md), so holding 1200 costs little, and the governor already runs a busy game mostly
-/// at or above it (docs/runtime.md, Findings), so a lower minimum would gain little. A CPU whose
-/// steps all lie below it gets no automatic minimum.
+/// The lowest step `CpuMin::new` uses; it drops the steps below, so its first step up from the
+/// system's default is to this speed. Chosen for the Brick: the steps up to 1008 MHz run at 900 mV
+/// and 1200 MHz at 937.5 mV (Crystaline OS's docs/power.md), so holding 1200 costs little, and the
+/// governor already runs a busy game mostly at or above it (docs/runtime.md, Findings), so a lower
+/// minimum would gain little. A CPU whose steps all lie below it gets no automatic minimum.
 const LOWEST_USEFUL_MHZ: u32 = 1200;
 /// Two misses at most this far apart raise the minimum a step. One alone (a scene loading, say)
 /// doesn't.
 const MISS_PAIR: Duration = Duration::from_secs(1);
-/// How long every frame must be on time before the minimum may drop a step.
-const ON_TIME: Duration = Duration::from_secs(10);
-/// A step down is taken only if the slowest runs, slowed to the lower speed, would fit in this
-/// share of a refresh (percent); the rest is a margin for the runs slower still and for jitter.
-/// The UI's drawing isn't counted: it runs on its own thread, so a slow draw delays when a frame is
-/// shown, not the core's next run.
-const HEADROOM: u32 = 85;
 
 /// Chooses the CPU's minimum speed, among the CPU's speed steps, from the game's frames (see the
 /// module's documentation). Its levels are, lowest first, the system's default (None) and each
@@ -49,11 +41,6 @@ pub struct CpuMin {
     played: Duration,
     /// When (in time of play) the latest miss still waiting for a second within `MISS_PAIR` came.
     last_miss: Option<Duration>,
-    /// When (in time of play) the on-time window began: the last miss, or the last check for a
-    /// step down.
-    on_time_since: Duration,
-    /// How long the core ran for each frame since `on_time_since`.
-    runs: Vec<Duration>,
     /// Whether `Decision::Note` has said that frames miss their refresh at the top step.
     told_top: bool,
 }
@@ -61,9 +48,8 @@ pub struct CpuMin {
 /// What `CpuMin::frame` asks for.
 #[derive(Debug, PartialEq)]
 pub enum Decision {
-    /// Set the minimum to this speed (MHz; None: the system's default), for the reason given (for
-    /// the log).
-    Set(Option<u32>, String),
+    /// Set the minimum to this speed (MHz), for the reason given (for the log).
+    Set(u32, String),
     /// Nothing can be done; only log this. Said once: frames still miss their refresh at the top
     /// step.
     Note(String),
@@ -90,66 +76,26 @@ impl CpuMin {
     pub fn current(&self) -> Option<u32> { self.level.map(|i| self.steps[i]) }
 
     /// One frame paced by the display. `gap`: the time between the vsync this frame ran after and
-    /// the one the previous frame ran after; `run`: how long the core took to make it; `period`:
-    /// the display's refresh period. A gap of more than 1.5 periods (halfway to two, allowing for
-    /// jitter) is a missed refresh. The gaps add up to the clock of play, so leave out frames whose
-    /// gap isn't play: the first after a pause (the gap would include the pause), and any paced by
-    /// a timer (which has no refreshes to miss). Returns a decision when there is one to act on.
-    pub fn frame(&mut self, gap: Duration, run: Duration, period: Duration) -> Option<Decision> {
+    /// the one the previous frame ran after; `period`: the display's refresh period. A gap of more
+    /// than 1.5 periods (halfway to two, allowing for jitter) is a missed refresh, and the second
+    /// within `MISS_PAIR` raises the level a step; at the top step it can't, and says so once. The
+    /// gaps add up to the clock of play, so leave out frames whose gap isn't play: the first after
+    /// a pause (the gap would include the pause), and any paced by a timer (which has no refreshes
+    /// to miss). Returns a decision when there is one to act on.
+    pub fn frame(&mut self, gap: Duration, period: Duration) -> Option<Decision> {
         if !self.adaptive || self.steps.is_empty() { return None; }
         self.played += gap;
-        if gap > period * 3 / 2 { return self.missed(); }
-        self.runs.push(run);
-        if self.played - self.on_time_since < ON_TIME { return None; }
-        let decision = self.step_down(period);
-        self.restart();
-        decision
-    }
-
-    /// A frame missed its refresh: the second within `MISS_PAIR` raises the level a step. At the
-    /// top step it can't, and says so once (`Decision::Note`).
-    fn missed(&mut self) -> Option<Decision> {
+        if gap <= period * 3 / 2 { return None; }
         let now = self.played;
-        let first = self.last_miss.filter(|&t| now - t <= MISS_PAIR);
-        self.restart();
-        let Some(first) = first else { self.last_miss = Some(now); return None };
+        let Some(first) = self.last_miss.take().filter(|&t| now - t <= MISS_PAIR) else { self.last_miss = Some(now); return None };
         let why = format!("2 frames missed their refresh in {:.1} s at {}", (now - first).as_secs_f64(), text(self.current()));
         let up = self.level.map_or(0, |i| i + 1);
-        if up == self.steps.len() {
+        let Some(&mhz) = self.steps.get(up) else {
             if std::mem::replace(&mut self.told_top, true) { return None; }
             return Some(Decision::Note(format!("{why}, the top step: there is no faster one to set")));
-        }
+        };
         self.level = Some(up);
-        Some(Decision::Set(self.current(), why))
-    }
-
-    /// After `ON_TIME` on time: the level a step down, if the slowest runs (the 95th percentile),
-    /// slowed in proportion to the lower speed, fit in `HEADROOM` percent of a refresh. Runs needn't
-    /// slow in proportion (work bound by memory slows less; the slowest 5 % aren't looked at), so
-    /// frames may miss after a step down: they step back up, and the next step down is `ON_TIME`
-    /// later. From the lowest step to
-    /// the system's default, the runs are judged at the lowest step's speed, as the governor runs
-    /// a busy game about that fast (see `LOWEST_USEFUL_MHZ`).
-    fn step_down(&mut self, period: Duration) -> Option<Decision> {
-        let i = self.level?;
-        let lower = i.checked_sub(1);
-        let (speed, lower_speed) = (self.steps[i], self.steps[lower.unwrap_or(0)]);
-        self.runs.sort();
-        let slowest = self.runs[self.runs.len() * 95 / 100];
-        let slowed = slowest * speed / lower_speed;
-        if slowed >= period * HEADROOM / 100 { return None; }
-        self.level = lower;
-        let ms = |d: Duration| d.as_secs_f64() * 1e3;
-        Some(Decision::Set(self.current(), format!("{} s on time; slowest runs {:.1} ms, about {:.1} ms at {}",
-            ON_TIME.as_secs(), ms(slowest), ms(slowed), text(self.current()))))
-    }
-
-    /// Starts the on-time window afresh at the time of play now, forgetting the runs and any miss
-    /// still waiting for a second.
-    fn restart(&mut self) {
-        self.on_time_since = self.played;
-        self.runs.clear();
-        self.last_miss = None;
+        Some(Decision::Set(mhz, why))
     }
 }
 
@@ -180,15 +126,14 @@ mod tests {
 
     fn ms(n: u64) -> Duration { Duration::from_millis(n) }
 
-    /// Plays frames on time (a refresh apart) for at least `play`, each run taking `run`; returns
-    /// the decisions made.
-    fn on_time(c: &mut CpuMin, play: Duration, run: Duration) -> Vec<Decision> {
+    /// Plays frames on time (a refresh apart) for at least `play`; returns the decisions made.
+    fn on_time(c: &mut CpuMin, play: Duration) -> Vec<Decision> {
         let frames = play.as_nanos().div_ceil(PERIOD.as_nanos()) as u32;
-        (0..frames).filter_map(|_| c.frame(PERIOD, run, PERIOD)).collect()
+        (0..frames).filter_map(|_| c.frame(PERIOD, PERIOD)).collect()
     }
 
     /// One frame that missed its refresh (shown two refreshes after the one before).
-    fn miss(c: &mut CpuMin) -> Option<Decision> { c.frame(PERIOD * 2, ms(15), PERIOD) }
+    fn miss(c: &mut CpuMin) -> Option<Decision> { c.frame(PERIOD * 2, PERIOD) }
 
     #[test]
     fn starts_at_its_start_level_rounded_up_to_a_step() {
@@ -206,8 +151,8 @@ mod tests {
         let half = PERIOD / 2;
         miss(&mut c); // the first of a pair
         // Were it a miss, it would make a pair with the one before and step up.
-        assert_eq!(c.frame(PERIOD + half, ms(15), PERIOD), None, "1.5 refreshes is on time");
-        assert!(matches!(c.frame(PERIOD + half + ms(1), ms(15), PERIOD), Some(Decision::Set(Some(1800), _))));
+        assert_eq!(c.frame(PERIOD + half, PERIOD), None, "1.5 refreshes is on time");
+        assert!(matches!(c.frame(PERIOD + half + ms(1), PERIOD), Some(Decision::Set(1800, _))));
     }
 
     #[test]
@@ -215,26 +160,29 @@ mod tests {
         let mut c = CpuMin::new(STEPS.into(), Some(1800));
         assert_eq!(miss(&mut c), None);
         // A second miss more than 1 s of play later doesn't make a pair either.
-        assert!(on_time(&mut c, ms(1000), ms(4)).is_empty());
+        assert!(on_time(&mut c, ms(1000)).is_empty());
         assert_eq!(miss(&mut c), None);
         assert_eq!(c.current(), Some(1800));
     }
 
     #[test]
-    fn two_misses_within_a_second_step_up() {
+    fn two_misses_within_a_second_step_up_for_good() {
         let mut c = CpuMin::new(STEPS.into(), Some(1608));
         assert_eq!(miss(&mut c), None);
-        on_time(&mut c, ms(350), ms(15));
-        assert_eq!(miss(&mut c), Some(Decision::Set(Some(1800), "2 frames missed their refresh in 0.4 s at 1608 MHz".into())));
+        on_time(&mut c, ms(350));
+        assert_eq!(miss(&mut c), Some(Decision::Set(1800, "2 frames missed their refresh in 0.4 s at 1608 MHz".into())));
+        // Frames on time from then on never bring it down.
+        assert!(on_time(&mut c, ms(60_000)).is_empty());
+        assert_eq!(c.current(), Some(1800));
     }
 
     #[test]
     fn from_the_systems_default_the_first_step_up_is_to_1200_mhz() {
         let mut c = CpuMin::new(STEPS.into(), None);
         miss(&mut c);
-        assert!(matches!(miss(&mut c), Some(Decision::Set(Some(1200), _))));
+        assert!(matches!(miss(&mut c), Some(Decision::Set(1200, _))));
         miss(&mut c);
-        assert!(matches!(miss(&mut c), Some(Decision::Set(Some(1416), _))));
+        assert!(matches!(miss(&mut c), Some(Decision::Set(1416, _))));
     }
 
     #[test]
@@ -249,49 +197,10 @@ mod tests {
     }
 
     #[test]
-    fn ten_seconds_on_time_with_room_to_spare_step_down() {
-        // Symphony of the Night on the Brick: 12 ms at 2000 MHz is about 13.3 ms at 1800, within
-        // 85 % of a refresh (14.1 ms).
-        let mut c = CpuMin::new(STEPS.into(), Some(2000));
-        let decisions = on_time(&mut c, ms(10_000), ms(12));
-        let [Decision::Set(Some(1800), why)] = &decisions[..] else { panic!("{decisions:?}") };
-        assert_eq!(why, "10 s on time; slowest runs 12.0 ms, about 13.3 ms at 1800 MHz");
-        // And again after another 10 s, not before.
-        assert!(on_time(&mut c, ms(9_000), ms(4)).is_empty());
-        assert!(matches!(&on_time(&mut c, ms(1_000), ms(4))[..], [Decision::Set(Some(1608), _)]));
-    }
-
-    #[test]
-    fn no_step_down_without_room_to_spare() {
-        // Metal Gear Solid on the Brick: 14.5 ms at 2000 MHz is about 16.1 ms at 1800, over 85 %
-        // of a refresh (14.1 ms).
-        let mut c = CpuMin::new(STEPS.into(), Some(2000));
-        let decisions = on_time(&mut c, ms(20_000), Duration::from_micros(14_500));
-        assert!(decisions.is_empty(), "{decisions:?}");
-        assert_eq!(c.current(), Some(2000));
-        // A miss restarts the 10 s: none is taken 10 s after the start if a miss came meanwhile.
-        let mut c = CpuMin::new(STEPS.into(), Some(1800));
-        on_time(&mut c, ms(5_000), ms(4));
-        miss(&mut c);
-        assert!(on_time(&mut c, ms(9_000), ms(4)).is_empty());
-    }
-
-    #[test]
-    fn a_step_down_from_1200_mhz_is_to_the_systems_default() {
-        let mut c = CpuMin::new(STEPS.into(), Some(1200));
-        let decisions = on_time(&mut c, ms(10_000), ms(2));
-        assert!(matches!(&decisions[..], [Decision::Set(None, _)]), "{decisions:?}");
-        assert_eq!(c.current(), None);
-        // Nothing lower then.
-        assert!(on_time(&mut c, ms(10_000), ms(2)).is_empty());
-    }
-
-    #[test]
     fn a_fixed_minimum_never_changes() {
         let mut c = CpuMin::fixed(STEPS.into(), Some(1800));
         miss(&mut c);
         assert_eq!(miss(&mut c), None);
-        assert!(on_time(&mut c, ms(20_000), ms(1)).is_empty());
         assert_eq!(c.current(), Some(1800));
     }
 

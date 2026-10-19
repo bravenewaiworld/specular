@@ -50,7 +50,7 @@ Completed:
  - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)
  - Screen scaling: integer, fit, stretch
  - Measured on the Brick: Nestopia at full speed (Contra 6.8 ms a frame, Zelda 5.7 ms) SwanStation reaches full speed only with the CPU at 1.8 GHz or more (Metal Gear Solid, Castlevania: Symphony of the Night), its drawing thread helping (docs/runtime.md)
- - The CPU's speed held up from the game's own frames, through the OS's `brick-power cpu-min`: PS1 games start with a minimum of 1.8 GHz; two frames that miss their refresh within a second raise it a step (from the system's default, the first step is 1.2 GHz; lower steps only when set in the config files), and 10 s on time with room to spare lower it a step; the system's default in the game's menu and outside games. `power.cpu_min` in the config files turns it off or fixes it, per system or per game. Logged with each change's reason, and shown in the frame statistics
+ - The CPU's speed held up from the game's own frames, through the OS's `brick-power cpu-min`: PS1 games start with a minimum of 1.8 GHz; two frames that miss their refresh within a second raise it a step (from the system's default, the first step is 1.2 GHz; lower steps only when set in the config files), and it stays there until the game ends; the system's default in the game's menu and outside games. `power.cpu_min` in the config files turns it off or fixes it, per system or per game. Logged with each change's reason, and shown in the frame statistics
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play, Famicom Disk System games too: the ROM is unzipped into memory, never onto the card, and given to the core under the zip's name; a zip that can't be played says why
  - Cores' own log messages go into Specular's log (debug messages left out, and at most 30 a second)
@@ -63,8 +63,7 @@ Completed:
 
 TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
- - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps; the step down, as Contra came back from 1.6 GHz to the default in 10 s steps; a game without a start level going to 1.2 GHz after two misses; the frame statistics' second line). Left:
-   - Symphony of the Night never steps down from 2.0 GHz in Specular, though it would fit at 1.8: it misses a single refresh every few seconds even at 2.0 GHz with 5 ms to spare (not for want of CPU; it doesn't headless), and each miss restarts the 10 s on time. Find why the game thread misses there, or let a lone miss not restart the 10 s
+ - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps; a game without a start level going to 1.2 GHz after two misses; the frame statistics' second line). Left:
    - Steps up have no settling time: a burst of misses (as when something reads the framebuffer) raised Contra three steps in a second
    - Measure what it costs in battery (docs/runtime.md, Open questions)
 
@@ -145,6 +144,7 @@ TODO:
 
 TODO:
  - USB audio output (headset dongles, USB-C DACs)
+ - Step the CPU minimum down during a game when it has room to spare, tuned so it never costs missed frames (the consequence of a false step down is a worse game than a shorter battery life); see docs/runtime.md Findings 2026-10-19 for SotN's lone misses and the rule tried
  - CPU profile chosen by Specular for the menus and for saving power (the OS's `brick-power profile performance|balanced|saver`; games already get a minimum speed of their own), never a setting in the UI; overridable only in the config files
  - The top USB-C port's power on or off (`brick-power usb-top on|off`, which refuses while a device is attached)
  - At 3 % battery, the game is saved and quit (the OS powers off at 1 %)

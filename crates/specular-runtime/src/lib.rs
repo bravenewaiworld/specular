@@ -349,8 +349,7 @@ fn percentile(sorted: &[Duration], q: usize) -> Duration { sorted.get(sorted.len
 const CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The time the UI needs to draw and present a frame once the core has made it: the frame delay
-/// leaves this much of each refresh after the slowest runs. (The CPU minimum's step down doesn't
-/// count it: see `cpu::HEADROOM` in specular-core.)
+/// leaves this much of each refresh after the slowest runs.
 const UI_TIME: Duration = Duration::from_millis(6);
 
 /// Times the game's frames (see the module doc).
@@ -393,13 +392,6 @@ impl Pacer {
 
     /// The game paused or resumed: the next wait's gap would count the pause.
     fn paused(&mut self) { self.last_vsync = None; }
-
-    /// Measures the frame delay afresh, from none (the CPU's speed changed, so runs take another
-    /// time: a delay sized for a faster CPU would make the next frames miss their refresh).
-    fn remeasure(&mut self) {
-        self.delay = Duration::ZERO;
-        self.runs.clear();
-    }
 
     /// With a vsync, records how long a run took, and every 60 runs sets the frame delay to what
     /// the slowest runs (the 95th percentile) leave.
@@ -481,7 +473,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         unsafe { (game.core.run)() };
         let took = t.elapsed();
         pacer.ran(took);
-        if let Some(gap) = gap && cpu.frame(gap, took, pacer.period) { pacer.remeasure(); }
+        if let Some(gap) = gap { cpu.frame(gap, pacer.period); }
         {
             let mut r = runs.lock().unwrap();
             r.cpu_min = cpu.level();

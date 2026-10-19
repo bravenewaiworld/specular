@@ -26,13 +26,12 @@ impl CpuSpeed {
     pub(crate) fn level(&self) -> Option<u32> { self.min.current() }
 
     /// Hands one frame to `CpuMin::frame`. The caller takes `gap` from `Pacer::wait` and skips the
-    /// frames it gives none for. Returns whether the minimum changed: the caller then measures the
-    /// frame delay again (`Pacer::remeasure`), as the core's runs take another time at the new speed.
-    pub(crate) fn frame(&mut self, gap: Duration, run: Duration, period: Duration) -> bool {
-        match self.min.frame(gap, run, period) {
-            Some(Decision::Set(mhz, why)) => { self.apply(mhz, &why); true }
-            Some(Decision::Note(note)) => { eprintln!("cpu: {note}"); false }
-            None => false,
+    /// frames it gives none for.
+    pub(crate) fn frame(&mut self, gap: Duration, period: Duration) {
+        match self.min.frame(gap, period) {
+            Some(Decision::Set(mhz, why)) => self.apply(Some(mhz), &why),
+            Some(Decision::Note(note)) => eprintln!("cpu: {note}"),
+            None => {}
         }
     }
 
