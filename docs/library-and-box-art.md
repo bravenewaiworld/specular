@@ -7,7 +7,7 @@ How Specular finds the games on the card, works out their systems, identifies ea
 ## Decisions
 
 - **The library is scanned from `roms/`, in any folder layout** (2026-10-12). A game's system is worked out from its file extension, and from its header where an extension is shared. The folder name only breaks a tie the header leaves, for extensions several systems share (e.g. `.bin`, `.iso`, `.chd`) (2026-10-18). Rejected: always using folder names (cards are organised in too many ways).
-- **Systems without a core are left out of the library** (2026-10-13). Rejected: listing their games and failing when one is launched.
+- **Systems without a core are left out of the library** (2026-10-13). A core the user adds to the card counts (2026-10-18): the SNES and the Mega Drive appear once one serves them (see [runtime.md](runtime.md)). Rejected: listing their games and failing when one is launched.
 - **Box art comes from libretro-thumbnails, downloaded on the device over WiFi** (2026-10-12). Box art only to start with; no PC companion yet. The art is the publishers' copyright, so it is never bundled or mirrored; RetroArch's on-demand download is the precedent we follow. Rejected: LaunchBox (no licence for third-party use), IGDB (its secret can't ship in open source), MobyGames (paid), TheGamesDB (name search only).
 - **Plain HTTP** (2026-10-13). The server sends the same files either way. Rejected: TLS (about 1.5 MB more, root certificates to keep current, and a dependence on the clock being set).
 - **Identification is offline, from tables compiled in** (2026-10-13). `tools/trim-db.py` trims libretro-database, pinned to one commit, to checksum, serial and name per system, in `data/db/`. The data is CC-BY-SA: it is credited in `data/db/NOTICE`, and the trimmed tables keep that licence.
@@ -44,16 +44,17 @@ pub struct SystemDecl {
     pub tint: &'static str,                   // a palette colour, for its screens (look-and-motion.md)
     pub extensions: &'static [&'static str],
     pub libretro_name: &'static str,          // e.g. "Nintendo - Game Boy Advance"
+    pub libretro_id: &'static str,            // its systemid in libretro's core info files, e.g. "game_boy_advance"
     pub screen: (u32, u32),                   // native size, to place the game before its first frame
     pub game_db: &'static str,                // the trimmed table, compiled in
     pub header_code: Option<(u64, usize)>,    // where the header holds a game code (GBA: 0xAC, 4)
     pub disc_serial: Option<fn(&Path) -> io::Result<Option<String>>>,  // reads a disc's serial (PS1)
-    pub core: Option<&'static CoreDecl>,      // None: its games aren't listed
+    pub cores: Vec<&'static CoreDecl>,        // its own first, then the user's; empty: its games aren't listed
     pub dump_header: u64,                     // a copier header left out of checksums (SNES: 512)
 }
 ```
 
-Built in: GB, GBC and GBA (with mGBA), NES (Nestopia), PS1 (SwanStation), and SNES and Mega Drive (no core yet). PS1 discs are listed by their `.cue`, `.chd`, `.pbp` or `.m3u`.
+Built in: GB, GBC and GBA (with mGBA), NES (Nestopia), PS1 (SwanStation), and SNES and Mega Drive (no core of Specular's yet; a core on the card can serve them). The library is scanned with the systems that have a core, which the cores on the card can change: they are looked for before each scan, and a change in `cores/` leads to a scan too. PS1 discs are listed by their `.cue`, `.chd`, `.pbp` or `.m3u`.
 
 ### Search
 

@@ -88,7 +88,7 @@ pub trait Screen {
 |---|---|
 | UI | Slint, the app, uploading game frames |
 | I/O | loading and saving settings (saves queued together are merged) |
-| Scan | library scans, then moving saves of renamed ROMs |
+| Scan | looking for the cores on the card, library scans, then moving saves of renamed ROMs |
 | Hardware | the device's hardware services; reads the battery every 10 s |
 | One per radio | WiFi and Bluetooth commands, which can block for seconds |
 | Headphone jack | waits for plugging and unplugging |
@@ -201,7 +201,7 @@ The UI gives the app the credits with `licences.txt`'s path, if it is beside the
 ```rust
 pub struct LaunchRecord {
     pub core: String,            // "mGBA" (CoreDecl::name)
-    pub library: PathBuf,        // .../cores/mgba_libretro.so
+    pub library: PathBuf,        // .../cores/mgba_libretro.so (a user core's on the card)
     pub system: String,
     pub game: PathBuf,           // under roms/
     pub started: u64,            // seconds since 1970, by the device's clock
@@ -222,7 +222,7 @@ Msg::LastGameStopped(LaunchRecord)
 |---|---|
 | Screens | `App::register(ScreenId, Box<dyn Screen>)`; `ScreenId` is a string so plugins can add their own |
 | Settings | the `Vec<SettingDecl>` given to `App::new`: Specular's and its cores' options (`settings::declarations`; see [settings.md](settings.md)) |
-| Systems and emulators | the `Vec<SystemDecl>` given to `App::new`, each naming its `CoreDecl` |
+| Systems and emulators | the `Vec<SystemDecl>` given to `App::new`, each naming its `CoreDecl`s; the cores the user adds to the card (`library::user_cores`; see [runtime.md](runtime.md)) join them through `Msg::Cores`, which replaces the systems and the settings |
 | Art sources | the ordered `Vec<Box<dyn ArtSource>>` given to the art worker |
 | Lights and rumble effects | the ordered `Vec<Box<dyn effects::Reaction>>` given to `Effects::new` (see [look-and-motion.md](look-and-motion.md)) |
 | Themes | not yet: there is one theme, `crates/specular-ui/ui/theme.slint` |

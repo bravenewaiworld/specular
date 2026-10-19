@@ -13,14 +13,15 @@ use specular_core::device::{Device, Output, SoundOut};
 use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
-use specular_core::library::{Game, SystemDecl};
+use specular_core::library::{CoreDecl, Game, user_cores};
 use specular_core::rumble::RumbleLine;
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
 use crate::sounds::Sounds;
 use crate::{AppWindow, DataRoot};
 
-/// Where cores are installed: `$SPECULAR_CORES`, else `cores/` next to Specular's binary.
+/// Where Specular's own cores are installed: `$SPECULAR_CORES`, else `cores/` next to Specular's
+/// binary.
 fn cores_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("SPECULAR_CORES") { return d.into(); }
     let exe = std::env::current_exe().unwrap_or_default();
@@ -48,16 +49,16 @@ pub struct Playing {
 pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
-    /// Starts `game` with its system's core, given these `options` (`App::core_options`), its
-    /// sound on `output` and its rumble on `rumble`, on another thread, since reading a large ROM
-    /// or opening a Bluetooth output can take a second or more; then calls `started` there with the
-    /// result. The UI is told of each new frame (`Runner::game_frame`) and each in-game save.
-    /// Before opening the game's output, that thread waits for the interface `sounds` to close
-    /// theirs.
-    pub fn start(game: &Game, system: &SystemDecl, options: Vec<(String, String)>, data: &DataRoot, device: &SharedDevice, sounds: &Sounds,
+    /// Starts `game` with `core` (`App::playing_core`), given these `options`
+    /// (`App::core_options`), its sound on `output` and its rumble on `rumble`, on another thread,
+    /// since reading a large ROM or opening a Bluetooth output can take a second or more; then
+    /// calls `started` there with the result. The UI is told of each new frame
+    /// (`Runner::game_frame`) and each in-game save. Before opening the game's output, that thread
+    /// waits for the interface `sounds` to close theirs. A core the user added has the options it
+    /// declares learned, once the game has started (`user_cores::learn`).
+    pub fn start(game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, data: &DataRoot, device: &SharedDevice, sounds: &Sounds,
                  output: Output, rumble: Option<RumbleLine>, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
-        let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
-        let library = cores_dir().join(format!("{}.so", core.library));
+        let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
         let spec = LaunchSpec {
             core: library,
@@ -66,7 +67,9 @@ impl Playing {
             autosave: Some(game.state_path(&data.roms(), "autosave")),
             system_dir: data.bios(),
             options,
-            option_list: Some(specular_core::settings::core_options::list(core)),
+            // Only to log how a core differs from its list: a user core's list is what it declared
+            // itself, and a change is learned again (`user_cores::learn`) rather than logged.
+            option_list: core.user.is_none().then(|| specular_core::settings::core_options::list(core)),
             rom_by_path: core.rom_by_path,
             record: Some(record.clone()),
             states_restore_save: core.states_restore_save,
@@ -83,7 +86,7 @@ impl Playing {
         let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
         let (vsync, display_hz) = (device.open_vsync(), device.profile().refresh_hz);
         let state = game.state_path(&data.roms(), "state1");
-        let (roms, saves, played, device, sounds) = (data.roms(), data.saves(), game.clone(), device.clone(), sounds.clone());
+        let (roms, saves, learned, played, device, sounds) = (data.roms(), data.saves(), data.learned_options(), game.clone(), device.clone(), sounds.clone());
         std::thread::spawn(move || {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
@@ -92,7 +95,15 @@ impl Playing {
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }
-            started(Session::start(spec, out).map(|session| Self { session, frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0) }))
+            let session = Session::start(spec, out);
+            let declared = session.as_ref().ok().map(|s| s.info().options.clone());
+            started(session.map(|session| Self { session, frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0) }));
+            let Some(d) = declared else { return };
+            match user_cores::learn(core, &learned, &d) {
+                Ok(true) => eprintln!("cores: learned {}'s options ({}), kept in {}", core.name, d.options.len(), learned.display()),
+                Err(e) => eprintln!("cores: can't keep {}'s options in {}: {e}", core.name, learned.display()),
+                Ok(false) => {}
+            }
         });
     }
 

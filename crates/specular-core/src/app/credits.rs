@@ -39,7 +39,9 @@ pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) { scree
 
 /// What the splash shown while a game starts says about the core that runs it: its name (as its
 /// `CoreDecl` gives it), and its credit's copyright notice and web address (None when the credits
-/// don't list the core).
+/// don't list the core). A core the user added isn't shipped, so has no credit: the splash shows
+/// its `.info`'s display name instead, with its authors and licence as the notice
+/// (`UserCore::notice`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Splash { pub core: &'static str, pub copyright: Option<&'static str>, pub url: Option<&'static str> }
 
@@ -50,10 +52,12 @@ impl App {
     /// The splash for the game being played; None while none is, or its system has no core. A
     /// core's credit is the one of kind `Core` with the core's name.
     pub fn splash(&self) -> Option<Splash> {
-        let game = self.playing.as_ref()?;
-        let core = self.ctx.systems.iter().find(|s| s.id == game.system)?.core?.name;
-        let credit = self.ctx.credits.projects.iter().find(|c| c.kind == CreditKind::Core && c.name == core);
-        Some(Splash { core, copyright: credit.and_then(|c| c.copyright), url: credit.and_then(|c| c.url) })
+        let core = self.playing_core()?;
+        if let Some(u) = core.user {
+            return Some(Splash { core: &u.display_name, copyright: Some(u.notice.as_str()).filter(|n| !n.is_empty()), url: None });
+        }
+        let credit = self.ctx.credits.projects.iter().find(|c| c.kind == CreditKind::Core && c.name == core.name);
+        Some(Splash { core: core.name, copyright: credit.and_then(|c| c.copyright), url: credit.and_then(|c| c.url) })
     }
 }
 

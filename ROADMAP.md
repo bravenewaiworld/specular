@@ -52,8 +52,9 @@ Completed:
  - Battery saves protected from cores whose save states also restore the save memory: each state carries a checksum of the save it was made with, and a newer `.srm` that a loaded state would overwrite is kept as `<name>.newer.srm`
  - A game that needs a BIOS file it doesn't have says which file to put in `bios/`; environment calls a core makes that Specular refuses are logged
 
+ - Cores added to the SD card (`cores/<name>_libretro.so` with its `.info`, as the libretro buildbot ships them) for the systems Specular has: the SNES and Mega Drive appear once one serves them, and a "Core" setting per system and per game chooses where there are several (Specular's own by default). Their options are learned at their first game, and are settings from then on (relearned when the core is replaced). A core without an `.info`, for no system Specular has, or built for another processor is turned away with why, in the log and (with Developer details) on Settings → Cores. Their splash shows their `.info`'s name, authors and licence; their battery saves are protected as if their states restore save memory
+
 TODO:
- - User added/pluggable libretro cores (loaded from `{sd card}/cores/{name}`)
  - Speed check of Nestopia and SwanStation on the Brick (measured on a PC only), including whether SwanStation's drawing thread helps there
  - PS1 games on several discs: changing discs (SwanStation's disk control interface is refused today)
  - Zipped Famicom Disk System games (Nestopia tells them apart by the `.fds` in the path, which an unzipped ROM's path lacks)
@@ -139,6 +140,7 @@ TODO:
 ### Core Integration and Support
 
 TODO:
+ - Systems from cores' `.info` files (the cores added to the card serve only the systems Specular has: a new one also needs its game table, colour and screen size)
  - 3D cores, with a GL context shared with the UI's (built and measured on the Brick; SwanStation's hardware renderer would be the first user)
  - SNES and Mega Drive cores (each needs a licence, speed and save-memory check). bsnes is likely too slow for a Cortex-A53, and BlastEm's 68000 emulation is an x86 recompiler; also consider Beetle Supafaust (SNES) and ClownMDEmu (Mega Drive)
 

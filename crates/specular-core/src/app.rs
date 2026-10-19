@@ -21,6 +21,7 @@ use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
 use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
+mod cores;
 mod credits;
 mod icons;
 mod install;
@@ -42,6 +43,11 @@ pub enum Msg {
     /// A library scan finished. `card_found` is false when the data folder is missing or empty,
     /// which is how a device looks without its SD card.
     Library { games: Vec<Game>, card_found: bool },
+    /// The cores changed (cores the user added were found or removed, or one's options learned):
+    /// the systems Specular plays now, with their cores, every setting with those cores' options
+    /// (`settings::declarations`), and the files in `cores/` turned away. Sent before the
+    /// `Library` of the scan that used these systems.
+    Cores { systems: Vec<SystemDecl>, settings: Vec<SettingDecl>, turned_away: Vec<library::user_cores::TurnedAway> },
     Battery(Battery),
     /// The device woke from sleep.
     Woke,
@@ -172,6 +178,8 @@ pub struct Ctx {
     /// None on a device without an installer; see `App::has_installer`.
     pub install: Option<InstallState>,
     pub credits: Credits,
+    /// The files in the card's `cores/` that aren't used, and why (see `Msg::Cores`).
+    pub turned_away: Vec<library::user_cores::TurnedAway>,
 }
 
 impl Ctx {
@@ -242,6 +250,9 @@ pub mod screens {
     pub const WIFI: ScreenId = ScreenId(std::borrow::Cow::Borrowed("wifi"));
     /// Every icon in each of its states; a developer screen.
     pub const ICONS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("icons"));
+    /// Every core, Specular's and those on the SD card (and the files there turned away); a
+    /// developer screen.
+    pub const CORES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("cores"));
     pub const BLUETOOTH: ScreenId = ScreenId(std::borrow::Cow::Borrowed("bluetooth"));
     /// "Forget …?", with what to forget in its params (see `app::wireless::Forget`).
     pub const FORGET: ScreenId = ScreenId(std::borrow::Cow::Borrowed("forget"));
@@ -316,10 +327,11 @@ impl App {
         icons::register(&mut screens);
         install::register(&mut screens);
         credits::register(&mut screens);
+        cores::register(&mut screens);
         layers::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
-                   credits: Credits::default() },
+                   credits: Credits::default(), turned_away: Vec::new() },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -376,10 +388,12 @@ impl App {
         crate::settings::core_options::values(&self.ctx.settings, core, &game.settings_layer())
     }
 
-    /// The running game's core.
-    fn playing_core(&self) -> Option<&'static library::CoreDecl> {
+    /// The core that plays the running game: its system's, as its "Core" setting chooses
+    /// (`settings::core_of`).
+    pub fn playing_core(&self) -> Option<&'static library::CoreDecl> {
         let game = self.playing.as_ref()?;
-        self.ctx.systems.iter().find(|s| s.id == game.system)?.core
+        let system = self.ctx.systems.iter().find(|s| s.id == game.system)?;
+        crate::settings::core_of(&self.ctx.settings, system, &game.settings_layer())
     }
 
     /// The layer settings are applied at now: the running game's, else the global one.
@@ -532,6 +546,16 @@ impl App {
                 self.ctx.scanned = true;
                 self.changed();
                 vec![Effect::Redraw(None)]
+            }
+            Msg::Cores { systems, settings, turned_away } => {
+                self.ctx.systems = systems;
+                self.ctx.settings.declare(settings);
+                self.ctx.turned_away = turned_away;
+                self.changed();
+                // The running game's core may have had its options learned: it is given the values
+                // set for them.
+                let options = self.playing.is_some().then(|| Effect::CoreOptions(self.core_options()));
+                std::iter::once(Effect::Redraw(None)).chain(options).collect()
             }
             // A game slept through stays paused, with its menu open.
             Msg::Woke => {
@@ -949,7 +973,9 @@ impl Screen for SettingsScreen {
         // Credits, last in the System section.
         let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
         rows.insert(system_end, credits::settings_row());
-        if ctx.visibility() == Visibility::Developer { rows.push(Row::new("open:icons", "Icons", RowKind::Action { value: None })); }
+        if ctx.visibility() == Visibility::Developer {
+            rows.extend([action("open:cores", "Cores"), action("open:icons", "Icons")]);
+        }
         rows.extend(install::settings_rows(ctx));
         ScreenView { title: "Settings".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
     }
@@ -960,6 +986,7 @@ impl Screen for SettingsScreen {
         if p.button == Button::A && let Some(row) = focused {
             match row.id.0.as_str() {
                 "open:icons" => return Outcome::Push(ScreenState::new(screens::ICONS, None)),
+                "open:cores" => return Outcome::Push(ScreenState::new(screens::CORES, None)),
                 "open:credits" => return Outcome::Push(ScreenState::new(screens::CREDITS, None)),
                 _ => {}
             }

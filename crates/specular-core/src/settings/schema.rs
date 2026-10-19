@@ -25,32 +25,33 @@ pub fn file(layer: &Layer) -> PathBuf {
 /// each of `systems` (the caller passes those with a core): its file's, and its games' shared one;
 /// then one for each of their cores' files.
 pub fn all(decls: &[SettingDecl], systems: &[SystemDecl]) -> Vec<(PathBuf, Value)> {
-    let global = schema(decls, &Layer::Global, None, "Specular settings",
+    let global = schema(decls, &Layer::Global, &[], "Specular settings",
         "Specular's settings. This file holds only the settings you changed: any left out has the default shown here.");
     let per_system = systems.iter().flat_map(|s| {
-        let core = s.core.map(|c| c.id());
-        let also = core.map_or(String::new(), |c| format!(", and cores/{c}.json for the emulator's options"));
+        let cores: Vec<&str> = s.cores.iter().map(|c| c.id()).collect();
+        let files = cores.iter().map(|c| format!("cores/{c}.json")).collect::<Vec<_>>().join(" or ");
+        let also = if cores.is_empty() { String::new() } else { format!(", and {files} for the emulator's options") };
         let (system, game) = (Layer::System(s.id.into()), Layer::Game { system: s.id.into(), game: String::new() });
         [
-            (file(&system), schema(decls, &system, core, &format!("{} settings", s.name),
+            (file(&system), schema(decls, &system, &cores, &format!("{} settings", s.name),
                 &format!("Settings for all {} games, overriding specular.json{also}. This file holds only the settings you changed.", s.name))),
-            (file(&game), schema(decls, &game, core, &format!("{} game settings", s.name),
+            (file(&game), schema(decls, &game, &cores, &format!("{} game settings", s.name),
                 &format!("Settings for one {} game, overriding systems/{}.json and specular.json{also}. This file holds only the settings you changed.", s.name, s.id))),
         ]
     });
     let per_core = crate::library::cores(systems).into_iter().map(|c| {
         let layer = Layer::Core(c.id().into());
-        (file(&layer), schema(decls, &layer, Some(c.id()), &format!("{} options", c.name),
+        (file(&layer), schema(decls, &layer, &[c.id()], &format!("{} options", c.name),
             &format!("The options of {}, the emulator, for every game it plays; each system's and each game's settings can override them. This file holds only the options you changed.", c.name)))
     });
     std::iter::once((file(&Layer::Global), global)).chain(per_system).chain(per_core).collect()
 }
 
 /// The schema of `layer`'s file: the settings that may be set there, Specular's own and the
-/// options of `core` (the system's). Keys it doesn't list are allowed, as Specular keeps them (a
+/// options of `cores` (the system's). Keys it doesn't list are allowed, as Specular keeps them (a
 /// plugin's settings, or a newer version's).
-pub fn schema(decls: &[SettingDecl], layer: &Layer, core: Option<&str>, title: &str, description: &str) -> Value {
-    let properties: Map<String, Value> = decls.iter().filter(|d| (d.core.is_none() || d.core == core) && d.settable_at(layer))
+pub fn schema(decls: &[SettingDecl], layer: &Layer, cores: &[&str], title: &str, description: &str) -> Value {
+    let properties: Map<String, Value> = decls.iter().filter(|d| d.core.is_none_or(|c| cores.contains(&c)) && d.settable_at(layer))
         .map(|d| (d.key.to_string(), property(d))).collect();
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",

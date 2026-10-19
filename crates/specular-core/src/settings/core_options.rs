@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Layer, Scope, SettingDecl, SettingKind, Settings, Visibility};
+use super::{leak, Layer, Scope, SettingDecl, SettingKind, Settings, Visibility};
 use crate::library::CoreDecl;
 
 include!(concat!(env!("OUT_DIR"), "/core_options.rs"));
@@ -91,26 +91,29 @@ impl CoreOptions {
     }
 }
 
-/// A core's option list, parsed, and the settings made from it. Made once per core and kept for
-/// the rest of the run, as declarations take `'static` text, which they borrow from the list.
-struct Compiled { core: &'static str, list: &'static CoreOptions, decls: Vec<SettingDecl> }
+/// A core's option list, parsed, and the settings made from it. Made once per core and list (a
+/// core the user added gets another once its options are learned) and kept for the rest of the run,
+/// as declarations take `'static` text, which they borrow from the list.
+struct Compiled { core: &'static str, text: &'static str, list: &'static CoreOptions, decls: Vec<SettingDecl> }
 
 fn compiled(core: &'static CoreDecl) -> &'static Compiled {
     static ALL: Mutex<Vec<&'static Compiled>> = Mutex::new(Vec::new());
     let mut all = ALL.lock().unwrap();
-    if let Some(c) = all.iter().find(|c| c.core == core.id()) { return c; }
+    if let Some(c) = all.iter().find(|c| c.core == core.id() && c.text == core.options) { return c; }
+    // (A user core's list always parses: `user_cores` writes it from a parsed list.)
     let list: &'static CoreOptions = Box::leak(Box::new(serde_json::from_str(core.options)
-        .unwrap_or_else(|e| panic!("data/cores/{}.json isn't a list of core options: {e}", core.id()))));
+        .unwrap_or_else(|e| panic!("{}'s option list (data/cores/) isn't a list of core options: {e}", core.id()))));
     // Grouped by category (a section each), in the categories' order.
     let mut options: Vec<&'static CoreOption> = list.options.iter().collect();
     options.sort_by_key(|o| list.categories.iter().position(|c| o.category.as_ref() == Some(&c.key)));
     let decls = options.into_iter().map(|o| decl(core, list, o)).collect();
-    let c = Box::leak(Box::new(Compiled { core: core.id(), list, decls }));
+    let c = Box::leak(Box::new(Compiled { core: core.id(), text: core.options, list, decls }));
     all.push(c);
     c
 }
 
-/// A core's option list (from `CoreDecl::options`).
+/// A core's option list (from `CoreDecl::options`; empty for a core the user added until its
+/// options are learned).
 pub fn list(core: &'static CoreDecl) -> &'static CoreOptions { compiled(core).list }
 
 /// The settings for a core's options: developer settings (shown with "Developer details"), under
@@ -119,7 +122,6 @@ pub fn list(core: &'static CoreDecl) -> &'static CoreOptions { compiled(core).li
 pub fn decls(core: &'static CoreDecl) -> &'static [SettingDecl] { &compiled(core).decls }
 
 fn decl(core: &'static CoreDecl, list: &'static CoreOptions, o: &'static CoreOption) -> SettingDecl {
-    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
     let category = list.categories.iter().find(|c| o.category.as_ref() == Some(&c.key));
     let section = category.map_or(core.name, |c| leak(format!("{}: {}", core.name, c.label)));
     let ours = core.default_of(&o.key);
@@ -136,7 +138,7 @@ fn decl(core: &'static CoreDecl, list: &'static CoreOptions, o: &'static CoreOpt
         key: &o.key, section, label: &o.label, help: leak(help),
         kind: SettingKind::Choice(Box::leak(choices.into_boxed_slice())),
         default: Value::from(ours.unwrap_or(&o.default)),
-        visibility: Visibility::Developer, deepest: Scope::Game, core: Some(core.id()),
+        visibility: Visibility::Developer, deepest: Scope::Game, core: Some(core.id()), system: None,
     }
 }
 

@@ -12,18 +12,18 @@ const SCALING: &[(&str, &str)] = &[("integer", "Integer"), ("fit", "Fit"), ("str
 fn decls() -> Vec<SettingDecl> {
     vec![
         SettingDecl { key: "display.brightness", section: "Display", label: "Brightness", help: "How bright.", kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" },
-            default: json!(7), visibility: Visibility::User, deepest: Scope::Global, core: None },
+            default: json!(7), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: "video.scaling", section: "Display", label: "Scaling", help: "How big.", kind: SettingKind::Choice(SCALING),
-            default: json!("integer"), visibility: Visibility::User, deepest: Scope::Game, core: None },
+            default: json!("integer"), visibility: Visibility::User, deepest: Scope::Game, core: None, system: None },
         SettingDecl { key: "dev.frame_stats", section: "Developer", label: "Frame stats", help: "How fast.", kind: SettingKind::Bool,
-            default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global, core: None },
+            default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global, core: None, system: None },
     ]
 }
 
 /// A core's option, as `core_options::decls` makes them.
 fn idle() -> SettingDecl {
     SettingDecl { key: "mgba_idle", section: "mGBA", label: "Idle loops", help: "Skips them.", kind: SettingKind::Choice(&[("on", "on"), ("off", "off")]),
-        default: json!("on"), visibility: Visibility::Developer, deepest: Scope::Game, core: Some("mgba") }
+        default: json!("on"), visibility: Visibility::Developer, deepest: Scope::Game, core: Some("mgba"), system: None }
 }
 
 fn gba() -> Layer { Layer::System("gba".into()) }
@@ -119,7 +119,7 @@ fn presses_change_values() {
 #[test]
 fn colours_step_through_the_palette_and_can_follow_another() {
     let colour = |key, same_as, default| SettingDecl { key, section: "Look", label: key, help: "", kind: SettingKind::Colour { same_as },
-        default: json!(default), visibility: Visibility::User, deepest: Scope::Global, core: None };
+        default: json!(default), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None };
     let mut s = Settings::new(vec![colour("Accent", None, "teal"), colour("second", Some("Accent"), "coral")]);
     let g = Layer::Global;
     assert_eq!(s.colour("second", &g), palette::find("coral"));
@@ -205,8 +205,8 @@ fn schemas_document_what_each_file_may_hold() {
     assert_eq!(core["title"], "mGBA options");
     // a colour lists the palette, after "same" if it can follow another
     let colour = SettingDecl { key: "c", section: "", label: "", help: "", kind: SettingKind::Colour { same_as: Some("a") },
-        default: json!("same"), visibility: Visibility::User, deepest: Scope::Global, core: None };
-    let s = schema::schema(&[colour], &Layer::Global, None, "", "");
+        default: json!("same"), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None };
+    let s = schema::schema(&[colour], &Layer::Global, &[], "", "");
     assert_eq!(s["properties"]["c"]["enum"].as_array().unwrap()[..2], [json!("same"), json!("teal")]);
 }
 

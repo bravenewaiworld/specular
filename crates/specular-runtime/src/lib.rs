@@ -101,6 +101,9 @@ pub struct GameInfo {
     /// The shape to show the picture in (width / height), which may differ from its pixels'.
     pub aspect: f32,
     pub fps: f64,
+    /// The options the core declared as it loaded the game (for learning those of a core the user
+    /// added: `user_cores::learn` in specular-core).
+    pub options: CoreOptions,
 }
 
 /// How long the core took to make its recent frames (the last `STATS_FRAMES`), and how many
@@ -361,7 +364,8 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     let mut pacer = Pacer::new(if by_display { out.vsync } else { None }, if by_display { out.display_hz } else { fps });
     let mut sound = sound::Sound::new(out.sound, av.timing.sample_rate, if by_display { speed } else { 1.0 });
     let g = av.geometry;
-    let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps }));
+    let options = frontend::with(|f| f.options.declared.clone()).unwrap_or_default();
+    let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps, options }));
 
     // Counted in frames played, so time paused doesn't count.
     let check_frames = (CHECK_INTERVAL.as_secs_f64() * fps) as u32;

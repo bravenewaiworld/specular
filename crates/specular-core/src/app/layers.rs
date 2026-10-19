@@ -70,12 +70,12 @@ fn view(title: String, rows: Vec<Row>) -> ScreenView {
     ScreenView { title, layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
 }
 
-/// The rows of `at`'s settings: Specular's, then `between`, then the options of `system`'s core
-/// (developer settings, so only with "Developer details"). A row that overrides has a hint for
-/// resetting it.
+/// The rows of `at`'s settings: Specular's, then `between`, then the options of the core that
+/// plays `system`'s games there (developer settings, so only with "Developer details"). A row
+/// that overrides has a hint for resetting it.
 fn rows(ctx: &Ctx, at: &Layer, system: &SystemDecl, between: Vec<Row>) -> Vec<Row> {
     let show = ctx.visibility();
-    let core = system.core.map(|c| ctx.settings.rows(at, show, Some(c.id()))).unwrap_or_default();
+    let core = crate::settings::core_of(&ctx.settings, system, at).map(|c| ctx.settings.rows(at, show, Some(c.id()))).unwrap_or_default();
     let mut rows: Vec<Row> = ctx.settings.rows(at, show, None).into_iter().chain(between).chain(core).collect();
     for r in rows.iter_mut().filter(|r| r.overridden) { r.hint = Some((Button::X, "Reset".into())); }
     rows

@@ -1165,3 +1165,77 @@ fn settings_files_other_than_the_global_one_apply_nothing_when_they_load() {
     assert_eq!(e, vec![Effect::Redraw(None)]);
     assert_eq!(a.ctx().settings.get(builtin::SCALING, &game("gba", "Golden Sun").settings_layer()).unwrap().0, &json!("fit"));
 }
+
+mod user_cores {
+    use super::*;
+    use crate::library::user_cores::{TurnedAway, UserCores, playable, tests::{GAMBATTE, SNES9X, cores_dir, library}};
+
+    /// The app once the cores of a card holding Snes9x and Gambatte are found, with a file turned
+    /// away; and the card (the cores' files go with it).
+    fn with_user_cores() -> (App, tempfile::TempDir) {
+        let card = cores_dir(&[("snes9x_libretro.so", &library()), ("snes9x_libretro.info", SNES9X.as_bytes()),
+                               ("gambatte_libretro.so", &library()), ("gambatte_libretro.info", GAMBATTE.as_bytes())]);
+        let found = UserCores::default().find(card.path(), card.path(), &builtin_systems());
+        let systems = playable(builtin_systems(), &found.cores);
+        let mut a = app();
+        let turned_away = vec![TurnedAway { file: "bare_libretro.so".into(), why: "no .info".into() }];
+        assert_eq!(a.handle(Msg::Cores { settings: crate::settings::declarations(&systems), systems, turned_away }), vec![Effect::Redraw(None)]);
+        (a, card)
+    }
+
+    fn open_a_system(a: &mut App, name: &str) {
+        focus_on(a, name);
+        tap(a, Button::A, 0);
+    }
+
+    #[test]
+    fn a_game_of_a_system_served_by_a_user_core_plays_with_it_and_its_splash_names_it() {
+        let (mut a, _card) = with_user_cores();
+        assert_eq!(labels(&a)[..3], ["Systems", "Game Boy Advance", "Super Nintendo"]);
+        open_a_system(&mut a, "Super Nintendo");
+        tap(&mut a, Button::A, 0);
+        assert_eq!(a.playing_core().map(|c| c.name), Some("Snes9x"));
+        // Not shipped, so not in the credits: what its .info says instead.
+        assert_eq!(a.splash(), Some(Splash { core: "Nintendo - SNES / SFC (Snes9x)", copyright: Some("Snes9x Team · Non-commercial"), url: None }));
+        assert_eq!(a.core_options(), vec![]); // none learned yet
+        // Its options learned meanwhile, it is given the values set for them.
+        let e = a.handle(Msg::Cores { systems: a.ctx().systems.clone(), settings: a.ctx().settings.decls().to_vec(), turned_away: vec![] });
+        assert_eq!(e, vec![Effect::Redraw(None), Effect::CoreOptions(vec![])]);
+    }
+
+    #[test]
+    fn the_core_setting_chooses_a_games_core_and_shows_that_cores_options() {
+        let (mut a, _card) = with_user_cores();
+        let tetris = game("gb", "Tetris");
+        a.handle(Msg::Library { games: vec![tetris.clone()], card_found: true });
+        let at = tetris.settings_layer();
+        assert_eq!(a.ctx().settings.get("core.gb", &at).unwrap().0, &json!("mgba"));
+        open_a_system(&mut a, "Game Boy");
+        tap(&mut a, Button::Start, 0);
+        focus_on(&mut a, "Core");
+        let e = tap(&mut a, Button::Right, 10);
+        assert!(e.contains(&Effect::SaveSettings(at.clone())), "{e:?}");
+        assert_eq!(a.ctx().settings.get("core.gb", &at).unwrap().0, &json!("gambatte"));
+        tap(&mut a, Button::B, 20);
+        tap(&mut a, Button::A, 30);
+        assert_eq!(a.playing_core().map(|c| c.id()), Some("gambatte"));
+    }
+
+    #[test]
+    fn the_cores_screen_lists_every_core_and_the_files_turned_away() {
+        let (mut a, _card) = with_user_cores();
+        a.handle(Msg::SettingsLoaded(Layer::Global, json!({ builtin::DEVELOPER_DETAILS: true }).as_object().unwrap().clone()));
+        tap(&mut a, Button::Up, 0); // Settings
+        tap(&mut a, Button::A, 10);
+        focus_on(&mut a, "Cores");
+        tap(&mut a, Button::A, 20);
+        let rows: Vec<(String, Option<String>)> = a.view().rows.iter().map(|r| (r.label.clone(), match &r.kind {
+            RowKind::Text { detail } => detail.clone(), _ => None,
+        })).collect();
+        let row = |l: &str, d: Option<&str>| (l.to_string(), d.map(str::to_string));
+        assert_eq!(rows[..8], [row("Built in", None), row("mGBA", Some("GB, GBC, GBA")), row("Nestopia", Some("NES")), row("SwanStation", Some("PS1")),
+                               row("On the SD card", None), row("Gambatte", Some("GB, GBC")), rows[6].clone(), row("Snes9x", Some("SNES"))]);
+        assert_eq!(rows[6].0, "gambatte_libretro.so; its options are learned when it next plays a game");
+        assert_eq!(rows[9..], [row("Turned away", None), row("bare_libretro.so", None), row("No .info", None)]);
+    }
+}

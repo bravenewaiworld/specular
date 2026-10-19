@@ -24,7 +24,7 @@ use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNee
 use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble};
 use specular_core::effects::{self, Effects, Event};
 use specular_core::rumble::RumbleLine;
-use specular_core::library::Game;
+use specular_core::library::{self, Game, SystemDecl, user_cores};
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
 use specular_core::list;
@@ -125,6 +125,10 @@ impl DataRoot {
     pub fn cache(&self) -> PathBuf { self.0.join("cache") }
     pub fn saves(&self) -> PathBuf { self.0.join("saves") }
     pub fn bios(&self) -> PathBuf { self.0.join("bios") }
+    /// Cores the user adds (see `user_cores`).
+    pub fn cores(&self) -> PathBuf { self.0.join("cores") }
+    /// The options learned from the cores the user added (`user_cores::learn`).
+    pub fn learned_options(&self) -> PathBuf { self.cache().join("cores") }
     /// Fonts the user adds, for characters Specular's own fonts lack.
     pub fn fonts(&self) -> PathBuf { self.0.join("fonts") }
 }
@@ -170,7 +174,8 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     app.set_credits(Credits { projects: credits, texts });
     // Without WiFi, the network (if any) is assumed to be there.
     let online = wifi.is_none();
-    let art_worker = art::worker(data.roms(), data.cache(), systems, vec![Box::new(art::LibretroThumbnails::new())], online,
+    // Every system Specular declares: one may get a core from the card later.
+    let art_worker = art::worker(data.roms(), data.cache(), library::builtin_systems(), vec![Box::new(art::LibretroThumbnails::new())], online,
         |rom| on_ui(move |r| r.art_stored(rom)),
         |wanted| post(Msg::WifiNeed { need: WifiNeed::BoxArt, wanted, time: now() }));
     let art_loader = art::loader(data.roms(), data.cache(),
@@ -266,11 +271,10 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     Ok(())
 }
 
-/// The systems Specular can play: those it has a core for. Other systems' games aren't listed at
-/// all, rather than listed and failing to start (see docs/library-and-box-art.md).
-fn playable_systems() -> Vec<specular_core::library::SystemDecl> {
-    specular_core::library::builtin_systems().into_iter().filter(|s| s.core.is_some()).collect()
-}
+/// The systems Specular can play with its own cores, until the card's are found (see `io_thread`).
+/// Other systems' games aren't listed at all, rather than listed and failing to start (see
+/// docs/library-and-box-art.md).
+fn playable_systems() -> Vec<SystemDecl> { user_cores::playable(library::builtin_systems(), &[]) }
 
 /// Exits if the game's core gets stuck (see `Session::watch`): its thread can't be stopped, so
 /// the only way out is to end Specular, which the service manager then starts again. The battery
@@ -458,8 +462,8 @@ struct Save(PathBuf, serde_json::Map<String, serde_json::Value>);
 
 /// The I/O thread: brings the config folder up to date and loads the settings at start, then
 /// saves settings. Saves queued together are merged, so holding a button that changes a value
-/// writes the file once rather than once per step. The library scan, which then moves the saves of
-/// renamed ROMs, runs on a thread of its own.
+/// writes the file once rather than once per step. The library scan runs on a thread of its own:
+/// it looks for the card's cores, then scans the games and moves the saves of renamed ROMs.
 fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<Save>();
     let handle = std::thread::spawn(move || {
@@ -468,37 +472,47 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         let writable = settings::migrate::migrate(&data.0);
         if !writable { on_ui(|r| r.toast("Settings can't be saved until Specular restarts. The log says why.")); }
         let config = data.config();
-        let systems = playable_systems();
-        let decls = settings::declarations(&systems);
-        // The global layer, then each system's and each core's; games' are loaded with the library.
-        let cores = specular_core::library::cores(&systems).into_iter().map(|c| Layer::Core(c.id().into()));
-        for layer in [Layer::Global].into_iter().chain(systems.iter().map(|s| Layer::System(s.id.into()))).chain(cores) {
+        let mut systems = playable_systems();
+        let mut decls = settings::declarations(&systems);
+        // The global layer, then each system's (any may get a core from the card) and each of
+        // Specular's cores'; the card's cores' are loaded as they are found, and games' with the
+        // library.
+        let cores = library::cores(&systems).into_iter().map(|c| Layer::Core(c.id().into()));
+        for layer in [Layer::Global].into_iter().chain(library::builtin_systems().iter().map(|s| Layer::System(s.id.into()))).chain(cores) {
             post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
-        }
-        // No schemas without a card: the data folder is then the bare mount point, which must stay
-        // empty (see `card_found`).
-        if writable && card_found(&data) {
-            for (file, schema) in settings::schema::all(&decls, &systems) {
-                let path = config.join(file);
-                match store::store_generated(&path, &schema) {
-                    Ok(true) => eprintln!("settings: wrote {}", path.display()),
-                    Ok(false) => {}
-                    Err(e) => eprintln!("settings: can't write {}: {e}", path.display()),
-                }
-            }
         }
         // Before the scan, so no game can have been launched (writing a new record) yet.
         if let Some(r) = LaunchRecord::left_behind(&launch::path(&data.cache())) { post(Msg::LastGameStopped(r)); }
-        // The library: scanned now, and again whenever the games on the card change.
+        // The cores and the library: looked for now, and again whenever the files on the card change.
         std::thread::spawn(move || {
-            let (roms, saves) = (data.roms(), data.saves());
+            let (roms, saves, cores_dir, learned) = (data.roms(), data.saves(), data.cores(), data.learned_options());
             let watch = watch::RomsWatch::new().map_err(|e| eprintln!("library: can't watch for new games: {e}")).ok();
-            // The settings files of games already loaded, or found to be for no game.
             // The games whose settings files are loaded, and the files found to be for no game.
             let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
+            let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
+            let all = library::builtin_systems();
             loop {
-                if let Some(w) = &watch { w.watch(&roms); }
-                let games = specular_core::library::scan(&roms, &systems);
+                // `cache/cores/` is made beforehand so it can be watched: options learned are written
+                // there as a core plays its first game, and become settings at the next look. (Not
+                // without a card: see `card_found`.)
+                if card_found(&data) && let Err(e) = std::fs::create_dir_all(&learned) { eprintln!("cores: can't make {}: {e}", learned.display()); }
+                if let Some(w) = &watch { w.watch(&roms, &[&cores_dir, &learned]); }
+                let now = on_card.find(&cores_dir, &learned, &all);
+                if found.as_ref() != Some(&now) {
+                    log_cores(&cores_dir, &now);
+                    systems = user_cores::playable(all.clone(), &now.cores);
+                    decls = settings::declarations(&systems);
+                    // Before the app hears of them, so no game can be played with one before its
+                    // options' file is loaded.
+                    for c in now.cores.iter().filter(|c| cores_loaded.insert(c.id())) {
+                        let layer = Layer::Core(c.id().into());
+                        post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
+                    }
+                    if writable { write_schemas(&data, &decls, &systems); }
+                    post(Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
+                    found = Some(now);
+                }
+                let games = library::scan(&roms, &systems);
                 for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
                     eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
                 }
@@ -519,6 +533,32 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         }
     });
     (tx, handle)
+}
+
+/// Logs the cores found in the card's `cores/` (`dir`), and the files there turned away.
+fn log_cores(dir: &Path, found: &user_cores::Found) {
+    if found.cores.is_empty() && found.turned_away.is_empty() { eprintln!("cores: none in {}", dir.display()); }
+    for c in &found.cores {
+        let Some(u) = c.user else { continue };
+        eprintln!("cores: {} ({}) plays {}: {}; {}", c.name, c.id(), u.systems.join(", "), u.path.display(), u.status());
+    }
+    for t in &found.turned_away { eprintln!("cores: not using {}: {}", dir.join(&t.file).display(), t.why); }
+}
+
+/// Writes the settings files' schemas (`settings::schema::all`) for `systems`, only the files whose
+/// contents changed.
+/// Not without a card: the data folder is then the bare mount point, which must stay empty (see
+/// `card_found`).
+fn write_schemas(data: &DataRoot, decls: &[settings::SettingDecl], systems: &[SystemDecl]) {
+    if !card_found(data) { return; }
+    for (file, schema) in settings::schema::all(decls, systems) {
+        let path = data.config().join(file);
+        match store::store_generated(&path, &schema) {
+            Ok(true) => eprintln!("settings: wrote {}", path.display()),
+            Ok(false) => {}
+            Err(e) => eprintln!("settings: can't write {}: {e}", path.display()),
+        }
+    }
 }
 
 /// Reads `layer`'s file from the config folder, logging what it holds and what of it is ignored
@@ -882,9 +922,9 @@ impl Runner {
         self.splash_timer.stop(); // an earlier launch's mustn't show this game
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
-        let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
+        let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("there is no emulator for {} games", system.map_or(game.system, |s| s.name)))) };
         let options = self.app.borrow().core_options();
-        game::Playing::start(game, &system, options, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
+        game::Playing::start(game, core, options, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
             move |r| on_ui(move |me| me.started(launch, r)));
     }
 

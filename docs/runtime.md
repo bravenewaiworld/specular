@@ -25,6 +25,11 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 - **Cores' log messages go into Specular's log, through a C shim** (2026-10-18). libretro's log callback is C-variadic, which Rust 1.98 can't define on stable, so `src/log.c` (built with `cc`) formats the message and hands it to Rust. Lines read `core: <core> <level>: <message>`. Debug messages are dropped before they are formatted, and at most 30 are written a second, the rest counted and the count logged, so a core logging every frame costs little and can't flood the log. Rejected: nightly Rust (`c_variadic`); a log thread (writing a line to stderr is cheap, and the cap bounds how many).
 - **Games rumble through libretro's rumble interface, for the first player** (2026-10-18). The core's strong and weak motor strengths go to the rumble thread (see [architecture.md](architecture.md)). The game's rumble is stilled while it is paused (its menu, sleep) and restored on resuming (what the core asks meanwhile, resetting or loading a state from the menu, is kept for then), and stilled when it ends, by the frontend being removed, which also covers a core that fails to load. A crash or the watchdog ending Specular closes its rumble device, and the kernel stops the effect then. Rejected: leaving the rumble on over the menu (a held strength would buzz until the game resumes).
 - **Cores declare their options in libretro's version 2, and can change them mid-game** (2026-10-18). Version 2 carries each option's info text, categories and value labels, which go into the settings' schemas (see [settings.md](settings.md)); versions 0 and 1 are read too, for cores that use them. A change is handed to the game's thread and the core told through GET_VARIABLE_UPDATE, which cores ask about each frame. Rejected: version 0 (a description and bare values only); restarting the game to change an option (some cores read theirs only at launch anyway, and say so).
+- **Cores the user adds go in `{sd card}/cores/`, as the libretro buildbot ships them: `<name>_libretro.so` beside its `<name>_libretro.info`** (2026-10-18). The `.info` (RetroArch's core info file) says which systems the core plays, its name, display name, authors, licence and firmware; one without is turned away. Rejected: loading any library and asking it (`retro_get_system_info` names no system, only extensions, which systems share; and a core's code would run while Specular looks, where a crash takes the menus down); a description file of our own (the buildbot already ships one with each core); one folder per core (not how cores are shipped).
+- **A core's systems are those its `.info` names in `database`, else by its `systemid`; only systems Specular declares are served** (2026-10-18). `database` lists every system a core plays, by the libretro database names `SystemDecl::libretro_name` holds; `systemid` names one (mGBA's is `game_boy_advance`, though it plays GB and GBC too), so it is used only for a `.info` without a database. Of those, a system is served only if the core plays some of its files (`supported_extensions`, when listed). Systems aren't added from `.info` files in V0: a system needs its game table, colour, screen size and header rules, which a `.info` doesn't have. Rejected: `systemid` alone (one system per core); extensions alone (`.bin` and `.cue` belong to several systems).
+- **A user core is checked to be a library for this machine before it is loaded** (2026-10-18): an ELF file of its word size, byte order and processor, else it is turned away with what it is built for ("it is built for 64-bit ARM (AArch64), and this device is x86-64"). Rejected: leaving it to `dlopen`, whose message ("wrong ELF class: ELFCLASS64") says little to a player.
+- **A user core is assumed to restore save memory from its states** (2026-10-18), so battery-save protection is on for it: Specular can't know, and the protection only costs a check of the `.srm` on the first write after a state is loaded. Rejected: assuming it doesn't (a newer in-game save could be lost).
+- **A user core named as one of Specular's is turned away** (2026-10-18). Its settings file (`cores/<name>.json`) and options would be shared with Specular's own build of it, which has Specular's patches and defaults. Rejected: replacing Specular's own (a core without our patches would quietly lose what they do, such as mGBA mapping its ROM).
 - **A watchdog ends Specular if a core spends 6 s on one frame** (2026-10-13). A stuck core's thread can't be stopped; the service manager restarts Specular. The battery save is then as the game last wrote it, at most about 10 s old.
 
 ## Design
@@ -41,7 +46,7 @@ pub struct LaunchSpec {
     pub autosave: Option<PathBuf>,      // resumed from at launch
     pub system_dir: PathBuf,            // bios/
     pub options: Vec<(String, String)>, // core options; the rest keep the core's defaults
-    pub option_list: Option<&'static CoreOptions>, // what the core should declare (data/cores/); differences are logged
+    pub option_list: Option<&'static CoreOptions>, // what the core should declare (data/cores/); differences are logged. None for a user core
     pub rom_by_path: bool,              // only for cores known to read the file themselves
     pub record: Option<(PathBuf, LaunchRecord)>, // the launch record (see architecture.md)
     pub states_restore_save: bool,      // keep a newer .srm when a state rolls it back (see Saves and states)
@@ -55,8 +60,11 @@ pub struct Outputs {
     pub rumble: Option<RumbleLine>,      // None: the core is offered no rumble
     pub on_save: Box<dyn Fn() + Send>,   // the game saved in-game (for the effects)
 }
+pub struct GameInfo { pub width: u32, pub height: u32, pub aspect: f32, pub fps: f64,
+                      pub options: CoreOptions }  // what the core declared as it loaded the game (to learn a user core's)
 impl Session {
     pub fn start(spec: LaunchSpec, out: Outputs) -> Result<Session, String>;
+    pub fn info(&self) -> &GameInfo;
     pub fn watch(&self, limit: Duration, stuck: impl FnOnce() + Send + 'static);
     pub fn set_buttons(&self, bits: u16);
     pub fn take_sound_peak(&self) -> u16;     // the loudest sample since the last call, for the effects
@@ -120,6 +128,7 @@ pub struct CoreDecl {        // specular-core's library module: how Specular run
     pub rom_by_path: bool,
     pub states_restore_save: bool,                        // see Saves and states
     pub bios: &'static [Bios],
+    pub user: Option<&'static UserCore>,                  // a core the user added (see Cores the user adds)
 }
 pub struct Bios {
     pub games: &'static str,                     // "Famicom Disk System games", for messages
@@ -136,7 +145,36 @@ impl CoreDecl { pub fn check_bios(&self, rom: &Path, bios_dir: &Path) -> Result<
 | Nestopia | NES, Famicom Disk System | `nestopia_blargg_ntsc_filter = disabled` | `disksys.rom`, for `.fds` games only; required | yes (battery memory) |
 | SwanStation | PS1 | `swanstation_GPU_Renderer = Software` | `scph5500.bin`, `scph5501.bin`, `scph5502.bin`, `psxonpsp660.bin`, `ps1_rom.bin`, or a known dump under any name; else OpenBIOS | yes (memory card 1) |
 
+Cores the user adds (see below) have no defaults of Specular's for their options, their `.info`'s required firmware as their BIOS, and save memory protected (states restore it, as far as Specular knows).
+
 A missing required BIOS stops the launch before the core is loaded, with "The game couldn't start: Famicom Disk System games need disksys.rom in the bios folder"; the log names the folder and the files looked for. Nestopia's NTSC filter, on by default, widens the picture to 602 pixels, blurs it and costs time. SwanStation's memory card 1 is the libretro save memory (its default), so it is saved as the game's `.srm`; card 2 is off.
+
+### Cores the user adds
+
+`specular_core::library::user_cores`. The scan thread looks in `{sd card}/cores/` before each library scan (at start-up, when files there or in `roms/` change, and when options are learned), and each core found becomes a `CoreDecl`, added to the systems it plays after their own core (`playable`). The app is told with `Msg::Cores` (see [settings.md](settings.md)). A look that finds a core's files unchanged gives the same `CoreDecl`, so looking leaks nothing until a core changes (each is leaked: settings take `'static` text from it).
+
+```rust
+pub struct UserCore {
+    pub path: PathBuf,              // {sd card}/cores/snes9x_libretro.so
+    pub display_name: String,       // the .info's display_name, for the splash
+    pub notice: String,             // "Snes9x Team · Non-commercial": its authors and licence, for the splash
+    pub systems: Vec<&'static str>,
+    pub learned: bool,              // its options have been learned (see settings.md)
+    /* the library's size and modification time, when found */
+}
+impl UserCore { pub fn status(&self) -> &'static str; }       // whether its options are learned
+pub struct UserCores { /* the CoreDecls made so far, and what from */ }
+impl UserCores { pub fn find(&mut self, dir: &Path, learned: &Path, systems: &[SystemDecl]) -> Found; }
+pub struct Found { pub cores: Vec<&'static CoreDecl>, pub turned_away: Vec<TurnedAway> }
+pub struct TurnedAway { pub file: String, pub why: String }
+pub fn playable(systems: Vec<SystemDecl>, found: &[&'static CoreDecl]) -> Vec<SystemDecl>;  // less systems with no core
+pub fn check_library(path: &Path) -> Result<(), String>;      // an ELF shared library for this machine
+pub fn learn(core: &'static CoreDecl, dir: &Path, declared: &CoreOptions) -> io::Result<bool>;
+```
+
+A core's `CoreDecl::name` is its `.info`'s `corename` (else its file's name), its id its file's name less `_libretro.so`. Its required firmware (`firmwareN_opt` not `"true"`) is checked as Specular's cores' BIOS files are ("Games played with PCSX ReARMed need scph1001.bin in the bios folder"); optional firmware isn't, as its `.info` doesn't say what it is for. The runtime gets the core's own `need_fullpath` and `block_extract` from the core itself, as for any core.
+
+A file is turned away, with why, when: it is named `<name>_libretro.so` (or `.info`) without the other beside it; it is a `.so` or `.info` named otherwise; its `.info` names no system Specular has, or only systems whose files it doesn't play; it isn't an ELF shared library for this machine; or it has the name of one of Specular's cores. Hidden files and others (a readme) are left alone. Each look whose result changed is logged: `cores: Snes9x (snes9x) plays snes: …/cores/snes9x_libretro.so; its options are learned`, `cores: not using …/cores/x_libretro.so: <why>`, or `cores: none in …/cores`. With Developer details, Settings → Cores lists every core, Specular's and the card's (with its file and whether its options are learned), and the files turned away with why.
 
 ### Patches to mGBA
 
@@ -149,6 +187,8 @@ Kept in `tools/core-patches/mgba`; `tools/build-cores.sh` fetches mGBA at a pinn
 mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-wait loops of known games: it saves battery without changing how they run (TrimUI's own setting too). Nestopia and SwanStation are built unpatched.
 
 ## Findings
+
+- (2026-10-18, upstream) In libretro's core info files, `database` lists every system a core plays by its libretro database name ("Nintendo - Game Boy|Nintendo - Game Boy Color|Nintendo - Game Boy Advance" for mGBA), while `systemid` names one (`game_boy_advance`). Every sample looked at has a `database`: mGBA, Snes9x, bsnes, Beetle Supafaust, Genesis Plus GX, PicoDrive, ClownMDEmu, FCEUmm, Nestopia, Gambatte, SwanStation, Beetle PSX HW, PCSX ReARMed. Their `systemid`s: `game_boy`, `game_boy_advance`, `nes`, `super_nes`, `mega_drive`, `playstation` (GBC's `game_boy_color` is inferred: no sample has it). Firmware a core can't do without has `firmwareN_opt = "false"`. The files are MIT-licensed. Source: libretro-core-info; the samples in `crates/specular-core/src/library/user_cores/`.
 
 - (2026-10-18, desktop) mGBA reads its options again when GET_VARIABLE_UPDATE says they changed: colour correction turned on mid-game changes the next frames. Its fixed-interval frameskip turned on mid-game has no effect (it reloads its configuration, which drops the value; inferred from its source), though it works from launch. Source: `crates/specular-runtime/src/tests.rs`.
 

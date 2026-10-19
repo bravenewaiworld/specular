@@ -8,6 +8,7 @@
 mod names;
 pub mod saves;
 mod search;
+pub mod user_cores;
 pub mod zip;
 
 use std::collections::HashSet;
@@ -31,6 +32,9 @@ pub struct SystemDecl {
     pub extensions: &'static [&'static str],
     /// Its name in the libretro databases and thumbnail server (e.g. "Nintendo - Game Boy Advance").
     pub libretro_name: &'static str,
+    /// Its `systemid` in libretro's core info files (e.g. "game_boy_advance"), which name only one
+    /// system per core (see `user_cores`).
+    pub libretro_id: &'static str,
     /// Its native picture size in pixels (width, height), which sizes a game's place on screen
     /// before its first frame arrives.
     pub screen: (u32, u32),
@@ -42,9 +46,10 @@ pub struct SystemDecl {
     /// Reads a disc image's serial, as the table lists it (see `art::ps1_serial`). Its files are
     /// never hashed: an image is too large, and a .cue or .m3u isn't the disc itself.
     pub disc_serial: Option<fn(&Path) -> std::io::Result<Option<String>>>,
-    /// The libretro core that plays its games; None while there is none (its games can't be
-    /// played yet).
-    pub core: Option<&'static CoreDecl>,
+    /// The libretro cores that play its games, the default first (Specular's own, if it has one),
+    /// then those the user added (`user_cores`); its "Core" setting chooses among several
+    /// (`settings::core_of`). Empty while there is none: its games aren't listed.
+    pub cores: Vec<&'static CoreDecl>,
     /// The size of a header some dumps put before the ROM (such as the 512 bytes that old SNES
     /// copier devices added), which the table's checksums leave out: skipped when hashing a file
     /// whose size is that much over a multiple of 1 KiB.
@@ -72,6 +77,9 @@ pub struct CoreDecl {
     pub states_restore_save: bool,
     /// The BIOS files it looks for in `bios/`.
     pub bios: &'static [Bios],
+    /// For a core the user added, what its `.info` says and where it is; None for one Specular
+    /// builds, which is in Specular's own cores folder.
+    pub user: Option<&'static user_cores::UserCore>,
 }
 
 /// BIOS files a core looks for in `bios/` for some of its games.
@@ -81,7 +89,8 @@ pub struct Bios {
     pub games: &'static str,
     /// Their extensions; empty for all of the core's games.
     pub extensions: &'static [&'static str],
-    /// The file names the core looks for, in lower case; any one of them will do.
+    /// The file names the core looks for, in lower case; any one of them will do. A name with a
+    /// folder in it ("dc/dc_boot.bin") is looked for as it is.
     pub files: &'static [&'static str],
     /// What the core uses instead when none is there; None if those games can't start without.
     pub fallback: Option<&'static str>,
@@ -96,7 +105,7 @@ impl CoreDecl {
         let present: HashSet<String> = std::fs::read_dir(bios_dir).into_iter().flatten().flatten()
             .filter_map(|e| e.file_name().to_str().map(str::to_lowercase)).collect();
         for b in self.bios.iter().filter(|b| b.extensions.is_empty() || b.extensions.contains(&ext.as_str())) {
-            if b.files.iter().any(|f| present.contains(*f)) { continue; }
+            if b.files.iter().any(|f| present.contains(*f) || (f.contains('/') && bios_dir.join(f).is_file())) { continue; }
             let files = b.files.join(", ");
             eprintln!("game: no BIOS for {} in {} (looked for {files}){}", b.games, bios_dir.display(),
                 b.fallback.map_or(String::new(), |f| format!("; {} uses {f}", self.name)));
@@ -127,7 +136,7 @@ impl CoreDecl {
 const MGBA: &CoreDecl = &CoreDecl {
     name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
     defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,
-    states_restore_save: false, bios: &[],
+    states_restore_save: false, bios: &[], user: None,
 };
 
 /// Nestopia, for the NES and the Famicom Disk System. Its NTSC filter is off: it widens the
@@ -137,7 +146,7 @@ const NESTOPIA: &CoreDecl = &CoreDecl {
     name: "Nestopia", library: "nestopia_libretro", options: nestopia::LIST,
     defaults: &[(nestopia::BLARGG_NTSC_FILTER, nestopia::blargg_ntsc_filter::DISABLED)], rom_by_path: false,
     states_restore_save: true,
-    bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }],
+    bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }], user: None,
 };
 
 /// SwanStation, for the PS1, with its software renderer (the hardware ones need a GL context
@@ -150,13 +159,13 @@ const SWANSTATION: &CoreDecl = &CoreDecl {
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
     states_restore_save: true,
     bios: &[Bios { games: "PlayStation games", extensions: &[],
-        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }],
+        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }], user: None,
 };
 
 /// The cores of `systems`, each once, in their order.
 pub fn cores(systems: &[SystemDecl]) -> Vec<&'static CoreDecl> {
     let mut cores: Vec<&'static CoreDecl> = Vec::new();
-    for c in systems.iter().filter_map(|s| s.core) { if !cores.iter().any(|k| k.id() == c.id()) { cores.push(c); } }
+    for &c in systems.iter().flat_map(|s| &s.cores) { if !cores.iter().any(|k| k.id() == c.id()) { cores.push(c); } }
     cores
 }
 
@@ -165,20 +174,20 @@ pub fn cores(systems: &[SystemDecl]) -> Vec<&'static CoreDecl> {
 /// the default accent, so the change to a system's colour shows (see docs/look-and-motion.md).
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
-        SystemDecl { id: "gb", name: "Game Boy", tint: "lime", extensions: &["gb"], libretro_name: "Nintendo - Game Boy",
-            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), core: Some(MGBA), header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "gbc", name: "Game Boy Color", tint: "rose", extensions: &["gbc"], libretro_name: "Nintendo - Game Boy Color",
-            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), core: Some(MGBA), header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "gba", name: "Game Boy Advance", tint: "indigo", extensions: &["gba"], libretro_name: "Nintendo - Game Boy Advance",
-            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), core: Some(MGBA), header_code: Some((0xac, 4)), disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "nes", name: "NES", tint: "coral", extensions: &["nes", "fds"], libretro_name: "Nintendo - Nintendo Entertainment System",
-            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), core: Some(NESTOPIA), header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "snes", name: "Super Nintendo", tint: "violet", extensions: &["sfc", "smc"], libretro_name: "Nintendo - Super Nintendo Entertainment System",
-            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 512 },
-        SystemDecl { id: "md", name: "Mega Drive", tint: "sky", extensions: &["md", "gen", "smd"], libretro_name: "Sega - Mega Drive - Genesis",
-            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), core: None, header_code: None, disc_serial: None, dump_header: 0 },
-        SystemDecl { id: "ps1", name: "PlayStation", tint: "amber", extensions: &["cue", "chd", "pbp", "m3u"], libretro_name: "Sony - PlayStation",
-            screen: (320, 240), game_db: include_str!("../../../../data/db/ps1.tsv"), core: Some(SWANSTATION), header_code: None,
+        SystemDecl { id: "gb", name: "Game Boy", tint: "lime", extensions: &["gb"], libretro_id: "game_boy", libretro_name: "Nintendo - Game Boy",
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gb.tsv"), cores: vec![MGBA], header_code: None, disc_serial: None, dump_header: 0 },
+        SystemDecl { id: "gbc", name: "Game Boy Color", tint: "rose", extensions: &["gbc"], libretro_id: "game_boy_color", libretro_name: "Nintendo - Game Boy Color",
+            screen: (160, 144), game_db: include_str!("../../../../data/db/gbc.tsv"), cores: vec![MGBA], header_code: None, disc_serial: None, dump_header: 0 },
+        SystemDecl { id: "gba", name: "Game Boy Advance", tint: "indigo", extensions: &["gba"], libretro_id: "game_boy_advance", libretro_name: "Nintendo - Game Boy Advance",
+            screen: (240, 160), game_db: include_str!("../../../../data/db/gba.tsv"), cores: vec![MGBA], header_code: Some((0xac, 4)), disc_serial: None, dump_header: 0 },
+        SystemDecl { id: "nes", name: "NES", tint: "coral", extensions: &["nes", "fds"], libretro_id: "nes", libretro_name: "Nintendo - Nintendo Entertainment System",
+            screen: (256, 240), game_db: include_str!("../../../../data/db/nes.tsv"), cores: vec![NESTOPIA], header_code: None, disc_serial: None, dump_header: 0 },
+        SystemDecl { id: "snes", name: "Super Nintendo", tint: "violet", extensions: &["sfc", "smc"], libretro_id: "super_nes", libretro_name: "Nintendo - Super Nintendo Entertainment System",
+            screen: (256, 224), game_db: include_str!("../../../../data/db/snes.tsv"), cores: vec![], header_code: None, disc_serial: None, dump_header: 512 },
+        SystemDecl { id: "md", name: "Mega Drive", tint: "sky", extensions: &["md", "gen", "smd"], libretro_id: "mega_drive", libretro_name: "Sega - Mega Drive - Genesis",
+            screen: (320, 224), game_db: include_str!("../../../../data/db/md.tsv"), cores: vec![], header_code: None, disc_serial: None, dump_header: 0 },
+        SystemDecl { id: "ps1", name: "PlayStation", tint: "amber", extensions: &["cue", "chd", "pbp", "m3u"], libretro_id: "playstation", libretro_name: "Sony - PlayStation",
+            screen: (320, 240), game_db: include_str!("../../../../data/db/ps1.tsv"), cores: vec![SWANSTATION], header_code: None,
             disc_serial: Some(crate::art::ps1_serial), dump_header: 0 },
     ]
 }

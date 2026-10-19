@@ -492,3 +492,32 @@ fn values_given_that_a_core_doesnt_take_keep_its_default() {
     assert!(o.give(vec![("a".into(), "y".into())]).is_empty());
     assert!(!o.updated);
 }
+
+#[test]
+fn a_core_added_to_the_card_plays_and_its_options_are_learned_from_its_first_game() {
+    use specular_core::library::{builtin_systems, user_cores::{self, UserCores}};
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mgba) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    // mGBA under another name, with the .info the libretro buildbot ships with it.
+    let (card, cache) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::copy(&mgba, card.path().join("mine_libretro.so")).unwrap();
+    std::fs::write(card.path().join("mine_libretro.info"), include_str!("../../specular-core/src/library/user_cores/mgba_libretro.info")).unwrap();
+    let mut cores = UserCores::default();
+    let found = cores.find(card.path(), cache.path(), &builtin_systems());
+    assert!(found.turned_away.is_empty(), "{:?}", found.turned_away);
+    let core = found.cores[0];
+    let rom_path = card.path().join("blank.gba");
+    std::fs::write(&rom_path, rom(&[0xeaff_fffe /* b . */])).unwrap();
+    let session = Session::start(
+        LaunchSpec { core: core.user.unwrap().path.clone(), rom: rom_path, save: card.path().join("blank.srm"), autosave: None, system_dir: card.path().into(),
+                     options: vec![], option_list: None, rom_by_path: false, states_restore_save: core.states_restore_save, record: None },
+        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
+    ).unwrap();
+    let declared = session.info().options.clone();
+    session.quit().unwrap();
+    assert_eq!(declared, declared_options(&mgba).unwrap());
+    assert!(user_cores::learn(core, cache.path(), &declared).unwrap());
+    let learnt = cores.find(card.path(), cache.path(), &builtin_systems()).cores[0];
+    assert_eq!(*specular_core::settings::core_options::list(learnt), declared);
+    assert!(!user_cores::learn(learnt, cache.path(), &declared).unwrap());
+}

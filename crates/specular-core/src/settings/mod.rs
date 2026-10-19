@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 
 use crate::device::Rgb;
 use crate::input::{Button, Press};
-use crate::library::SystemDecl;
+use crate::library::{CoreDecl, SystemDecl};
 use crate::model::{Row, RowKind};
 use crate::palette::{self, PALETTE};
 
@@ -52,6 +52,11 @@ pub enum Layer {
 impl Layer {
     pub fn scope(&self) -> Scope {
         match self { Layer::Global | Layer::Core(_) => Scope::Global, Layer::System(_) => Scope::System, Layer::Game { .. } => Scope::Game }
+    }
+
+    /// The system it is for (a system's or a game's layer).
+    pub fn system(&self) -> Option<&str> {
+        match self { Layer::System(s) | Layer::Game { system: s, .. } => Some(s), Layer::Global | Layer::Core(_) => None }
     }
 
     /// The layers `d`'s value is looked up in at this one, most specific first: this one and the
@@ -139,6 +144,9 @@ pub struct SettingDecl {
     /// The core whose option it is (`CoreDecl::id`), stored in the core's file rather than the
     /// global one; None for Specular's own settings.
     pub core: Option<&'static str>,
+    /// The system it belongs to (`SystemDecl::id`): it may be set only in that system's and its
+    /// games' files. None: any system's.
+    pub system: Option<&'static str>,
 }
 
 impl SettingDecl {
@@ -146,9 +154,10 @@ impl SettingDecl {
     fn base(&self) -> Layer { self.core.map_or(Layer::Global, |c| Layer::Core(c.into())) }
 
     /// Whether it may be stored in `at`'s file: one no more specific than `deepest`, and at the
-    /// global scope only its `base` (its core's file for a core's option, else specular.json).
+    /// global scope only its `base` (its core's file for a core's option, else specular.json); for
+    /// one system's setting, only that system's and its games' files.
     fn settable_at(&self, at: &Layer) -> bool {
-        at.scope() <= self.deepest && (at.scope() > Scope::Global || *at == self.base())
+        self.system.is_none_or(|s| at.system() == Some(s)) && at.scope() <= self.deepest && (at.scope() > Scope::Global || *at == self.base())
     }
 
     /// Whether `v` is a valid value for this setting.
@@ -188,6 +197,10 @@ impl Settings {
     /// The declared settings.
     pub fn decls(&self) -> &[SettingDecl] { &self.decls }
 
+    /// Declares these settings instead (as the cores change: see `user_cores`). Values already
+    /// loaded are kept; those of settings no longer declared are kept as unknown keys.
+    pub fn declare(&mut self, decls: Vec<SettingDecl>) { self.decls = decls; }
+
     /// Adds a layer's contents as loaded from its file (`store::load_layer`), less `SCHEMA_KEY`.
     /// Values already set in memory win: they were changed after the file was written. Values that
     /// can't be used are kept (see `ignored`).
@@ -208,7 +221,7 @@ impl Settings {
     /// None if no such setting is declared.
     pub fn get(&self, key: &str, at: &Layer) -> Option<(&Value, Option<Layer>)> {
         let d = self.decl(key)?;
-        for layer in at.chain(d).into_iter().filter(|l| l.scope() <= d.deepest) {
+        for layer in at.chain(d).into_iter().filter(|l| d.settable_at(l)) {
             if let Some(v) = self.layers.get(&layer).and_then(|m| m.get(key)).filter(|v| d.accepts(v)) {
                 return Some((v, Some(layer)));
             }
@@ -344,11 +357,45 @@ pub fn games_with_settings(config: &Path) -> BTreeSet<String> {
     games
 }
 
-/// Every setting: Specular's own (`builtin`), then the options of these systems' cores (each
-/// core's once).
+/// Every setting: Specular's own (`builtin`), the "Core" of each of these systems with several
+/// (`core_of`), then the options of their cores (each core's once). An option of the same key
+/// as one already declared (cores derived from one another can share their options' keys) isn't
+/// declared again: it is one setting, the first core's.
 pub fn declarations(systems: &[SystemDecl]) -> Vec<SettingDecl> {
-    builtin::settings().into_iter().chain(crate::library::cores(systems).into_iter().flat_map(|c| core_options::decls(c).iter().cloned())).collect()
+    let mut decls: Vec<SettingDecl> = builtin::settings().into_iter().chain(systems.iter().filter_map(core_choice)).collect();
+    for d in crate::library::cores(systems).into_iter().flat_map(|c| core_options::decls(c)) {
+        if !decls.iter().any(|k| k.key == d.key) { decls.push(d.clone()); }
+    }
+    decls
 }
+
+/// The key of the setting choosing which of `system`'s cores plays its games (see `core_of`).
+pub fn core_key(system: &str) -> String { format!("core.{system}") }
+
+/// The "Core" setting of a system with several cores: which plays its games, by `CoreDecl::id`;
+/// by default the first (Specular's own, if it has one). Its text is leaked: declarations take
+/// `'static` text, and the cores' own are kept for the run too (see `core_options`).
+fn core_choice(system: &SystemDecl) -> Option<SettingDecl> {
+    if system.cores.len() < 2 { return None; }
+    let choices: Vec<(&'static str, &'static str)> = system.cores.iter().map(|c| (c.id(), c.name)).collect();
+    let each: Vec<String> = system.cores.iter().map(|c| format!("\"{}\" ({}{})", c.id(), c.name, if c.user.is_some() { ", added to the SD card's cores folder" } else { "" })).collect();
+    Some(SettingDecl {
+        key: leak(core_key(system.id)), section: "Emulator", label: "Core",
+        help: leak(format!("Which emulator core plays {} games: {}. A change takes effect when a game next starts.", system.name, each.join(", "))),
+        kind: SettingKind::Choice(Box::leak(choices.into_boxed_slice())), default: Value::from(system.cores[0].id()),
+        visibility: Visibility::User, deepest: Scope::Game, core: None, system: Some(system.id),
+    })
+}
+
+/// The core that plays `system`'s games at `at` (its layer, or one of its games'): the one its
+/// "Core" setting chooses (`core_key`), else its first. None if it has none.
+pub fn core_of(settings: &Settings, system: &SystemDecl, at: &Layer) -> Option<&'static CoreDecl> {
+    let chosen = settings.get(&core_key(system.id), at).and_then(|(v, _)| v.as_str());
+    chosen.and_then(|id| system.cores.iter().find(|c| c.id() == id)).or(system.cores.first()).copied()
+}
+
+/// Text kept for the rest of the run, as declarations take `'static` text.
+pub(crate) fn leak(s: impl Into<String>) -> &'static str { Box::leak(s.into().into_boxed_str()) }
 
 /// A choice row from (stored value, label) options, with `v` selected (the first if it matches
 /// none) and `swatch` shown beside the value.
