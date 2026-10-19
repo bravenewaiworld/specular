@@ -90,7 +90,7 @@ pub trait Screen {
 | UI | Slint, the app, uploading game frames |
 | I/O | migrating, loading and saving settings (saves queued together are merged) |
 | Scan | looking for the cores on the card (then writing the settings' schemas), library scans (loading the games' settings), then moving saves of renamed ROMs |
-| Hardware | the device's hardware services; reads the battery every 10 s |
+| Hardware | the device's hardware services, file transfer and SSH; reads the battery every 10 s |
 | One per radio | WiFi and Bluetooth commands, which can block for seconds |
 | Headphone jack | waits for plugging and unplugging |
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
@@ -136,6 +136,8 @@ pub struct Hardware {
     pub installer: Option<Box<dyn Installer>>,    // see installer.md
     pub headphones: Option<Box<dyn HeadphoneJack>>,
     pub rumble: Option<Box<dyn Rumble>>,
+    pub file_transfer: Option<Box<dyn FileTransfer>>,   // see remote-access.md
+    pub ssh: Option<Box<dyn Ssh>>,
 }
 
 /// 0–65535 each, as libretro and Linux take them; a device with one motor runs the stronger.

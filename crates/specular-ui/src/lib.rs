@@ -1,6 +1,6 @@
 //! Specular's UI: draws the core's screens with Slint and carries out the app's effects. All
 //! slow work happens off the UI thread: files on an I/O thread (and the library scan on its
-//! own), hardware on a hardware thread, each radio on a thread of its own (`radio_thread`), box
+//! own), hardware (with file transfer and SSH) on a hardware thread, each radio on a thread of its own (`radio_thread`), box
 //! art on the art service's threads (`art`), interface sounds on a thread of their own
 //! (`sounds`), and opening a game's sound outputs on short-lived threads; their results come back
 //! as messages to the app, or as calls on the UI thread.
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
 use specular_core::art::ArtKind;
 use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
-use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble};
+use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble, SshCmd};
 use specular_core::effects::{self, Effects, Event};
 use specular_core::rumble::RumbleLine;
 use specular_core::library::{self, Game, SystemDecl, user_cores};
@@ -185,6 +185,9 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     let mut app = App::new(systems.clone(), settings::declarations(&systems));
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
+    app.has_file_transfer(hardware.file_transfer.is_some());
+    app.has_ssh(hardware.ssh.is_some());
+    let (hardware, hardware_thread) = hardware_thread(hardware);
     // Beside the binary, where `make install` puts it (and the build does, for development).
     let texts = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("licences.txt"))).filter(|p| p.is_file());
     if texts.is_none() { eprintln!("credits: there's no licences.txt beside the binary"); }
@@ -206,7 +209,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         hints: Rc::new(VecModel::default()),
         status_icons: Rc::new(VecModel::default()),
         profile,
-        hardware: hardware_thread(hardware),
+        hardware,
         wifi: wifi.map(|s| radio_thread("wifi", s, Msg::Wifi)),
         bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
         installer: installer.map(installer_thread),
@@ -286,10 +289,12 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     window.run()?;
     // A game being played writes its battery save as it ends.
     if let Some(p) = runner.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
-    // Dropping the runner closes the I/O thread's queue; wait for its last saves.
+    // Dropping the runner closes the I/O and hardware threads' queues; wait for the last saves,
+    // and for file transfer to stop.
     RUNNER.with(|r| r.borrow_mut().take());
     drop(runner);
     let _ = io_thread.join();
+    let _ = hardware_thread.join();
     Ok(())
 }
 
@@ -381,6 +386,9 @@ enum HwCmd {
     Sleep,
     PowerOff,
     Restart,
+    /// Start (true) or stop the file transfer server.
+    FileTransfer(bool),
+    Ssh(SshCmd),
 }
 
 /// The volume as the hardware thread keeps it: the level for each volume setting
@@ -421,9 +429,15 @@ impl Volume {
 const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The hardware thread: carries out commands, and reads the battery every `BATTERY_INTERVAL`.
-fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
+/// It ends once the sender is dropped. File transfer is stopped when it starts and when it ends,
+/// so the SD card isn't left open to the network by a run of Specular that quit or crashed with
+/// the file transfer screen open. Commands are carried out in order, so a stop sent before a
+/// sleep is done before it.
+fn hardware_thread(hw: Hardware) -> (mpsc::Sender<HwCmd>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let stop_transfer = |hw: &Hardware| if let Some(t) = &hw.file_transfer && let Err(e) = t.stop() { eprintln!("transfer: stopping: {e}"); };
+    let handle = std::thread::spawn(move || {
+        stop_transfer(&hw);
         let mut next_battery = Instant::now();
         let mut volume = Volume { levels: HashMap::new(), output: Output::Speaker, muted: false };
         loop {
@@ -445,13 +459,29 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
                 }
                 Ok(HwCmd::PowerOff) => hw.power.shutdown(),
                 Ok(HwCmd::Restart) => hw.power.restart(),
+                Ok(HwCmd::FileTransfer(start)) => {
+                    if let Some(t) = &hw.file_transfer {
+                        let result = if start { t.start() } else { t.stop() };
+                        if let Err(e) = &result { eprintln!("transfer: {}: {e}", if start { "starting" } else { "stopping" }); }
+                        post(Msg::FileTransfer { start, result });
+                    }
+                    Ok(())
+                }
+                Ok(HwCmd::Ssh(cmd)) => {
+                    if let Some(ssh) = &hw.ssh {
+                        let result = ssh.send(cmd);
+                        eprintln!("ssh: {cmd:?}: {result:?}");
+                        post(Msg::Ssh { cmd, result });
+                    }
+                    Ok(())
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return stop_transfer(&hw),
             };
             if let Err(e) = result { eprintln!("hardware: {e}"); }
         }
     });
-    tx
+    (tx, handle)
 }
 
 /// A radio's thread: it owns the radio's service, starts it (its events become messages to the
@@ -888,6 +918,8 @@ impl Runner {
             Effect::Installer(cmd) => if let Some(t) = &self.installer { let _ = t.send(cmd); },
             Effect::SoundTo(output) => self.set_output(output),
             Effect::Sound(sound) => self.sounds.play(sound),
+            Effect::FileTransfer(start) => { let _ = self.hardware.send(HwCmd::FileTransfer(start)); }
+            Effect::Ssh(cmd) => { let _ = self.hardware.send(HwCmd::Ssh(cmd)); }
         }
     }
 

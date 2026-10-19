@@ -171,6 +171,46 @@ pub trait Vsync: Send {
     fn wait(&mut self) -> io::Result<()>;
 }
 
+/// File transfer: a server that lets PCs read and write the SD card from a browser, over the
+/// network or a USB cable, with no password. The app runs it only while its screen is open (see
+/// app::transfer).
+pub trait FileTransfer: Send {
+    /// Starts the server and waits until it takes connections. Err: why it didn't, in the
+    /// system's words; the server is then left stopped.
+    fn start(&self) -> Result<(), String>;
+    /// Stops the server and waits until it has; fine if it isn't running.
+    fn stop(&self) -> Result<(), String>;
+}
+
+/// A command for `Ssh`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshCmd {
+    /// Only report the state.
+    Status,
+    /// Switch SSH on or off (kept across restarts).
+    Switch(bool),
+    /// Replace the login keys with those in the SD card's `authorized_keys`.
+    ImportKeys,
+}
+
+/// SSH's state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SshStatus {
+    /// Whether the user switches SSH and imports its keys. If not (a development system), it is
+    /// always on with keys the user can't change.
+    pub switchable: bool,
+    pub on: bool,
+    /// How many login keys it accepts.
+    pub keys: u32,
+}
+
+/// SSH that the user switches on and off, accepting only login keys imported on the device.
+pub trait Ssh: Send {
+    /// Carries out `cmd`, then reports SSH's state. Err: the command failed, and why in the
+    /// system's words (the state is then as before).
+    fn send(&self, cmd: SshCmd) -> Result<SshStatus, String>;
+}
+
 /// A device's hardware services.
 pub struct Hardware {
     pub power: Box<dyn Power>,
@@ -187,6 +227,10 @@ pub struct Hardware {
     pub headphones: Option<Box<dyn HeadphoneJack>>,
     /// None on devices without a rumble motor.
     pub rumble: Option<Box<dyn Rumble>>,
+    /// None on devices without file transfer.
+    pub file_transfer: Option<Box<dyn FileTransfer>>,
+    /// None on devices whose SSH (if any) the user doesn't switch.
+    pub ssh: Option<Box<dyn Ssh>>,
 }
 
 /// A device: what it is, and its hardware.
@@ -209,7 +253,8 @@ pub trait Device {
 /// battery drains by 1 % a minute from 80 % (or $SPECULAR_BATTERY %) down to 5 %, it has no
 /// headphone jack (a desktop key simulates one, see `specular_ui::run`), and its radios follow a
 /// scenario (`wireless::scenario`): the file named by $SPECULAR_SCENARIO, `{"wifi": <script>,
-/// "bluetooth": <script>}`, else a built-in one with a few networks and devices.
+/// "bluetooth": <script>}`, else a built-in one with a few networks and devices. File transfer and
+/// SSH are pretend (see `SimTransfer`, `SimSsh`).
 pub mod simulated {
     use std::time::Instant;
 
@@ -244,9 +289,46 @@ pub mod simulated {
         fn set(&mut self, m: Motors) -> io::Result<()> { eprintln!("simulated: rumble strong {} weak {}", m.strong, m.weak); Ok(()) }
     }
 
+    /// File transfer that prints the commands a device would run, taking half a second to start.
+    /// With $SPECULAR_TRANSFER_FAILS set, starting fails as it does when the server can't listen.
+    struct SimTransfer;
+
+    impl FileTransfer for SimTransfer {
+        fn start(&self) -> Result<(), String> {
+            eprintln!("simulated: sv up webdav");
+            std::thread::sleep(Duration::from_millis(500));
+            if std::env::var_os("SPECULAR_TRANSFER_FAILS").is_none() { return Ok(()); }
+            self.stop()?;
+            Err("run: webdav: (pid 1234) 0s, normally down; Error: Failed to bind `0.0.0.0:80`, Permission denied (simulated)".into())
+        }
+        fn stop(&self) -> Result<(), String> { eprintln!("simulated: sv down webdav"); Ok(()) }
+    }
+
+    /// SSH as on a release system: off, with no keys at first; importing finds two keys. With
+    /// $SPECULAR_SSH set to "development" it is a development system's (always on, not
+    /// switchable); with "no-keys", importing fails as it does without `authorized_keys`.
+    struct SimSsh(std::sync::Mutex<SshStatus>);
+
+    impl Ssh for SimSsh {
+        fn send(&self, cmd: SshCmd) -> Result<SshStatus, String> {
+            eprintln!("simulated: ssh {cmd:?}");
+            let mut s = self.0.lock().unwrap();
+            match cmd {
+                SshCmd::Status => {}
+                _ if !s.switchable => return Err("a development image: SSH is always on".into()),
+                SshCmd::Switch(on) => s.on = on,
+                SshCmd::ImportKeys if std::env::var("SPECULAR_SSH").as_deref() == Ok("no-keys") => return Err("no authorized_keys at the SD card's root".into()),
+                SshCmd::ImportKeys => s.keys = 2,
+            }
+            Ok(*s)
+        }
+    }
+
     pub fn hardware() -> Hardware {
         let t = Instant::now();
         let script = scenario().unwrap_or_else(|e| panic!("$SPECULAR_SCENARIO: {e}"));
+        let development = std::env::var("SPECULAR_SSH").as_deref() == Ok("development");
+        let ssh = SshStatus { switchable: !development, on: development, keys: development as u32 };
         Hardware {
             power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)),
             wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),
@@ -254,6 +336,8 @@ pub mod simulated {
             installer: Some(Box::new(crate::install::Simulated)),
             headphones: None,
             rumble: Some(Box::new(Sim(t))),
+            file_transfer: Some(Box::new(SimTransfer)),
+            ssh: Some(Box::new(SimSsh(ssh.into()))),
         }
     }
 

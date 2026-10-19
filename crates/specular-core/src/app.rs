@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::art::{self, ArtKind};
-use crate::device::{Battery, Output, Rgb};
+use crate::device::{Battery, Output, Rgb, SshCmd, SshStatus};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
 use crate::library::{self, Game, SystemDecl};
@@ -27,9 +27,13 @@ mod credits;
 mod icons;
 mod install;
 mod layers;
+mod ssh;
+mod transfer;
 mod wireless;
 pub use wireless::{BtState, WifiNeed, WifiState};
 pub use install::{InstallCmd, InstallState, TaskView};
+pub use ssh::SshState;
+pub use transfer::{Server, TransferState};
 pub use credits::{Credit, CreditKind, Credits, Splash};
 
 /// Something that happened.
@@ -74,6 +78,11 @@ pub enum Msg {
     InstallOffer(Result<crate::install::Offer, String>),
     /// The progress of the task started with `InstallCmd::Start`.
     InstallProgress(crate::install::Progress),
+    /// The file transfer server's start (`start`) or stop asked for with `Effect::FileTransfer`
+    /// has finished; Err: it failed, and why.
+    FileTransfer { start: bool, result: Result<(), String> },
+    /// `Effect::Ssh`'s command finished: SSH's state now, or why the command failed.
+    Ssh { cmd: SshCmd, result: Result<SshStatus, String> },
     /// The running game's discs, as its core says: sent once it has started, and after a state is
     /// loaded or a disc changed. Ignored while no game runs.
     Discs(Discs),
@@ -139,6 +148,10 @@ pub enum Effect {
     /// Sound goes to this output from now on, including a running game's.
     SoundTo(Output),
     Installer(InstallCmd),
+    /// Start (true) or stop the file transfer server; the outcome comes back as
+    /// `Msg::FileTransfer`. A stop comes before a `Sleep` in the same list.
+    FileTransfer(bool),
+    Ssh(SshCmd),
     /// Play this interface sound. Only sent while they can be heard: never while a game is being
     /// played (it has the sound output, also while paused), muted, at volume 0 or with "Interface
     /// sounds" off.
@@ -192,6 +205,10 @@ pub struct Ctx {
     pub bluetooth: Option<BtState>,
     /// None on a device without an installer; see `App::has_installer`.
     pub install: Option<InstallState>,
+    /// None on a device without file transfer; see `App::has_file_transfer`.
+    pub transfer: Option<TransferState>,
+    /// None on a device without SSH the user switches; see `App::has_ssh`.
+    pub ssh: Option<SshState>,
     pub credits: Credits,
     /// The files in the card's `cores/` that aren't used, and why (see `Msg::Cores`).
     pub turned_away: Vec<library::user_cores::TurnedAway>,
@@ -288,6 +305,8 @@ pub mod screens {
     pub const GAME_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game settings"));
     /// The settings of all of one system's games, with the system's id in its params.
     pub const SYSTEM_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("system settings"));
+    /// While it is open, PCs can read and write the SD card (see `app::transfer`).
+    pub const FILE_TRANSFER: ScreenId = ScreenId(std::borrow::Cow::Borrowed("file transfer"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -327,6 +346,8 @@ pub struct App {
     radios: wireless::Radios,
     /// When the last `Sound::Move` was sent (see `TICK_GAP`).
     last_tick: Option<Duration>,
+    /// Between `Effect::Sleep` and `Msg::Woke`.
+    asleep: bool,
 }
 
 impl App {
@@ -346,9 +367,10 @@ impl App {
         credits::register(&mut screens);
         cores::register(&mut screens);
         layers::register(&mut screens);
+        transfer::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
-                   credits: Credits::default(), turned_away: Vec::new(), discs: Discs::default() },
+                   transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(), discs: Discs::default() },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -363,6 +385,7 @@ impl App {
             now: Duration::ZERO,
             radios: wireless::Radios::default(),
             last_tick: None,
+            asleep: false,
         }
     }
 
@@ -454,10 +477,22 @@ impl App {
     }
 
     /// When the device will sleep if left alone, so the caller can wake up for it. None if it
-    /// won't (a game is running unpaused, sleep is off, or the idle count hasn't started).
+    /// won't (see `stays_awake`; or sleep is off, or the idle count hasn't started).
     pub fn sleep_deadline(&self) -> Option<Duration> {
-        if self.input_target() == InputTarget::Game || self.task_running() { return None; }
+        if self.stays_awake() { return None; }
         Some(self.idle_since? + self.sleep_after()?)
+    }
+
+    /// Whether the device mustn't sleep by itself now: a game is running unpaused, an installer
+    /// task is running, or file transfer is open (a transfer may be under way).
+    fn stays_awake(&self) -> bool { self.input_target() == InputTarget::Game || self.task_running() || self.transfer_open() }
+
+    /// Sleeps, stopping file transfer first (it starts again on waking, if still open).
+    fn sleep(&mut self) -> Vec<Effect> {
+        self.asleep = true;
+        let mut e = self.reconcile_transfer();
+        e.push(Effect::Sleep);
+        e
     }
 
     /// The "Sleep after" time; None for "never" (not a number).
@@ -469,12 +504,12 @@ impl App {
     /// Sleeps if nothing has been pressed for the "Sleep after" time. The idle count is cleared
     /// when sleeping, so `sleep_deadline` doesn't stay due while the device suspends.
     fn sleep_if_idle(&mut self, now: Duration) -> Vec<Effect> {
-        if self.input_target() == InputTarget::Game || self.task_running() { return vec![]; }
+        if self.stays_awake() { return vec![]; }
         let since = *self.idle_since.get_or_insert(now);
         match self.sleep_after() {
             Some(after) if now.saturating_sub(since) >= after => {
                 self.idle_since = None;
-                vec![Effect::Sleep]
+                self.sleep()
             }
             _ => vec![],
         }
@@ -518,6 +553,7 @@ impl App {
         let in_game = self.playing.is_some();
         let mut e = self.handle_msg(msg);
         e.extend(self.reconcile_radios());
+        e.extend(self.reconcile_transfer());
         self.drop_unheard_sounds(&mut e, in_game);
         e
     }
@@ -575,6 +611,7 @@ impl App {
             }
             // A game slept through stays paused, with its menu open.
             Msg::Woke => {
+                self.asleep = false;
                 self.repeater.reset();
                 self.idle_since = None;
                 self.power_down = None;
@@ -621,6 +658,8 @@ impl App {
             Msg::Headphones(plugged) => { self.headphones = plugged; vec![] } // the output follows (`reconcile_radios`)
             Msg::InstallOffer(offer) => self.install_offer(offer),
             Msg::InstallProgress(p) => self.install_progress(p),
+            Msg::FileTransfer { start, result } => self.transfer_done(start, result),
+            Msg::Ssh { cmd, result } => self.ssh_done(cmd, result),
             Msg::Discs(d) => {
                 if self.playing.is_none() { return vec![]; }
                 self.ctx.discs = d;
@@ -684,10 +723,12 @@ impl App {
             Outcome::None => vec![],
             Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
             Outcome::Push(s) => {
-                // Settings shows what the installer can do now.
-                let ask = (s.id == screens::SETTINGS && self.ctx.install.is_some()).then_some(Effect::Installer(InstallCmd::Offer));
+                // Settings shows what the installer can do now, and SSH's state.
+                let settings = s.id == screens::SETTINGS;
+                let ask = [(settings && self.ctx.install.is_some()).then_some(Effect::Installer(InstallCmd::Offer)),
+                           (settings && self.ctx.ssh.is_some()).then_some(Effect::Ssh(SshCmd::Status))];
                 let mut e = self.go(|nav| Some(nav.push(s)));
-                e.extend(ask);
+                e.extend(ask.into_iter().flatten());
                 e
             }
             Outcome::Back => self.go(|nav| nav.pop()),
@@ -761,7 +802,7 @@ impl App {
             return vec![];
         }
         // None: held into the power menu, or a press the app didn't see.
-        if self.power_down.take().is_some() { vec![Effect::Sleep] } else { vec![] }
+        if self.power_down.take().is_some() { self.sleep() } else { vec![] }
     }
 
     /// Opens the power menu, over the game menu if a game is running (pausing it).
@@ -1007,12 +1048,17 @@ struct SettingsScreen;
 
 impl Screen for SettingsScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
-        let mut rows = wireless::settings_rows(ctx);
+        let connections: Vec<Row> = wireless::settings_rows(ctx).into_iter().chain(transfer::settings_row(ctx)).collect();
+        let mut rows = vec![];
+        if !connections.is_empty() { rows.push(Row::new("section:connections", "Connections", RowKind::Header)); }
+        rows.extend(connections);
         rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility(), None));
         // Credits, last in the System section.
         let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
         rows.insert(system_end, credits::settings_row());
         if ctx.visibility() == Visibility::Developer {
+            // After the developer settings, the last section shown.
+            rows.extend(ssh::settings_rows(ctx));
             rows.extend([action("open:cores", "Cores"), action("open:icons", "Icons")]);
         }
         rows.extend(install::settings_rows(ctx));
@@ -1027,9 +1073,11 @@ impl Screen for SettingsScreen {
                 "open:icons" => return Outcome::Push(ScreenState::new(screens::ICONS, None)),
                 "open:cores" => return Outcome::Push(ScreenState::new(screens::CORES, None)),
                 "open:credits" => return Outcome::Push(ScreenState::new(screens::CREDITS, None)),
+                "open:file transfer" => return Outcome::Push(ScreenState::new(screens::FILE_TRANSFER, None)),
                 _ => {}
             }
         }
+        if let Some(o) = focused.and_then(|row| ssh::settings_press(ctx, row, p)) { return o; }
         if let Some(open) = focused.and_then(|row| install::settings_press(ctx, row, p)) { return open; }
         focused.map_or(Outcome::None, |row| setting_press(ctx, row, p))
     }

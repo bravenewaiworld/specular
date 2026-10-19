@@ -1,13 +1,13 @@
 # Wireless
 
-Status: Implemented · Updated: 2026-10-18
+Status: Implemented · Updated: 2026-10-19
 
 WiFi and Bluetooth: the services that drive the radios, how the app keeps them as the settings and screens want, Bluetooth audio, and the trace and scenarios that let a radio problem seen on a device be replayed on a PC. Radios are slow, flaky and stateful, so their behaviour has to be observable and reproducible.
 
 ## Decisions
 
 - **Radios go through the standard Linux services: wpa_supplicant and BlueZ** (2026-10-14), in `specular-linux`, shared by any Linux device. A port supplies only what isn't theirs: powering the WiFi hardware and asking for an address (DHCP).
-- **WiFi is On, Off or Auto, and Auto is the default** (2026-10-14). Auto turns WiFi on only while something needs it (box art downloads, or the Wi-Fi screen being open), which saves battery. A developer setting, "Keep Wi-Fi on", stops Auto from turning it off, so SSH over WiFi stays up.
+- **WiFi is On, Off or Auto, and Auto is the default** (2026-10-14). Auto turns WiFi on only while something needs it (box art downloads, or the Wi-Fi or file transfer screen being open), which saves battery. A developer setting, "Keep Wi-Fi on", stops Auto from turning it off, so SSH over WiFi stays up.
 - **A network is saved only once it has connected** (2026-10-14), so a wrong password is never kept.
 - **Failures are shown only on the radio's own screen** (2026-10-14), where the user asked for something. Elsewhere they are only in the trace.
 - **Every exchange with a radio is traced, always** (2026-10-14). It is a few lines per user action, so it costs the same everywhere and there is no separate mode in which behaviour could differ. Passwords are never written.

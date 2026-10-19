@@ -50,6 +50,12 @@ fn focus_on(a: &mut App, label: &str) {
     panic!("no row {label} in {:?}", labels(a));
 }
 
+/// Moves the focus to the row labelled `label` and presses A.
+fn press(a: &mut App, label: &str) -> Vec<Effect> {
+    focus_on(a, label);
+    tap(a, Button::A, 0)
+}
+
 /// Types `text` on the on-screen keyboard: moves to each key in turn and presses it.
 fn type_text(a: &mut App, text: &str) {
     for c in text.chars() {
@@ -930,15 +936,6 @@ mod install {
         a.handle(Msg::InstallOffer(Ok(offer)));
     }
 
-    /// Moves the focus to the row labelled `label` and presses A.
-    fn press(a: &mut App, label: &str) -> Vec<Effect> {
-        for _ in 0..a.view().rows.len() {
-            if focused(a) == label { return tap(a, Button::A, 0); }
-            tap(a, Button::Down, 0);
-        }
-        panic!("no row {label} in {:?}", a.view().rows.iter().map(|r| &r.label).collect::<Vec<_>>());
-    }
-
     #[test]
     fn settings_offers_installing_and_restoring_only_when_the_installer_can() {
         let mut a = install_app();
@@ -1290,5 +1287,167 @@ mod user_cores {
                                row("On the SD card", None), row("Gambatte", Some("GB, GBC")), rows[6].clone(), row("Snes9x", Some("SNES"))]);
         assert_eq!(rows[6].0, "gambatte_libretro.so; its options are learned when it next plays a game");
         assert_eq!(rows[9..], [row("Turned away", None), row("bare_libretro.so", None), row("No .info", None)]);
+    }
+}
+
+mod transfer {
+    use super::*;
+    use crate::wireless::wifi::{Interface, WifiCmd, WifiEvent, WifiLink};
+
+    /// An app with WiFi (on Auto) and file transfer, its settings loaded, at home.
+    fn transfer_app() -> App {
+        let mut a = app();
+        a.has_radios(true, false);
+        a.has_file_transfer(true);
+        a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+        a
+    }
+
+    /// Opens Settings → File transfer at time `t` (ms); returns the effects of opening it.
+    fn open(a: &mut App, t: u64) -> Vec<Effect> {
+        tap(a, Button::Up, t); // home wraps to its last row, Settings
+        tap(a, Button::A, t);
+        press(a, "File transfer")
+    }
+
+    fn started(a: &mut App) { a.handle(Msg::FileTransfer { start: true, result: Ok(()) }); }
+
+    fn row_value(a: &App, label: &str) -> Option<String> {
+        a.view().rows.iter().find(|r| r.label == label).and_then(|r| match &r.kind {
+            RowKind::Action { value } | RowKind::Text { detail: value } => value.clone(),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn it_runs_while_its_screen_is_open_and_wifi_on_auto_comes_on_for_it() {
+        let mut a = transfer_app();
+        let e = open(&mut a, 0);
+        assert!(e.contains(&Effect::Wifi(WifiCmd::Power(true))) && e.contains(&Effect::FileTransfer(true)), "{e:?}");
+        assert!(labels(&a).contains(&"Starting…".into()));
+        started(&mut a);
+        assert!(labels(&a)[0].starts_with("While this screen is open, anyone on the same network"));
+        assert_eq!(row_value(&a, "Wi-Fi").as_deref(), Some("Starting…")); // WiFi is still coming on
+        assert_eq!(row_value(&a, "USB cable"), None); // no cable in
+        a.handle(Msg::Wifi(WifiEvent::Interfaces(vec![Interface { name: "usb0".into(), address: "192.168.7.2".into() }])));
+        assert_eq!(row_value(&a, "USB cable").as_deref(), Some("http://192.168.7.2/"));
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: "Home".into(), address: "10.0.0.2".into(), bars: None })));
+        assert_eq!(row_value(&a, "Wi-Fi").as_deref(), Some("http://10.0.0.2/"));
+        // The Wi-Fi screen opens over it, with the server still running.
+        assert!(!press(&mut a, "Wi-Fi").contains(&Effect::FileTransfer(false)));
+        assert_eq!(a.view().title, "Wi-Fi");
+        tap(&mut a, Button::B, 0);
+        assert!(tap(&mut a, Button::B, 0).contains(&Effect::FileTransfer(false)));
+        // Menu goes home, which closes it too.
+        press(&mut a, "File transfer");
+        assert!(tap(&mut a, Button::Menu, 0).contains(&Effect::FileTransfer(false)));
+    }
+
+    #[test]
+    fn it_keeps_the_device_awake_and_stops_while_asleep() {
+        let mut a = transfer_app();
+        open(&mut a, 0);
+        started(&mut a);
+        a.handle(Msg::Tick(Duration::ZERO));
+        assert_eq!(a.sleep_deadline(), None);
+        assert!(!a.handle(Msg::Tick(Duration::from_secs(3600))).contains(&Effect::Sleep));
+        // A tap of the power button sleeps, stopping it first; waking starts it again.
+        event(&mut a, Button::Power, true, 3_600_000);
+        let e = event(&mut a, Button::Power, false, 3_600_100);
+        let at = |x: &Effect| e.iter().position(|y| y == x);
+        assert!(at(&Effect::FileTransfer(false)).unwrap() < at(&Effect::Sleep).unwrap(), "{e:?}");
+        assert!(a.handle(Msg::Woke).contains(&Effect::FileTransfer(true)));
+    }
+
+    #[test]
+    fn without_a_card_it_says_so_and_starts_once_one_is_in() {
+        let mut a = transfer_app();
+        a.handle(Msg::Library { games: vec![], card_found: false });
+        assert!(!open(&mut a, 0).contains(&Effect::FileTransfer(true)));
+        assert_eq!(labels(&a)[0], "No SD card");
+        assert!(a.handle(Msg::Library { games: vec![], card_found: true }).contains(&Effect::FileTransfer(true)));
+        started(&mut a);
+        // Taken out while it runs: stopped (the system also stops it by itself).
+        assert!(a.handle(Msg::Library { games: vec![], card_found: false }).contains(&Effect::FileTransfer(false)));
+    }
+
+    #[test]
+    fn a_failed_start_says_why_and_can_be_tried_again() {
+        let mut a = transfer_app();
+        open(&mut a, 0);
+        a.handle(Msg::FileTransfer { start: true, result: Err("Failed to bind `0.0.0.0:80`".into()) });
+        assert!(labels(&a).contains(&"File transfer didn't start: Failed to bind `0.0.0.0:80`".into()));
+        assert!(press(&mut a, "Try again").contains(&Effect::FileTransfer(true)));
+        assert!(labels(&a).contains(&"Starting…".into()));
+    }
+
+    #[test]
+    fn a_result_overtaken_by_leaving_changes_nothing_but_a_failed_stop_is_told() {
+        let mut a = transfer_app();
+        open(&mut a, 0);
+        tap(&mut a, Button::B, 0); // left while starting
+        assert_eq!(a.handle(Msg::FileTransfer { start: true, result: Ok(()) }), vec![]);
+        assert_eq!(a.ctx().transfer.as_ref().unwrap().server, Server::Starting);
+        a.handle(Msg::FileTransfer { start: false, result: Ok(()) });
+        assert_eq!(a.ctx().transfer.as_ref().unwrap().server, Server::Stopped);
+        assert_eq!(a.handle(Msg::FileTransfer { start: false, result: Err("timeout: run: webdav".into()) }),
+                   vec![Effect::Notice("File transfer may still be on: timeout: run: webdav".into())]);
+    }
+}
+
+mod ssh {
+    use super::*;
+
+    /// An app with SSH the user switches, at home with developer details on.
+    fn ssh_app() -> App {
+        let mut a = app();
+        a.has_ssh(true);
+        let developer: serde_json::Map<String, serde_json::Value> = [("ui.developer_details".to_string(), json!(true))].into_iter().collect();
+        a.handle(Msg::SettingsLoaded(Layer::Global, developer));
+        a
+    }
+
+    /// Opens Settings (which asks SSH's state) and answers with `status`.
+    fn settings(a: &mut App, status: Result<SshStatus, String>) {
+        tap(a, Button::Up, 0);
+        assert!(tap(a, Button::A, 0).contains(&Effect::Ssh(SshCmd::Status)));
+        a.handle(Msg::Ssh { cmd: SshCmd::Status, result: status });
+    }
+
+    const RELEASE: SshStatus = SshStatus { switchable: true, on: false, keys: 0 };
+
+    #[test]
+    fn a_release_system_offers_the_switch_and_the_import() {
+        let mut a = ssh_app();
+        settings(&mut a, Ok(RELEASE));
+        assert!(labels(&a).contains(&"Import SSH keys from the SD card".into()));
+        assert_eq!(press(&mut a, "SSH"), vec![Effect::Ssh(SshCmd::Switch(true))]);
+        a.handle(Msg::Ssh { cmd: SshCmd::Switch(true), result: Ok(SshStatus { on: true, ..RELEASE }) });
+        assert!(a.view().rows.iter().any(|r| r.label == "SSH" && r.kind == RowKind::Toggle { on: true }));
+        assert_eq!(press(&mut a, "Import SSH keys from the SD card"), vec![Effect::Ssh(SshCmd::ImportKeys)]);
+        let e = a.handle(Msg::Ssh { cmd: SshCmd::ImportKeys, result: Ok(SshStatus { on: true, switchable: true, keys: 2 }) });
+        assert_eq!(e[0], Effect::Notice("Imported 2 SSH keys".into()));
+        assert!(a.view().rows.iter().any(|r| r.kind == RowKind::Action { value: Some("2 SSH keys".into()) }));
+    }
+
+    #[test]
+    fn a_refused_import_says_why_and_keeps_the_keys() {
+        let mut a = ssh_app();
+        settings(&mut a, Ok(SshStatus { keys: 1, ..RELEASE }));
+        let e = a.handle(Msg::Ssh { cmd: SshCmd::ImportKeys, result: Err("no valid key in the SD card's authorized_keys".into()) });
+        assert_eq!(e[0], Effect::Notice("Couldn't import SSH keys: no valid key in the SD card's authorized_keys".into()));
+        assert!(a.view().rows.iter().any(|r| r.kind == RowKind::Action { value: Some("1 SSH key".into()) }));
+    }
+
+    #[test]
+    fn a_development_system_or_no_developer_details_shows_no_switch() {
+        let mut a = ssh_app();
+        settings(&mut a, Ok(SshStatus { switchable: false, on: true, keys: 1 }));
+        assert!(!labels(&a).contains(&"SSH".into()));
+        assert!(labels(&a).contains(&"SSH is always on (a development system).".into()));
+        let mut a = app();
+        a.has_ssh(true);
+        settings(&mut a, Ok(RELEASE));
+        assert!(!labels(&a).contains(&"SSH".into()));
     }
 }

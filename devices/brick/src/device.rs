@@ -54,6 +54,8 @@ impl Device for Brick {
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
             // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.
             rumble: Some(Box::new(specular_linux::rumble::EvdevRumble::new())),
+            file_transfer: Some(Box::new(crate::transfer::BrickTransfer)),
+            ssh: Some(Box::new(crate::ssh::BrickSsh)),
         }
     }
 

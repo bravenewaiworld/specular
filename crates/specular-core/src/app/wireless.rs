@@ -2,11 +2,11 @@
 //! and `App::reconcile_radios`: the radios as the settings and screens want them, and the sound
 //! output as the radios and the headphone jack allow (also on a device without radios).
 //!
-//! WiFi on Auto is on while something needs it (`WifiNeed`, or the Wi-Fi screen being open),
-//! then for `WIFI_GRACE` more, so needs that come and go don't keep restarting the radio. A need
-//! made while WiFi isn't connected lapses after `NEED_TIMEOUT` unless it connects by then, so a
-//! place with no known network doesn't keep the radio on; once connected, a need holds until it
-//! is dropped.
+//! WiFi on Auto is on while something needs it (`WifiNeed`, or the Wi-Fi or file transfer screen
+//! being open), then for `WIFI_GRACE` more, so needs that come and go don't keep restarting the
+//! radio. A need made while WiFi isn't connected lapses after `NEED_TIMEOUT` unless it connects by
+//! then, so a place with no known network doesn't keep the radio on; once connected, a need holds
+//! until it is dropped.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -110,7 +110,7 @@ pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) {
 }
 
 fn setting<'a>(ctx: &'a Ctx, key: &str) -> Option<&'a serde_json::Value> { ctx.settings.get(key, &Layer::Global).map(|(v, _)| v) }
-fn wifi_mode(ctx: &Ctx) -> &str { setting(ctx, builtin::WIFI).and_then(|v| v.as_str()).unwrap_or("off") }
+pub(super) fn wifi_mode(ctx: &Ctx) -> &str { setting(ctx, builtin::WIFI).and_then(|v| v.as_str()).unwrap_or("off") }
 fn bluetooth_on(ctx: &Ctx) -> bool { ctx.settings.on(builtin::BLUETOOTH) }
 
 impl App {
@@ -136,7 +136,7 @@ impl App {
     }
 
     fn wifi_needed(&self) -> bool {
-        self.nav.contains(&screens::WIFI) || self.radios.needs.values().any(|since| since.is_none_or(|t| self.now < t + NEED_TIMEOUT))
+        self.nav.contains(&screens::WIFI) || self.transfer_open() || self.radios.needs.values().any(|since| since.is_none_or(|t| self.now < t + NEED_TIMEOUT))
     }
 
     /// Whether failures should be shown: only on the radio's own screen, where the user asked
@@ -245,7 +245,7 @@ impl App {
     }
 }
 
-/// The settings screen's "Wireless" section: a row per radio, opening its screen.
+/// The settings screen's rows for the radios: one per radio, opening its screen.
 pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
     let wifi = ctx.wifi.as_ref().map(|w| {
         let value = match (&w.link, wifi_mode(ctx)) {
@@ -262,9 +262,7 @@ pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
         let value = if !bluetooth_on(ctx) { "Off".to_string() } else { connected.map_or("On".into(), |d| d.name.clone()) };
         Row::new("open:bluetooth", "Bluetooth", RowKind::Action { value: Some(value) })
     });
-    let rows: Vec<Row> = wifi.into_iter().chain(bluetooth).collect();
-    if rows.is_empty() { return rows; }
-    std::iter::once(Row::new("section:Wireless", "Wireless", RowKind::Header)).chain(rows).collect()
+    wifi.into_iter().chain(bluetooth).collect()
 }
 
 /// The status bar's icons for the radios: WiFi when it is on (no bars until connected, then its

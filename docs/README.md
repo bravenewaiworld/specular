@@ -10,6 +10,7 @@ Why Specular works the way it does: decisions, designs and research, one doc per
 | [library-and-box-art.md](library-and-box-art.md) | Scanning, systems, search, game identification, box art and other pictures |
 | [settings.md](settings.md) | Setting declarations, game and system settings, core options, the config files on the SD card, migrations, the SD card layout |
 | [wireless.md](wireless.md) | WiFi and Bluetooth screens and services, traces and scenarios |
+| [remote-access.md](remote-access.md) | File transfer and SSH: reaching the device from a PC |
 | [installer.md](installer.md) | Installing the system to internal storage, from Settings |
 | [brick.md](brick.md) | The TrimUI Brick port: display platform, hardware services, measurements |
 
