@@ -70,6 +70,7 @@ impl Playing {
             // itself, and a change is learned again (`user_cores::learn`) rather than logged.
             option_list: core.user.is_none().then(|| specular_core::settings::core_options::list(core)),
             rom_by_path: core.rom_by_path,
+            controller: core.controller,
             record: Some(record.clone()),
             states_restore_save: core.states_restore_save,
         };

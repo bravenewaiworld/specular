@@ -64,6 +64,9 @@ pub struct LaunchSpec {
     /// to then read the file itself (libretro doesn't promise that a core will); it can map the
     /// file instead of copying it.
     pub rom_by_path: bool,
+    /// The libretro device to plug into player 1's port (`retro_set_controller_port_device`;
+    /// `CoreDecl::controller` in specular-core); None leaves the core's default.
+    pub controller: Option<std::ffi::c_uint>,
     /// The launch record, and where to keep it (see `specular_core::launch`): written on the
     /// game's thread before the core is loaded, removed once the game has ended (or failed to
     /// start) and its core is unloaded. Since only one game runs at a time (`Session::start`), one
@@ -532,6 +535,11 @@ impl Game {
             unsafe { (core.deinit)() };
             frontend::install(None);
             return Err(format!("the core could not load {}", spec.rom.display()));
+        }
+        // After the game is loaded, as RetroArch does: some cores only take it then.
+        if let Some(device) = spec.controller {
+            unsafe { (core.set_controller_port_device)(0, device) };
+            eprintln!("game: {name}'s player 1 has libretro device {device:#x}");
         }
         log_options(&name, spec);
         let mut av = core::AvInfo::default();

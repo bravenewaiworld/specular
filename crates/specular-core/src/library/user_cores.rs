@@ -211,7 +211,7 @@ fn decl(id: &str, path: PathBuf, made: &Made, systems: Vec<&'static str>) -> &'s
     Box::leak(Box::new(CoreDecl {
         name: leak(name), library: leak(format!("{id}_libretro")),
         options: leak(made.learned.clone().unwrap_or_else(|| r#"{"options":[]}"#.into())),
-        defaults: &[], rom_by_path: false,
+        defaults: &[], rom_by_path: false, controller: None,
         // Assumed: Specular can't tell whether its states hold the save memory, and assuming they do
         // keeps a newer battery save rather than letting a state roll it back.
         states_restore_save: true,

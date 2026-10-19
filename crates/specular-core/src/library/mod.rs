@@ -72,6 +72,9 @@ pub struct CoreDecl {
     /// Give it only the ROM's path, although it asks for the contents (see
     /// `LaunchSpec::rom_by_path` in specular-runtime).
     pub rom_by_path: bool,
+    /// The libretro device for player 1's port, where the core's default lacks something Specular
+    /// uses (`LaunchSpec::controller` in specular-runtime); None: its default.
+    pub controller: Option<u32>,
     /// Its save states hold the save memory too, so loading one rolls the battery save back (see
     /// `LaunchSpec::states_restore_save` in specular-runtime).
     pub states_restore_save: bool,
@@ -157,7 +160,7 @@ impl CoreDecl {
 const MGBA: &CoreDecl = &CoreDecl {
     name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
     defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,
-    states_restore_save: false, bios: &[], user: None,
+    controller: None, states_restore_save: false, bios: &[], user: None,
 };
 
 /// Nestopia, for the NES and the Famicom Disk System. Its NTSC filter is off: it widens the
@@ -166,7 +169,7 @@ const MGBA: &CoreDecl = &CoreDecl {
 const NESTOPIA: &CoreDecl = &CoreDecl {
     name: "Nestopia", library: "nestopia_libretro", options: nestopia::LIST,
     defaults: &[(nestopia::BLARGG_NTSC_FILTER, nestopia::blargg_ntsc_filter::DISABLED)], rom_by_path: false,
-    states_restore_save: true,
+    controller: None, states_restore_save: true,
     bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }], user: None,
 };
 
@@ -174,14 +177,19 @@ const NESTOPIA: &CoreDecl = &CoreDecl {
 /// shared with the UI). Without a BIOS it runs its built-in OpenBIOS, which some games don't run
 /// with. It also recognises a known BIOS dump by its contents, whatever its name; `check_bios`
 /// goes by name only, so it may log a missing BIOS that the core then finds. Its states hold the
-/// memory card (docs/runtime.md).
+/// memory card (docs/runtime.md). Player 1 has a DualShock: SwanStation's default pad has no
+/// motors, so games couldn't rumble. A DualShock starts in digital mode, so a game that doesn't
+/// know it sees a plain pad, and the d-pad drives it in analog mode too (its default options).
 const SWANSTATION: &CoreDecl = &CoreDecl {
     name: "SwanStation", library: "swanstation_libretro", options: swanstation::LIST,
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
-    states_restore_save: true,
+    controller: Some(PS_DUALSHOCK), states_restore_save: true,
     bios: &[Bios { games: "PlayStation games", extensions: &[],
         files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }], user: None,
 };
+
+/// libretro's DualShock for SwanStation: `RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)`.
+const PS_DUALSHOCK: u32 = (1 << 8) | 5;
 
 /// The cores of `systems`, each once, in their order.
 pub fn cores(systems: &[SystemDecl]) -> Vec<&'static CoreDecl> {
