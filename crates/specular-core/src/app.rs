@@ -406,6 +406,9 @@ pub struct App {
     playing: Option<Game>,
     /// How many columns a grid has on this display (from the UI; see `list::grid_columns`).
     grid_columns: usize,
+    /// The width and height (u) of the area the UI last laid a list out in. Until it is known,
+    /// notes never take the focus (see `list::read_step`).
+    list_area: Option<(f32, f32)>,
     /// The current screen as last built, and its parent's title; None when they must be built
     /// again.
     cache: RefCell<Option<(Rc<ScreenView>, Option<String>)>>,
@@ -462,6 +465,7 @@ impl App {
             headphones: false,
             power_down: None,
             grid_columns: 1,
+            list_area: None,
             playing: None,
             cache: RefCell::default(),
             keyboard: None,
@@ -480,6 +484,10 @@ impl App {
 
     /// Tells the app how many columns the UI's grids have, so up and down move by a whole row.
     pub fn set_grid_columns(&mut self, n: usize) { self.grid_columns = n.max(1); }
+
+    /// Tells the app the width and height (u) of the area the UI lays lists out in, so the focus
+    /// can stop on notes that need scrolling to be read.
+    pub fn set_list_area(&mut self, width: f32, height: f32) { self.list_area = Some((width, height)); }
 
     /// The game being played, if any.
     pub fn playing(&self) -> Option<&Game> { self.playing.as_ref() }
@@ -617,7 +625,8 @@ impl App {
     }
 
     /// The focused row of `view()`: the one the user left the focus on, if it is still there and
-    /// focusable, else the first focusable row (0 if none).
+    /// focusable (or a note being read), else where the screen starts: the first focusable row,
+    /// or a note above it that needs reading first (`list::first_stop`); 0 if neither.
     pub fn focus(&self) -> usize {
         let v = self.view();
         if let Some((kb, _)) = &self.keyboard && self.nav.top().id == screens::KEYBOARD {
@@ -625,8 +634,19 @@ impl App {
             return kb.lines()[..line].iter().map(Vec::len).sum::<usize>() + index;
         }
         self.nav.top().focus.as_ref().and_then(|id| v.rows.iter().position(|r| &r.id == id))
-            .filter(|&i| v.rows[i].kind.focusable())
-            .or_else(|| list::first(&v.rows)).unwrap_or(0)
+            .filter(|&i| v.rows[i].kind.focusable() || list::is_note(&v.rows[i]))
+            .or_else(|| match self.list_area {
+                Some((width, height)) if is_list(&v) => list::first_stop(&v.rows, width, height),
+                _ => list::first(&v.rows),
+            }).unwrap_or(0)
+    }
+
+    /// How far the list is scrolled (u) while the focus is on a note being read; None otherwise.
+    /// A screen that opens on a note (`list::first_stop`) shows it from the top of the list (0).
+    pub fn reading(&self) -> Option<f32> {
+        let v = self.view();
+        let note = v.rows.get(self.focus()).is_some_and(list::is_note);
+        note.then(|| self.nav.top().reading.unwrap_or(0.0))
     }
 
     /// Forgets the built screen, after anything that may change what it shows.
@@ -797,9 +817,16 @@ impl App {
             _ => None,
         };
         if let Some(delta) = delta {
-            let to = list::step(&view.rows, focus, delta, p.repeat);
-            if to == focus { return vec![]; }
-            self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
+            // Up and down in a list stop on notes that need reading (paging passes them).
+            let reading = self.reading();
+            let (to, now_reading) = match self.list_area {
+                Some((width, height)) if is_list(&view) && delta.abs() == 1 => list::read_step(&view.rows, focus, reading, delta > 0, p.repeat, width, height),
+                _ => (list::step(&view.rows, focus, delta, p.repeat), None),
+            };
+            if (to, now_reading) == (focus, reading) { return vec![]; }
+            let top = self.nav.top_mut();
+            top.focus = view.rows.get(to).map(|r| r.id.clone());
+            top.reading = now_reading;
             return vec![Effect::Sound(Sound::Move), Effect::Redraw(None)];
         }
         let id = self.nav.top().id.clone();
@@ -1061,6 +1088,9 @@ impl Screen for Home {
 
     fn entered(&self, _: &mut Ctx, _: &mut ScreenState, _: &str, text: String) -> Result<Outcome, String> { Ok(open_search(&text)) }
 }
+
+/// Whether `view` is a list of rows (whose notes can take the focus to be read).
+fn is_list(view: &ScreenView) -> bool { matches!(view.layout, Layout::List | Layout::ListWithPicture) }
 
 /// Opens the keyboard to type a search; the screen's `entered` passes the text to `open_search`.
 fn type_search() -> Outcome { Outcome::Type { prompt: "Search".into(), masked: false, purpose: String::new() } }

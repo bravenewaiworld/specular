@@ -1327,16 +1327,25 @@ impl Runner {
     /// Shows the app's current screen; `t` animates a change of screen.
     fn refresh(&self, t: Option<Transition>) {
         let Some(w) = self.window.upgrade() else { return };
-        let app = self.app.borrow();
-        let (view, focus) = (app.view(), app.focus());
+        let (view, playing, menu) = {
+            let app = self.app.borrow();
+            (app.view(), app.playing().is_some(), app.playing().is_some() && app.input_target() == InputTarget::App)
+        };
         let (grid, keys) = (view.layout == Layout::Grid, view.layout == Layout::Keys);
         w.set_layout(match view.layout { Layout::List => ScreenLayout::List, Layout::ListWithPicture => ScreenLayout::ListWithPicture, Layout::Grid => ScreenLayout::Grid, Layout::Keys => ScreenLayout::Keys });
+        // Set before the list's size is read below: the game menu narrows the list.
+        w.set_playing(playing);
+        w.set_game_menu(menu);
         // Grids and the keyboard sit between the gutters; a list's rows reach the edges.
         let (width, height) = (if grid || keys { w.get_grid_width() } else { w.get_list_width() }, w.get_list_height());
+        // Where the focus can stop on a note depends on how much of the list shows.
+        if !grid && !keys { self.app.borrow_mut().set_list_area(width, height); }
+        let app = self.app.borrow();
+        let focus = app.focus();
         let shape = list::picture_shape(&view.rows);
         if w.get_picture_shape() != shape { w.set_picture_shape(shape); }
         let cells = grid.then_some(shape);
-        let layout = if keys { keys::layout(&view.rows, width, height) } else { list::layout(&view.rows, focus, width, height, cells) };
+        let layout = if keys { keys::layout(&view.rows, width, height) } else { list::layout(&view.rows, focus, app.reading(), width, height, cells) };
         // Rows are drawn from a fixed set of slots, enough for every row near the view; a row
         // always uses slot `index % slots`, so while the list scrolls a row keeps its slot and
         // only the slots of rows coming into view change. A new screen or layout gets fresh
@@ -1363,8 +1372,6 @@ impl Runner {
         self.shown_layout.set(Some(view.layout));
         let hints = self.hints(&view, focus);
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
-        w.set_playing(app.playing().is_some());
-        w.set_game_menu(app.playing().is_some() && app.input_target() == InputTarget::App);
         w.set_screen_title(view.title.as_str().into());
         if let Some(entry) = &view.entry {
             // `entry.caret` counts characters; slicing needs a byte offset.

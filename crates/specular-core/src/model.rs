@@ -48,7 +48,8 @@ pub enum RowKind {
     /// A section title; never focused.
     Header,
     /// Text that explains something, with an optional detail on the right (a step's status);
-    /// never focused, and as many lines tall as its text needs (see `list::note_lines`).
+    /// as many lines tall as its text needs (see `list::note_lines`). It takes the focus only to
+    /// be read when it would otherwise stay partly out of view (see `list::read_step`).
     Note { detail: Option<String> },
     /// A label, with optional detail on the right (a count, a status).
     Text { detail: Option<String> },
@@ -69,7 +70,8 @@ pub enum RowKind {
 }
 
 impl RowKind {
-    /// Whether the focus can land on the row.
+    /// Whether an ordinary move can land the focus on the row. A note can't, though it may take
+    /// the focus to be read (see `list::read_step`).
     pub fn focusable(&self) -> bool { !matches!(self, RowKind::Header | RowKind::Note { .. }) }
 }
 

@@ -241,7 +241,7 @@ fn time_focus_moves_in_a_long_list() {
     for i in 0..1000 {
         tap(&mut a, Button::Down, 10 + i);
         let (v, f) = (a.view(), a.focus());
-        std::hint::black_box((crate::list::layout(&v.rows, f, 1024.0, 512.0, None), a.parent_title()));
+        std::hint::black_box((crate::list::layout(&v.rows, f, None, 1024.0, 512.0, None), a.parent_title()));
     }
     println!("per move (press, view, focus, layout, breadcrumb; not the UI's drawing): {:?}", t.elapsed() / 1000);
 }
@@ -1946,6 +1946,20 @@ mod card {
         assert_eq!(focused(&a), "OK");
         assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Redraw(None)]);
         assert_eq!(labels(&a)[0], "Systems");
+    }
+
+    #[test]
+    fn a_long_repair_message_is_read_from_its_top_before_its_ok() {
+        let message = vec!["word"; 80].join(" "); // 8 lines in a list 1024 u wide
+        let mut a = with_card(&format!("mounted\n{message}\ncard=aaaa check=repaired\n"));
+        // In a view 400 u tall, with OK focused the message's top would be out of view.
+        a.set_list_area(1024.0, 400.0);
+        assert_eq!((focused(&a), a.reading()), (message.clone(), Some(0.0)));
+        tap(&mut a, Button::Down, 0);
+        assert_eq!((focused(&a), a.reading()), (message.clone(), Some(76.0)));
+        tap(&mut a, Button::Down, 10);
+        assert_eq!((focused(&a), a.reading()), ("OK".into(), None));
+        assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Redraw(None)]);
     }
 
     #[test]

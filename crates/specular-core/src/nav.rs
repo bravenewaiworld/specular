@@ -3,16 +3,19 @@
 use crate::model::{RowId, ScreenId};
 
 /// One screen on the stack. `params` says what it shows (e.g. which system's games).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScreenState {
     pub id: ScreenId,
     pub params: Option<String>,
     /// The focused row, by identity, so it survives the screen's rows changing.
     pub focus: Option<RowId>,
+    /// While the focus is on a note being read: how far the list is scrolled (u; see
+    /// `list::read_step`).
+    pub reading: Option<f32>,
 }
 
 impl ScreenState {
-    pub fn new(id: ScreenId, params: Option<String>) -> Self { Self { id, params, focus: None } }
+    pub fn new(id: ScreenId, params: Option<String>) -> Self { Self { id, params, focus: None, reading: None } }
 }
 
 /// How the UI should animate a change of screen.
