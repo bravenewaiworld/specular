@@ -19,12 +19,12 @@ pub const OFF: &str = "off";
 /// leave this much after the slowest runs (see `HEADROOM`).
 pub const UI_TIME: Duration = Duration::from_millis(6);
 
-/// The lowest speed `CpuMin::new` uses as a minimum: it ignores the CPU's lower steps, so its
-/// first step up from the system's default is to this speed, and a step down from it goes back to
-/// the default. On the Brick, 1200 MHz is the fastest speed near the lowest voltage (937.5 mV,
-/// against 900 below it: Crystaline OS's docs/power.md), so it costs little, and `ondemand`
-/// already runs a busy game about this fast (docs/runtime.md, Findings): a lower minimum would
-/// change nothing. A CPU whose steps all lie below it gets no minimum.
+/// The lowest step `CpuMin::new` uses; it drops the steps below. So its first step up from the
+/// system's default is to this speed, and a step down from it goes back to the default. Chosen
+/// for the Brick: the steps up to 1008 MHz run at 900 mV and 1200 MHz at 937.5 mV (Crystaline OS's
+/// docs/power.md), so holding 1200 costs little, and the governor already runs a busy game mostly
+/// at or above it (docs/runtime.md, Findings), so a lower minimum would gain little. A CPU whose
+/// steps all lie below it gets no automatic minimum.
 const LOWEST_USEFUL_MHZ: u32 = 1200;
 /// Two misses at most this far apart raise the minimum a step. One alone (a scene loading, say)
 /// doesn't.
@@ -35,12 +35,14 @@ const ON_TIME: Duration = Duration::from_secs(10);
 /// fit in this share of a refresh (percent).
 const HEADROOM: u32 = 75;
 
-/// Chooses the CPU's minimum speed from the game's frames (see the module's documentation), from
-/// the CPU's speed steps. Its levels are, lowest first, the system's default (None) and each step.
-/// Its clock is the game's time of play: the gaps given to `frame`, added up.
+/// Chooses the CPU's minimum speed, among the CPU's speed steps, from the game's frames (see the
+/// module's documentation). Its levels are, lowest first, the system's default (None) and each
+/// step it keeps (`new` drops those below `LOWEST_USEFUL_MHZ`). Its clock is the game's time of
+/// play: the gaps given to `frame`, added up.
 #[derive(Debug, Default)]
 pub struct CpuMin {
-    /// The CPU's speed steps (MHz, ascending); empty where the speed can't be set.
+    /// The steps this minimum may use (MHz, ascending); empty where the speed can't be set, or
+    /// none is usable.
     steps: Vec<u32>,
     /// The level now: an index into `steps`; None: the system's default.
     level: Option<usize>,
@@ -48,9 +50,10 @@ pub struct CpuMin {
     adaptive: bool,
     /// The time of play so far.
     played: Duration,
-    /// When the last missed refresh that didn't raise the level came.
+    /// When (in time of play) the latest miss still waiting for a second within `MISS_PAIR` came.
     last_miss: Option<Duration>,
-    /// When the on-time window began: the last miss, or the last check for a step down.
+    /// When (in time of play) the on-time window began: the last miss, or the last check for a
+    /// step down.
     on_time_since: Duration,
     /// How long the core ran for each frame since `on_time_since`.
     runs: Vec<Duration>,
@@ -72,14 +75,15 @@ pub enum Decision {
 impl CpuMin {
     /// A minimum that follows the frames, starting at `start` (MHz, rounded up to a step; above
     /// the top step, the top step; None: the system's default). Steps below `LOWEST_USEFUL_MHZ`
-    /// are never used.
+    /// are never used: a `start` below it rounds up to it.
     pub fn new(mut steps: Vec<u32>, start: Option<u32>) -> Self {
         steps.retain(|&s| s >= LOWEST_USEFUL_MHZ);
         Self { adaptive: true, ..Self::fixed(steps, start) }
     }
 
     /// A minimum that stays at `mhz` (rounded up to a step; above the top step, the top step) for
-    /// the whole game. Any step may be used: this is the speed the user set.
+    /// the whole game. Keeps all of `steps`, those below `LOWEST_USEFUL_MHZ` too: it is for a speed
+    /// set in the config files, used as set.
     pub fn fixed(steps: Vec<u32>, mhz: Option<u32>) -> Self {
         let level = mhz.and_then(|m| steps.iter().position(|&s| s >= m).or(steps.len().checked_sub(1)));
         Self { steps, level, ..Self::default() }
@@ -88,12 +92,12 @@ impl CpuMin {
     /// The minimum now (MHz; None: the system's default).
     pub fn current(&self) -> Option<u32> { self.level.map(|i| self.steps[i]) }
 
-    /// One frame paced by the display: `gap`, the time from the refresh the previous frame ran at
-    /// to this one's; `run`, how long the core took to make it; `period`, the display's refresh.
-    /// A gap of more than 1.5 refreshes is a missed refresh. The gaps make the clock, so only give
-    /// a frame whose gap is play: not the first, nor the first after a pause (its gap would count
-    /// the pause), nor any paced by a timer (which has no refreshes to miss). Returns a decision
-    /// when there is one to act on.
+    /// One frame paced by the display. `gap`: the time between the vsync this frame ran after and
+    /// the one the previous frame ran after; `run`: how long the core took to make it; `period`:
+    /// the display's refresh period. A gap of more than 1.5 periods (halfway to two, allowing for
+    /// jitter) is a missed refresh. The gaps add up to the clock of play, so leave out frames whose
+    /// gap isn't play: the first after a pause (the gap would include the pause), and any paced by
+    /// a timer (which has no refreshes to miss). Returns a decision when there is one to act on.
     pub fn frame(&mut self, gap: Duration, run: Duration, period: Duration) -> Option<Decision> {
         if !self.adaptive || self.steps.is_empty() { return None; }
         self.played += gap;
@@ -105,7 +109,8 @@ impl CpuMin {
         decision
     }
 
-    /// A frame missed its refresh: the second within `MISS_PAIR` raises the level a step.
+    /// A frame missed its refresh: the second within `MISS_PAIR` raises the level a step. At the
+    /// top step it can't, and says so once (`Decision::Note`).
     fn missed(&mut self) -> Option<Decision> {
         let now = self.played;
         let first = self.last_miss.filter(|&t| now - t <= MISS_PAIR);
@@ -122,9 +127,9 @@ impl CpuMin {
     }
 
     /// After `ON_TIME` on time: the level a step down, if the slowest runs (the 95th percentile),
-    /// slowed in proportion to the lower speed, would still leave `UI_TIME` within `HEADROOM` of a
-    /// refresh. Below the lowest step is the system's default, taken to be no slower than the
-    /// lowest step (see `LOWEST_USEFUL_MHZ`).
+    /// slowed in proportion to the lower speed, plus `UI_TIME`, fit in `HEADROOM` percent of a
+    /// refresh. From the lowest step to the system's default, the runs are judged at the lowest
+    /// step's speed, as the governor runs a busy game about that fast (see `LOWEST_USEFUL_MHZ`).
     fn step_down(&mut self, period: Duration) -> Option<Decision> {
         let i = self.level?;
         let lower = i.checked_sub(1);
@@ -139,7 +144,8 @@ impl CpuMin {
             ON_TIME.as_secs(), ms(slowest), ms(slowed), text(self.current()))))
     }
 
-    /// Starts the on-time window afresh, from the time of play now.
+    /// Starts the on-time window afresh at the time of play now, forgetting the runs and any miss
+    /// still waiting for a second.
     fn restart(&mut self) {
         self.on_time_since = self.played;
         self.runs.clear();
@@ -198,9 +204,9 @@ mod tests {
     fn a_gap_of_over_one_and_a_half_refreshes_is_a_miss() {
         let mut c = CpuMin::new(STEPS.into(), Some(1608));
         let half = PERIOD / 2;
-        assert_eq!(c.frame(PERIOD + half, ms(15), PERIOD), None);
+        miss(&mut c); // the first of a pair
+        // Were it a miss, it would make a pair with the one before and step up.
         assert_eq!(c.frame(PERIOD + half, ms(15), PERIOD), None, "1.5 refreshes is on time");
-        assert_eq!(c.frame(PERIOD + half + ms(1), ms(15), PERIOD), None);
         assert!(matches!(c.frame(PERIOD + half + ms(1), ms(15), PERIOD), Some(Decision::Set(Some(1800), _))));
     }
 

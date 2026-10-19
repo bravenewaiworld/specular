@@ -1,4 +1,4 @@
-//! The CPU's minimum speed while the game plays: chosen from its frames by `Outputs::cpu_min`,
+//! The CPU's minimum speed while the game plays: chosen from its frames by the `CpuMin` in `Outputs::cpu_min`,
 //! set through `Outputs::set_cpu_min`. The system's default while the game is paused, and once it
 //! has ended.
 
@@ -25,9 +25,9 @@ impl CpuSpeed {
     /// The minimum while the game plays (MHz; None: the system's default).
     pub(crate) fn level(&self) -> Option<u32> { self.min.current() }
 
-    /// A frame, as for `CpuMin::frame` (`gap` from `Pacer::wait`, which gives none for the frames
-    /// it must leave out). Returns whether the minimum changed (the frame delay is then measured
-    /// again: runs take another time).
+    /// Hands one frame to `CpuMin::frame`. The caller takes `gap` from `Pacer::wait` and skips the
+    /// frames it gives none for. Returns whether the minimum changed: the caller then measures the
+    /// frame delay again (`Pacer::remeasure`), as the core's runs take another time at the new speed.
     pub(crate) fn frame(&mut self, gap: Duration, run: Duration, period: Duration) -> bool {
         match self.min.frame(gap, run, period) {
             Some(Decision::Set(mhz, why)) => { self.apply(mhz, &why); true }
