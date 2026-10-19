@@ -64,7 +64,7 @@ Completed:
 TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
  - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps; a game without a start level going to 1.2 GHz after two misses; the frame statistics' second line). Left:
-   - Steps up have no settling time: a burst of misses (as when something reads the framebuffer) raised Contra three steps in a second
+   - Steps up have no settling time: a burst of misses (as when something reads the framebuffer) raised Contra three steps in a second, and with no step down it keeps them until the game ends
    - Measure what it costs in battery (docs/runtime.md, Open questions)
 
 ### Library and Game Management
@@ -144,7 +144,7 @@ TODO:
 
 TODO:
  - USB audio output (headset dongles, USB-C DACs)
- - Step the CPU minimum down during a game when it has room to spare, tuned so it never costs missed frames (the consequence of a false step down is a worse game than a shorter battery life); see docs/runtime.md Findings 2026-10-19 for SotN's lone misses and the rule tried
+ - Step the CPU minimum down during a game when it has room to spare, tuned so it never costs missed frames (the consequence of a false step down is a worse game than a shorter battery life); see docs/runtime.md, Findings, "The CPU minimum with the step down at 85 % of a refresh" (2026-10-19), for Symphony of the Night's lone misses and the rule tried
  - CPU profile chosen by Specular for the menus and for saving power (the OS's `brick-power profile performance|balanced|saver`; games already get a minimum speed of their own), never a setting in the UI; overridable only in the config files
  - The top USB-C port's power on or off (`brick-power usb-top on|off`, which refuses while a device is attached)
  - At 3 % battery, the game is saved and quit (the OS powers off at 1 %)

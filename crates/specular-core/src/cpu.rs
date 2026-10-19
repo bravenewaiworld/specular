@@ -15,7 +15,7 @@ pub const AUTO: &str = "auto";
 pub const OFF: &str = "off";
 
 /// The lowest step `CpuMin::new` uses; it drops the steps below, so its first step up from the
-/// system's default is to this speed. Chosen for the Brick: the steps up to 1008 MHz run at 900 mV
+/// system's default is to the lowest step at or above this speed. Chosen for the Brick: the steps up to 1008 MHz run at 900 mV
 /// and 1200 MHz at 937.5 mV (Crystaline OS's docs/power.md), so holding 1200 costs little, and the
 /// governor already runs a busy game mostly at or above it (docs/runtime.md, Findings), so a lower
 /// minimum would gain little. A CPU whose steps all lie below it gets no automatic minimum.
@@ -35,11 +35,11 @@ pub struct CpuMin {
     steps: Vec<u32>,
     /// The level now: an index into `steps`; None: the system's default.
     level: Option<usize>,
-    /// Whether the level follows the frames; if not, it stays as it started.
+    /// Whether the level follows the frames (never with no steps); if not, it stays as it started.
     adaptive: bool,
     /// The time of play so far.
     played: Duration,
-    /// When (in time of play) the latest miss still waiting for a second within `MISS_PAIR` came.
+    /// The time of play at the latest miss not yet paired with a second one (within `MISS_PAIR`).
     last_miss: Option<Duration>,
     /// Whether `Decision::Note` has said that frames miss their refresh at the top step.
     told_top: bool,
@@ -61,7 +61,7 @@ impl CpuMin {
     /// are never used: a `start` below it rounds up to it.
     pub fn new(mut steps: Vec<u32>, start: Option<u32>) -> Self {
         steps.retain(|&s| s >= LOWEST_USEFUL_MHZ);
-        Self { adaptive: true, ..Self::fixed(steps, start) }
+        Self { adaptive: !steps.is_empty(), ..Self::fixed(steps, start) }
     }
 
     /// A minimum that stays at `mhz` (rounded up to a step; above the top step, the top step) for
@@ -77,13 +77,14 @@ impl CpuMin {
 
     /// One frame paced by the display. `gap`: the time between the vsync this frame ran after and
     /// the one the previous frame ran after; `period`: the display's refresh period. A gap of more
-    /// than 1.5 periods (halfway to two, allowing for jitter) is a missed refresh, and the second
-    /// within `MISS_PAIR` raises the level a step; at the top step it can't, and says so once. The
+    /// than 1.5 periods (halfway to two, allowing for jitter) is a missed refresh. Two misses within
+    /// `MISS_PAIR` of each other raise the level a step (the next miss starts a new pair); at the
+    /// top step they can't, and it says so once. The
     /// gaps add up to the clock of play, so leave out frames whose gap isn't play: the first after
     /// a pause (the gap would include the pause), and any paced by a timer (which has no refreshes
     /// to miss). Returns a decision when there is one to act on.
     pub fn frame(&mut self, gap: Duration, period: Duration) -> Option<Decision> {
-        if !self.adaptive || self.steps.is_empty() { return None; }
+        if !self.adaptive { return None; }
         self.played += gap;
         if gap <= period * 3 / 2 { return None; }
         let now = self.played;
