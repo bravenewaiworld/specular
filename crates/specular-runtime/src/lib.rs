@@ -776,10 +776,10 @@ impl Writer {
                         let written = data.and_then(|data| write_atomically(&path, &data));
                         (path, written)
                     }
-                    Job::Remove(path) => {
-                        let removed = std::fs::remove_file(&path).or_else(|e| if e.kind() == io::ErrorKind::NotFound { Ok(()) } else { Err(e) });
-                        (path, removed)
-                    }
+                    Job::Remove(path) => match std::fs::remove_file(&path) {
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                        removed => (path, removed),
+                    },
                     Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); continue; }
                 };
                 if let Err(e) = written {

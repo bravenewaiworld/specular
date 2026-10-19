@@ -820,7 +820,7 @@ impl Runner {
             _ => {}
         }
         // (A new time zone shows at once.)
-        let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_) | Msg::TimeZone(ZoneEvent::Set { result: Ok(()), .. }));
+        let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_) | Msg::GameStopped(_) | Msg::TimeZone(ZoneEvent::Set { result: Ok(()), .. }));
         // The window can be resized (on a desktop), changing how many columns a grid has.
         if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
         // A tick while a button is held makes its repeats. (The flag stays set until the next

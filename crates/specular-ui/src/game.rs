@@ -83,10 +83,11 @@ impl Playing {
         });
         let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
         // The game is quit, unless another has started since.
-        let (why, rom) = (core.bios_halt_notice(), game.path.clone());
+        let rom = game.path.clone();
         let on_bios_halt = Box::new(move || {
-            let (why, rom) = (why.clone(), rom.clone());
+            let rom = rom.clone();
             crate::on_ui(move |r| if r.playing.borrow().as_ref().is_some_and(|p| p.record.1.game == rom) {
+                let why = core.bios_halt_notice();
                 eprintln!("game: stopped: {why}");
                 crate::post(Msg::GameStopped(why));
             });

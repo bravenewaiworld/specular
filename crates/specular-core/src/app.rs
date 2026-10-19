@@ -46,7 +46,7 @@ pub enum Msg {
     /// The current time, on the clock button times use: due button repeats are generated, and
     /// the device sleeps if it has been left alone for the "Sleep after" time. Sent when a repeat
     /// or the sleep is due (`App::next_deadline`, `App::sleep_deadline`), and after `Woke`,
-    /// `GameEnded` and at startup: the idle count starts from the first tick after those.
+    /// `GameEnded`, `GameStopped` and at startup: the idle count starts from the first tick after those.
     Tick(Duration),
     /// A library scan finished. `card_found` is false when the data folder is missing or empty,
     /// which is how a device looks without its SD card.

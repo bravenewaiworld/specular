@@ -22,6 +22,12 @@ impl SoundOut for Count {
     fn capacity(&self) -> usize { 0 }
 }
 
+/// Outputs that take nothing: no sound or rumble, a 60 Hz display without vsync, and callbacks
+/// that do nothing. A test sets the ones it watches over these (`..outputs()`).
+fn outputs() -> Outputs {
+    Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) }
+}
+
 #[test]
 fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
@@ -41,8 +47,7 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let c = count.clone();
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None },
-        Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(),
-                  on_frame: Box::new(move || *c.lock().unwrap() += 1), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { sound: Some(Box::new(Count(sound.clone()))), frames: frames.clone(), on_frame: Box::new(move || *c.lock().unwrap() += 1), ..outputs() },
     ).unwrap();
     assert_eq!((session.info().width, session.info().height), (240, 160));
     assert!((session.info().fps - 59.7275).abs() < 0.01, "{}", session.info().fps);
@@ -89,10 +94,9 @@ fn the_frame_shown_last_is_kept_until_taken() {
 fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) };
     let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None };
-    assert!(Session::start(spec(dir.path().join("none.so")), out()).is_err());
-    if let Some(core) = mgba() { assert!(Session::start(spec(core), out()).err().unwrap().contains("none.gba")); }
+    assert!(Session::start(spec(dir.path().join("none.so")), outputs()).is_err());
+    if let Some(core) = mgba() { assert!(Session::start(spec(core), outputs()).err().unwrap().contains("none.gba")); }
 }
 
 /// A GBA ROM whose code (after the header) is `code`, ARM instructions. mGBA takes a file as a
@@ -120,8 +124,7 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
     let saves = Arc::new(Mutex::new(0usize));
     let out = || {
         let saves = saves.clone();
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None,
-                  on_save: Box::new(move || *saves.lock().unwrap() += 1), on_bios_halt: Box::new(|| {}) }
+        Outputs { on_save: Box::new(move || *saves.lock().unwrap() += 1), ..outputs() }
     };
     let session = Session::start(spec(), out()).unwrap();
     // mGBA makes the ENV_SAVE_RAM_WRITTEN call 15 frames (a quarter of a second) after the game's
@@ -159,7 +162,7 @@ fn the_games_rumble_stops_while_it_is_paused_and_when_it_ends() {
     line.set_level(specular_core::settings::builtin::RUMBLE_MAX as u8);
     let session = Session::start(
         LaunchSpec { core, rom: rom_path, save: dir.path().join("rumbles.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: Some(line.clone()), on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { rumble: Some(line.clone()), ..outputs() },
     ).unwrap();
     let full = Motors { strong: 0xffff, weak: 0xffff };
     std::thread::sleep(Duration::from_millis(200));
@@ -202,11 +205,10 @@ fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs()
     let record = LaunchRecord::new("mGBA", &core, &game);
     let spec = |rom: PathBuf| LaunchSpec { core: core.clone(), rom, save: dir.path().join("game.srm"), autosave: None, system_dir: dir.path().into(),
                                            options: vec![], option_list: None, rom_by_path: true, states_restore_save: false, record: Some((record_path.clone(), record.clone())) };
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::new(FrameSlot::default()), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) };
     let write = |name: &str, data: &[u8]| { let p = dir.path().join(name); std::fs::write(&p, data).unwrap(); p };
     // mGBA is given the unzipped ROM's path, which has no extension: it tells a GBA ROM by its contents.
     let game = write("game.zip", &zip(&[("readme.txt", b"hello"), ("game.gba", &rom(&[0xeaff_fffe /* b . */]))]));
-    let o = out();
+    let o = outputs();
     let frames = o.frames.clone();
     let session = Session::start(spec(game.clone()), o).unwrap();
     assert_eq!((session.info().width, session.info().height), (240, 160));
@@ -217,15 +219,15 @@ fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs()
     assert!(dir.path().join("game.srm").exists());
     assert!(!record_path.exists()); // the game ended cleanly
     let none = write("none.zip", &zip(&[("readme.txt", b"hello")]));
-    assert_eq!(Session::start(spec(none), out()).err().unwrap(), "the zip holds no game mGBA plays");
+    assert_eq!(Session::start(spec(none), outputs()).err().unwrap(), "the zip holds no game mGBA plays");
     let zipped = std::fs::read(&game).unwrap();
     let cut = write("cut.zip", &zipped[..zipped.len() - 30]); // the directory's end is gone
-    assert_eq!(Session::start(spec(cut), out()).err().unwrap(), "the zip can't be read (not a zip)");
+    assert_eq!(Session::start(spec(cut), outputs()).err().unwrap(), "the zip can't be read (not a zip)");
     // A byte of the ROM's compressed data, which ends where the directory starts.
     let mut damaged = zipped.clone();
     damaged[zipped.windows(4).position(|w| w == b"PK\x01\x02").unwrap() - 4] ^= 0xff;
     let damaged = write("damaged.zip", &damaged);
-    assert!(Session::start(spec(damaged), out()).err().unwrap().starts_with("the zip is damaged"));
+    assert!(Session::start(spec(damaged), outputs()).err().unwrap().starts_with("the zip is damaged"));
     assert!(!record_path.exists()); // nor is it left by a game that couldn't start
 }
 
@@ -259,7 +261,7 @@ fn the_sound_moves_to_a_new_output_between_frames() {
     let (first, second) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let session = Session::start(
         LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None },
-        Outputs { sound: Some(Box::new(Count(first.clone()))), vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { sound: Some(Box::new(Count(first.clone()))), ..outputs() },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(200)); // frames reach the first output
     session.set_sound(Some(Box::new(Count(second.clone()))));
@@ -315,7 +317,7 @@ fn runs_an_nes_game_with_frames_sound_and_its_battery_save() {
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(),
                      options: vec![("nestopia_blargg_ntsc_filter".into(), "disabled".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
-        Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { sound: Some(Box::new(Count(sound.clone()))), frames: frames.clone(), ..outputs() },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(300));
     let f = frames.take().expect("a frame");
@@ -353,7 +355,7 @@ fn runs_a_ps1_game_without_a_bios() {
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().join("bios"),
                      options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { frames: frames.clone(), ..outputs() },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     let f = frames.take().expect("a frame");
@@ -441,8 +443,7 @@ fn a_ps1_game_that_openbios_halts_says_so_and_loses_its_autosave() {
     let session = Session::start(
         LaunchSpec { core, rom, save: dir.path().join("Halts.srm"), autosave: Some(autosave.clone()), system_dir: dir.path().join("bios"),
                      options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}),
-                  on_bios_halt: Box::new(move || { let _ = halted.send(()); }) },
+        Outputs { on_bios_halt: Box::new(move || { let _ = halted.send(()); }), ..outputs() },
     ).unwrap();
     halt.recv_timeout(Duration::from_secs(20)).expect("OpenBIOS halted the game");
     session.quit().unwrap();
@@ -459,9 +460,8 @@ fn a_newer_battery_save_is_kept(core: PathBuf, rom_name: &str, rom: Vec<u8>, opt
     let (save, state, newer) = (dir.path().join("game.srm"), dir.path().join("game.state1"), dir.path().join("game.newer.srm"));
     let spec = || LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: save.clone(), autosave: None, system_dir: dir.path().into(),
         options: options.iter().map(|&(k, v)| (k.into(), v.into())).collect(), option_list: None, rom_by_path: false, states_restore_save: true, record: None };
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) };
     let run = |load: Option<&Path>, save_to: Option<&Path>| {
-        let session = Session::start(spec(), out()).unwrap();
+        let session = Session::start(spec(), outputs()).unwrap();
         std::thread::sleep(Duration::from_millis(200));
         if let Some(p) = load { session.load_state(p).unwrap(); }
         if let Some(p) = save_to { session.save_state(p).unwrap(); }
@@ -562,7 +562,7 @@ fn options_changed_mid_game_reach_the_core() {
     let session = Session::start(
         LaunchSpec { core, rom: rom_path, save: dir.path().join("red.srm"), autosave: None, system_dir: dir.path().into(),
                      options: vec![], option_list: Some(list), rom_by_path: false, states_restore_save: false, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { frames: frames.clone(), ..outputs() },
     ).unwrap();
     // The colour of the middle of the newest frame, after a few more.
     let colour = || {
@@ -619,7 +619,7 @@ fn a_core_added_to_the_card_plays_and_its_options_are_learned_from_its_first_gam
     let session = Session::start(
         LaunchSpec { core: core.user.unwrap().path.clone(), rom: rom_path, save: card.path().join("blank.srm"), autosave: None, system_dir: card.path().into(),
                      options: vec![], option_list: None, rom_by_path: false, states_restore_save: core.states_restore_save, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        outputs(),
     ).unwrap();
     let declared = session.info().options.clone();
     session.quit().unwrap();
@@ -651,9 +651,8 @@ fn a_ps1_game_on_two_discs_changes_disc_and_resumes_on_the_one_it_was_on() {
     let spec = || LaunchSpec { core: core.clone(), rom: rom.clone(), save: dir.path().join("Game.srm"), autosave: Some(autosave.clone()),
         system_dir: dir.path().join("bios"), options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None,
         rom_by_path: false, states_restore_save: true, record: None };
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) };
     let on = |disc| Discs { count: 2, current: Some(disc) };
-    let session = Session::start(spec(), out()).unwrap();
+    let session = Session::start(spec(), outputs()).unwrap();
     assert_eq!(session.discs(), on(0));
     std::thread::sleep(Duration::from_millis(200));
     session.change_disc(1).unwrap();
@@ -665,7 +664,7 @@ fn a_ps1_game_on_two_discs_changes_disc_and_resumes_on_the_one_it_was_on() {
     // The autosave records the disc, and the game resumes on it.
     let disc = tags_of(&std::fs::read(&autosave).unwrap()).disc.expect("the disc recorded");
     assert_eq!((disc.index, disc.path), (1, dir.path().join("Game (Disc 2).bin").to_string_lossy().into_owned()));
-    let session = Session::start(spec(), out()).unwrap();
+    let session = Session::start(spec(), outputs()).unwrap();
     assert_eq!(session.discs(), on(1));
     // SwanStation's own states keep the disc: one made on the second, without Specular's record
     // of it, loaded on the first, puts the second back.
@@ -723,7 +722,7 @@ fn a_zipped_famicom_disk_system_game_is_given_to_nestopia_by_its_extension() {
     let session = Session::start(
         LaunchSpec { core, rom, save: dir.path().join("Zelda.srm"), autosave: None, system_dir: dir.path().join("bios"),
                      options: vec![("nestopia_blargg_ntsc_filter".into(), "disabled".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) },
+        Outputs { frames: frames.clone(), ..outputs() },
     ).unwrap();
     assert!(!left.exists());
     assert!(ours.join("Zelda.fds").is_symlink());
