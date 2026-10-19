@@ -43,7 +43,7 @@ impl App {
     /// Starts or stops the server to match what is wanted now: running while its screen is open,
     /// the SD card is in and the device is awake. Called after every message, and before sleeping.
     pub(super) fn reconcile_transfer(&mut self) -> Vec<Effect> {
-        let wanted = self.transfer_open() && self.ctx.card_found && !self.asleep;
+        let wanted = self.transfer_open() && self.ctx.card_in() && !self.asleep;
         let Some(t) = &mut self.ctx.transfer else { return vec![] };
         if t.told == wanted { return vec![]; }
         t.told = wanted;
@@ -83,8 +83,9 @@ struct TransferScreen;
 
 impl Screen for TransferScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
-        if !ctx.card_found {
-            let rows = vec![Row::note("note:none", "No SD card"), Row::note("note:where", "Insert one to transfer files to it.")];
+        if !ctx.card_in() {
+            let card = ctx.card.as_ref().map_or("No SD card".into(), Card::text);
+            let rows = vec![Row::note("note:none", card), Row::note("note:where", "Insert one to transfer files to it.")];
             return ScreenView::list("File transfer", rows);
         }
         let mut rows = vec![Row::note("note:warning", "While this screen is open, anyone on the same network can read and change everything on the SD card. Leave it to stop.")];

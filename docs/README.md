@@ -8,6 +8,7 @@ Why Specular works the way it does: decisions, designs and research, one doc per
 | [look-and-motion.md](look-and-motion.md) | The Light Bar look, theme, motion, prefabs, sounds, lights and rumble effects, fonts |
 | [runtime.md](runtime.md) | The libretro runtime: frame pacing, sound, saves and states, discs, rumble, cores (Specular's and those added to the card) |
 | [library-and-box-art.md](library-and-box-art.md) | Scanning, systems, search, game identification, box art and other pictures |
+| [sd-card.md](sd-card.md) | Following the SD card: its states, reading it afresh, what is never written, a game whose card goes |
 | [settings.md](settings.md) | Setting declarations, game and system settings, core options, the config files on the SD card, migrations, the SD card layout |
 | [wireless.md](wireless.md) | WiFi and Bluetooth screens and services, traces and scenarios |
 | [remote-access.md](remote-access.md) | File transfer and SSH: reaching the device from a PC |

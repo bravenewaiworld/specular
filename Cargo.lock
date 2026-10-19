@@ -3946,6 +3946,7 @@ dependencies = [
 name = "specular-desktop"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "slint",
  "specular-core",
  "specular-credits",

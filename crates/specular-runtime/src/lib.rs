@@ -100,6 +100,9 @@ pub struct Outputs {
     /// autosave and stops writing it: SwanStation's states hold the BIOS they were made with, so
     /// resuming one would halt again, even with a BIOS file added since.
     pub on_bios_halt: Box<dyn Fn() + Send>,
+    /// Called on the save writer's thread for each save that couldn't be written (it is also
+    /// logged), including those written in the background, which no call returns.
+    pub write_failed: Box<dyn Fn(&io::Error) + Send>,
 }
 
 /// About the running game.
@@ -207,7 +210,8 @@ enum Cmd {
     Options(Vec<(String, String)>),
     Discs(mpsc::Sender<io::Result<Discs>>),
     ChangeDisc(usize, mpsc::Sender<io::Result<()>>),
-    Quit(mpsc::Sender<io::Result<()>>),
+    /// Ends the game, writing its saves first if `save`.
+    Quit { save: bool, reply: mpsc::Sender<io::Result<()>> },
 }
 
 /// A running game. Dropping it quits the game (writing its battery save and autosave).
@@ -296,7 +300,9 @@ impl Session {
     pub fn flush(&self) -> io::Result<()> { self.ask(Cmd::Flush) }
 
     /// Ends the game: writes its battery save and autosave, and unloads the core.
-    pub fn quit(mut self) -> io::Result<()> { self.stop() }
+    pub fn quit(mut self) -> io::Result<()> { self.stop(true) }
+    /// Ends the game without writing anything (the storage its saves go to is gone).
+    pub fn abandon(mut self) { let _ = self.stop(false); }
 
     fn ask<T>(&self, cmd: impl FnOnce(mpsc::Sender<io::Result<T>>) -> Cmd) -> io::Result<T> {
         let (tx, rx) = mpsc::channel();
@@ -304,9 +310,9 @@ impl Session {
         rx.recv().map_err(|_| io::Error::other("the game has stopped"))?
     }
 
-    fn stop(&mut self) -> io::Result<()> {
+    fn stop(&mut self, save: bool) -> io::Result<()> {
         let Some(thread) = self.thread.take() else { return Ok(()) };
-        let r = self.ask(Cmd::Quit);
+        let r = self.ask(|reply| Cmd::Quit { save, reply });
         let _ = thread.join();
         r
     }
@@ -314,7 +320,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        if let Err(e) = self.stop() { eprintln!("game: {e}"); }
+        if let Err(e) = self.stop(true) { eprintln!("game: {e}"); }
     }
 }
 
@@ -381,7 +387,7 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
 fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
         started: mpsc::Sender<Result<GameInfo, String>>) {
-    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble) {
+    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble, out.write_failed) {
         Ok(g) => g,
         Err(e) => { let _ = started.send(Err(e)); return; }
     };
@@ -421,7 +427,8 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                 Cmd::Options(options) => game.set_options(options),
                 Cmd::Discs(reply) => { let _ = reply.send(Ok(disks().map(|d| d.discs()).unwrap_or_default())); }
                 Cmd::ChangeDisc(index, reply) => { let _ = reply.send(game.change_disc(index).map_err(io::Error::other)); }
-                Cmd::Quit(reply) => { game.save_all(Some(reply)); return; }
+                Cmd::Quit { save: true, reply } => { game.save_all(Some(reply)); return; }
+                Cmd::Quit { save: false, reply } => { let _ = reply.send(Ok(())); return; }
             }
             continue;
         }
@@ -489,7 +496,8 @@ struct Game {
 }
 
 impl Game {
-    fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>, rumble: Option<RumbleLine>) -> Result<Self, String> {
+    fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>, rumble: Option<RumbleLine>,
+            write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, String> {
         let core = Core::load(&spec.core)?;
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
@@ -528,7 +536,7 @@ impl Game {
         log_options(&name, spec);
         let mut av = core::AvInfo::default();
         unsafe { (core.get_system_av_info)(&mut av) };
-        let writer = Writer::new().map_err(|e| format!("starting the save writer: {e}"))?;
+        let writer = Writer::new(write_failed).map_err(|e| format!("starting the save writer: {e}"))?;
         let mut g = Game { core, name, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
                            states_restore_save: spec.states_restore_save, loaded_state: None,
                            autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
@@ -758,7 +766,7 @@ enum Job {
 }
 
 impl Writer {
-    fn new() -> io::Result<Self> {
+    fn new(failed_one: Box<dyn Fn(&io::Error) + Send>) -> io::Result<Self> {
         let (jobs, rx) = mpsc::channel();
         std::thread::Builder::new().name("game-saves".into()).spawn(move || {
             let mut failed = None;
@@ -790,6 +798,7 @@ impl Writer {
                 };
                 if let Err(e) = written {
                     eprintln!("game: writing {}: {e}", path.display());
+                    failed_one(&e);
                     failed.get_or_insert(e);
                 }
             }

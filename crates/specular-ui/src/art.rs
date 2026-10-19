@@ -257,7 +257,7 @@ impl Worker {
         match encode(&small).map_err(std::io::Error::other).and_then(|png| write(&png, &path).map(|()| png.len())) {
             Ok(bytes) => eprintln!("art: left off: {} ({}×{} from {}×{}, {} KB) in {} ms", path.display(), small.width, small.height,
                 size.0, size.1, bytes.div_ceil(1024), start.elapsed().as_millis()),
-            Err(e) => eprintln!("art: storing where {} was left off: {e}", rom.display()),
+            Err(e) => crate::wrote_to_card(&format!("art: storing where {} was left off", rom.display()), &e),
         }
     }
 
@@ -334,7 +334,7 @@ fn fetch(sources: &[Box<dyn ArtSource>], cache: &Path, game: &Game, identity: Op
                 };
                 return match write(&png, &art::cached_image(cache, kind, &game.path)) {
                     Ok(()) => Outcome::Stored,
-                    Err(e) => { eprintln!("art: storing {}'s {}: {e}", game.path.display(), kind.id()); Outcome::Later }
+                    Err(e) => { crate::wrote_to_card(&format!("art: storing {}'s {}", game.path.display(), kind.id()), &e); Outcome::Later }
                 };
             }
             Ok(None) => {}

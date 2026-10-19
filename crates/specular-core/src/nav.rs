@@ -35,6 +35,9 @@ impl NavStack {
     /// Whether a screen of this kind is anywhere on the stack.
     pub fn contains(&self, id: &ScreenId) -> bool { self.0.iter().any(|s| &s.id == id) }
 
+    /// The topmost screen of this kind on the stack, if any.
+    pub fn find(&self, id: &ScreenId) -> Option<&ScreenState> { self.0.iter().rev().find(|s| &s.id == id) }
+
     pub fn push(&mut self, s: ScreenState) -> Transition { self.0.push(s); Transition::Push }
 
     /// Goes back one screen; None at home.

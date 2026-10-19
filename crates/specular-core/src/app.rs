@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::art::{self, ArtKind};
+use crate::card::{Card, CardCmd};
 use crate::device::{Battery, Output, Rgb, SshCmd, SshStatus};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
@@ -23,6 +24,7 @@ use crate::timezone::{ZoneCmd, ZoneEvent};
 use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
+mod card;
 mod cores;
 mod credits;
 mod icons;
@@ -49,14 +51,19 @@ pub enum Msg {
     /// `GameEnded`, `GameStopped` and at startup: the idle count starts from the first tick after
     /// those.
     Tick(Duration),
-    /// A library scan finished. `card_found` is false when the data folder is missing or empty,
-    /// which is how a device looks without its SD card.
-    Library { games: Vec<Game>, card_found: bool },
+    /// A library scan (`Effect::ScanLibrary`) finished, or rescanned after the games changed.
+    /// Ignored while the card can't be read.
+    Library(Vec<Game>),
     /// The cores changed (cores the user added were found or removed, or one's options learned):
     /// the systems Specular plays now, with their cores, every setting with those cores' options
     /// (`settings::declarations`), and the files in `cores/` turned away. Sent before the
     /// `Library` of the scan that used these systems.
     Cores { systems: Vec<SystemDecl>, settings: Vec<SettingDecl>, turned_away: Vec<library::user_cores::TurnedAway> },
+    /// The SD card's state, as the device reports it: at startup, then on each change (see
+    /// `app::card`).
+    Card(Card),
+    /// A write to the SD card failed because it is read-only (EROFS).
+    CardReadOnly,
     Battery(Battery),
     /// The device woke from sleep.
     Woke,
@@ -114,6 +121,15 @@ pub enum Effect {
     Redraw(Option<Transition>),
     /// Write this settings layer to its file.
     SaveSettings(Layer),
+    /// Read the SD card afresh: its settings files (`Msg::SettingsLoaded`, the global one first),
+    /// then its cores (`Msg::Cores`) and games (`Msg::Library`), watching its folders anew
+    /// (watches on a card that was released never fire again) and reading them again whenever
+    /// they change. Nothing from an earlier reading may arrive after this. Only a `writable`
+    /// card has its config folder brought up to date and files Specular generates written.
+    ReadCard { writable: bool },
+    /// Stop reading and watching the card: it is gone. Nothing from its reading may arrive after
+    /// this.
+    ForgetCard,
     /// One of Specular's settings has this value where it applies now: at the running game's layer
     /// while one is played, else the global one. Sent for every setting once the global settings
     /// have loaded, for one changed, and for those that may differ per system or game when a game
@@ -135,6 +151,8 @@ pub enum Effect {
     ResetGame,
     /// End the running game (its battery save is written).
     QuitGame,
+    /// End the running game without writing its saves: the card they go to is gone or read-only.
+    AbandonGame,
     /// Show this short message for a moment.
     Notice(String),
     /// Show the volume: its level (0 to `builtin::VOLUME_MAX`), whether the sound is muted, and
@@ -147,11 +165,14 @@ pub enum Effect {
     /// Silence the sound (true) or restore it (false). The volume level is untouched; `Apply`
     /// still carries it.
     Mute(bool),
+    /// Sleep. A running game is paused first, and its saves written if the card can be written
+    /// (`Ctx::card`): power can fail while asleep.
     Sleep,
     /// Turn the device off. If a game is being played, the app sends `QuitGame` just before this
-    /// (in the same list), so its saves are written first.
+    /// (in the same list), so its saves are written first (`AbandonGame` if the card can't be
+    /// written).
     PowerOff,
-    /// Restart the device; as `PowerOff`, after `QuitGame` if a game is being played.
+    /// Restart the device; as `PowerOff`, after ending a game being played.
     Restart,
     Wifi(WifiCmd),
     Bluetooth(BtCmd),
@@ -170,6 +191,7 @@ pub enum Effect {
     Sound(Sound),
     /// A command for the UI's time zone thread. The UI redraws the clock once a zone is set.
     TimeZone(ZoneCmd),
+    Card(CardCmd),
 }
 
 /// The interface's sounds (made in specular-ui; see docs/look-and-motion.md).
@@ -208,10 +230,13 @@ pub enum InputTarget {
 pub struct Ctx {
     pub systems: Vec<SystemDecl>,
     pub games: Vec<Game>,
-    /// Whether the library has been scanned yet (until then `games` is empty).
+    /// Whether this card's library has been scanned yet (until then `games` is empty).
     pub scanned: bool,
-    /// Whether the last scan found an SD card (see `Msg::Library`).
-    pub card_found: bool,
+    /// The SD card, once the device has reported it.
+    pub card: Option<Card>,
+    /// Whether home still shows the card's one-time message (errors were repaired) until the
+    /// user dismisses it.
+    pub card_note: bool,
     pub settings: Settings,
     pub battery: Option<Battery>,
     /// None on a device without WiFi (or Bluetooth); see `App::has_radios`.
@@ -233,6 +258,9 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// Whether the SD card is in and its files can be read (it is mounted, maybe read-only).
+    pub fn card_in(&self) -> bool { self.card.as_ref().is_some_and(Card::readable) }
+
     /// Which settings are shown: developer ones too while "Developer details" is on.
     pub fn visibility(&self) -> Visibility {
         if self.settings.on(builtin::DEVELOPER_DETAILS) { Visibility::Developer } else { Visibility::User }
@@ -341,6 +369,10 @@ pub mod screens {
     /// The question whether the zone may be looked up. Its presses are handled by the app
     /// (`App::zone_consent`).
     pub const ZONE_CONSENT: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone consent"));
+    /// Over a game whose SD card went, until the card is back or the game is quit; its params
+    /// hold the id of the card the game runs from (see `app::card`). Its presses are handled by
+    /// the app itself.
+    pub const CARD_WAIT: ScreenId = ScreenId(std::borrow::Cow::Borrowed("card wait"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -376,7 +408,7 @@ pub struct App {
     keyboard: Option<(Keyboard, String)>,
     /// The latest time seen (`Tick`, button and `WifiNeed` times).
     now: Duration,
-    /// Whether the global settings have been loaded. Until then nothing is sent to the radios and
+    /// Whether the global settings (the card's, once it is read) have been loaded. Until then nothing is sent to the radios and
     /// the time zone isn't looked up, since the settings decide both.
     settings_loaded: bool,
     /// What the radios and sound were last told (see `wireless::Radios`).
@@ -387,11 +419,15 @@ pub struct App {
     last_tick: Option<Duration>,
     /// True from sending `Effect::Sleep` until `Msg::Woke`.
     asleep: bool,
+    /// Whether a write that failed as read-only had the device look at the card again, and its
+    /// answer (`Msg::Card`) hasn't come yet.
+    rechecking_card: bool,
 }
 
 impl App {
     /// An app with the built-in screens, knowing these systems and settings. It starts at home
-    /// with no games until a `Msg::Library` arrives.
+    /// with no games, and reads the library and settings once a `Msg::Card` says the card can be
+    /// read.
     pub fn new(systems: Vec<SystemDecl>, settings: Vec<SettingDecl>) -> Self {
         let mut screens: HashMap<ScreenId, Box<dyn Screen>> = HashMap::new();
         screens.insert(screens::HOME, Box::new(Home));
@@ -408,9 +444,11 @@ impl App {
         layers::register(&mut screens);
         transfer::register(&mut screens);
         timezone::register(&mut screens);
+        card::register(&mut screens);
         Self {
-            ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
-                   transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(), discs: Discs::default(), time_zone: None },
+            ctx: Ctx { systems, games: Vec::new(), scanned: false, card: None, card_note: false, settings: Settings::new(settings), battery: None,
+                       wifi: None, bluetooth: None, install: None, transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(),
+                       discs: Discs::default(), time_zone: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -428,6 +466,7 @@ impl App {
             zone_looked_up_for: None,
             last_tick: None,
             asleep: false,
+            rechecking_card: false,
         }
     }
 
@@ -458,7 +497,8 @@ impl App {
     /// Who buttons are for now: the game while one is played and no menu is open over it (nor a
     /// screen opened from its menu).
     pub fn input_target(&self) -> InputTarget {
-        let menu = self.nav.contains(&screens::GAME_MENU) || self.nav.top().id == screens::POWER_MENU;
+        let top = &self.nav.top().id;
+        let menu = self.nav.contains(&screens::GAME_MENU) || *top == screens::POWER_MENU || *top == screens::CARD_WAIT;
         if self.playing.is_some() && !menu { InputTarget::Game } else { InputTarget::App }
     }
 
@@ -598,6 +638,7 @@ impl App {
         e.extend(self.reconcile_radios());
         e.extend(self.reconcile_transfer());
         self.drop_unheard_sounds(&mut e, in_game);
+        self.hold_settings_saves(&mut e);
         e
     }
 
@@ -635,9 +676,9 @@ impl App {
                 e.extend(self.sleep_if_idle(now));
                 e
             }
-            Msg::Library { games, card_found } => {
+            Msg::Library(games) => {
+                if !self.ctx.card_in() { return vec![]; }
                 self.ctx.games = games;
-                self.ctx.card_found = card_found;
                 self.ctx.scanned = true;
                 self.changed();
                 vec![Effect::Redraw(None)]
@@ -652,6 +693,8 @@ impl App {
                 let options = self.playing.is_some().then(|| Effect::CoreOptions(self.core_options()));
                 std::iter::once(Effect::Redraw(None)).chain(options).collect()
             }
+            Msg::Card(card) => self.card_changed(card),
+            Msg::CardReadOnly => self.card_read_only(),
             // A game slept through stays paused, with its menu open.
             Msg::Woke => {
                 self.asleep = false;
@@ -663,6 +706,7 @@ impl App {
             Msg::GameEnded(why) => {
                 if self.playing.take().is_none() { return vec![]; }
                 self.idle_since = None;
+                self.nav.close(&screens::CARD_WAIT);
                 self.nav.close(&screens::GAME_MENU);
                 self.changed();
                 why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
@@ -686,21 +730,7 @@ impl App {
                 self.ctx.battery = Some(b);
                 if changed { vec![Effect::Redraw(None)] } else { vec![] }
             }
-            Msg::SettingsLoaded(layer, values) => {
-                // A change made before the file was loaded was saved without the file's values
-                // (and replaced it): save the two together.
-                let save = (!self.ctx.settings.layer(&layer).is_empty()).then(|| Effect::SaveSettings(layer.clone()));
-                let global = layer == Layer::Global;
-                self.ctx.settings.set_layer(layer, values);
-                self.changed();
-                // The other layers are loaded before the games they are for are listed, so before
-                // any of those can be played: nothing in them applies yet.
-                let applied: Vec<Effect> = if global {
-                    self.settings_loaded = true;
-                    self.apply_all(|_| true)
-                } else { vec![] };
-                std::iter::once(Effect::Redraw(None)).chain(applied).chain(save).collect()
-            }
+            Msg::SettingsLoaded(layer, values) => self.layer_loaded(layer, values),
             Msg::Wifi(e) => self.wifi_event(e),
             Msg::Bluetooth(e) => self.bluetooth_event(e),
             Msg::WifiNeed { need, wanted, time } => { self.now = self.now.max(time); self.wifi_need(need, wanted); vec![] }
@@ -718,6 +748,24 @@ impl App {
             }
             Msg::TimeZone(e) => self.time_zone_event(e),
         }
+    }
+
+    /// A settings layer was read: once the global one is, every setting is applied.
+    fn layer_loaded(&mut self, layer: Layer, values: serde_json::Map<String, serde_json::Value>) -> Vec<Effect> {
+        // A change made before the file was loaded was saved without the file's values (and
+        // replaced it; the load was asked for first, so it read the file before): save the two
+        // together.
+        let save = (!self.ctx.settings.layer(&layer).is_empty()).then(|| Effect::SaveSettings(layer.clone()));
+        let global = layer == Layer::Global;
+        self.ctx.settings.set_layer(layer, values);
+        self.changed();
+        // The other layers are loaded before the games they are for are listed, so before any of
+        // those can be played: nothing in them applies yet.
+        let applied: Vec<Effect> = if global {
+            self.settings_loaded = true;
+            self.apply_all(|_| true)
+        } else { vec![] };
+        std::iter::once(Effect::Redraw(None)).chain(applied).chain(save).collect()
     }
 
     fn press(&mut self, p: Press) -> Vec<Effect> {
@@ -762,6 +810,7 @@ impl App {
         if id == screens::ZONE_CONSENT { return self.zone_consent(p.button, row); }
         if [screens::ZONE_AREAS, screens::ZONE_CITIES].contains(&id) && p.button == Button::A
             && let Some(zone) = row.and_then(|r| r.strip_prefix("zone:")) { return self.pick_zone(zone); }
+        if id == screens::CARD_WAIT { return self.card_wait(p.button, row); }
         // (A, B and Menu never repeat.) Over a paused game, Menu resumes it.
         if p.button == Button::Menu && self.nav.contains(&screens::GAME_MENU) { return self.resume(); }
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
@@ -796,7 +845,8 @@ impl App {
                 self.repeater.reset();
                 // The settings that may differ for this game.
                 let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
-                std::iter::once(Effect::Launch(game)).chain(per_game).chain([Effect::Redraw(None)]).collect()
+                let unsaved = (!self.card_writable()).then(|| Effect::Notice("The SD card is read-only: progress in this game won't be saved".into()));
+                std::iter::once(Effect::Launch(game)).chain(per_game).chain([Effect::Redraw(None)]).chain(unsaved).collect()
             }
             Outcome::Effects(e) => { self.changed(); e }
             Outcome::SettingChanged(layer, key) => {
@@ -875,9 +925,15 @@ impl App {
             (Button::A, Some("restart")) => (Effect::Restart, "Restarting…"),
             _ => return vec![],
         };
-        let mut e = if self.playing.take().is_some() { vec![Effect::QuitGame] } else { vec![] };
+        let mut e: Vec<Effect> = self.end_game().into_iter().collect();
         e.extend([Effect::Notice(notice.into()), power]);
         e
+    }
+
+    /// Ends the game being played, if any: with its saves written if the card can take them.
+    fn end_game(&mut self) -> Option<Effect> {
+        self.playing.take()?;
+        Some(if self.card_writable() { Effect::QuitGame } else { Effect::AbandonGame })
     }
 
     fn open_game_menu(&mut self) -> Vec<Effect> {
@@ -899,6 +955,7 @@ impl App {
                 let to = current.map_or(if back { count - 1 } else { 0 }, |c| (c + if back { count - 1 } else { 1 }) % count);
                 vec![Effect::ChangeDisc(to), Effect::PauseGame(false)]
             }
+            (Button::A, Some("save")) if !self.card_writable() => return vec![Effect::Notice("The SD card is read-only: the state can't be saved".into())],
             (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
             (Button::A, Some("load")) => vec![Effect::LoadState, Effect::PauseGame(false)],
             (Button::A, Some("reset")) => vec![Effect::ResetGame, Effect::PauseGame(false)],
@@ -907,7 +964,7 @@ impl App {
                 let path = game.path.to_string_lossy().into_owned();
                 return self.go(|nav| Some(nav.push(ScreenState::new(screens::GAME_SETTINGS, Some(path)))));
             }
-            (Button::A, Some("quit")) => { self.playing = None; vec![Effect::QuitGame] }
+            (Button::A, Some("quit")) => self.end_game().into_iter().collect(),
             _ => return vec![],
         };
         e.extend(self.go(|nav| nav.pop()));
@@ -962,17 +1019,17 @@ struct Home;
 
 impl Screen for Home {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
-        let mut rows = vec![Row::new("header:systems", "Systems", RowKind::Header)];
+        let mut rows = card::home_notes(ctx);
+        rows.push(Row::new("header:systems", "Systems", RowKind::Header));
         for s in &ctx.systems {
             let n = ctx.games.iter().filter(|g| g.system == s.id).count();
             if n > 0 { rows.push(Row::new(format!("system:{}", s.id), s.name, RowKind::Text { detail: Some(n.to_string()) })); }
         }
         if ctx.games.is_empty() {
-            if !ctx.scanned {
+            if let Some(card) = ctx.card.as_ref().filter(|c| !c.readable()) {
+                rows.push(Row::note("note:card", card.text()));
+            } else if !ctx.scanned {
                 rows.push(Row::note("note:scanning", "Looking for games…"));
-            } else if !ctx.card_found {
-                rows.push(Row::note("note:none", "No SD card"));
-                rows.push(Row::note("note:where", "Insert one with your games in roms/"));
             } else {
                 rows.push(Row::note("note:none", "No games found"));
                 rows.push(Row::note("note:where", "Put them in roms/ on the SD card"));
@@ -985,8 +1042,9 @@ impl Screen for Home {
         ScreenView { title: "Library".into(), layout: Layout::List, rows, hints: vec![(Button::A, "Open".into())], entry: None }
     }
 
-    fn press(&self, _: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
+    fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         let (Button::A, Some(row)) = (p.button, focused) else { return Outcome::None };
+        if row.id.0 == card::DISMISS { ctx.card_note = false; return Outcome::Changed; }
         match row.id.0.strip_prefix("system:") {
             Some(system) => Outcome::Push(ScreenState::new(screens::GAMES, Some(system.to_string()))),
             None if row.id.0 == "search" => type_search(),

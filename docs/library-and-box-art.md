@@ -36,7 +36,7 @@ How Specular finds the games on the card, works out their systems, identifies ea
 
 ### Scanning
 
-`roms/` is scanned recursively on its own thread. Hidden folders, Windows' `System Volume Information` and symbolic links are skipped. A zip counts as the system of the ROM inside it, and is unzipped into memory to be played (see [runtime.md](runtime.md)); a zip64 one (4 GiB or more) isn't listed. Files that only make up another game (the tracks a `.cue` lists, the discs an `.m3u` lists) aren't listed on their own. A missing or empty data folder is how a device looks without its SD card, and the library says so.
+`roms/` is scanned recursively on its own thread. Hidden folders, Windows' `System Volume Information` and symbolic links are skipped. A zip counts as the system of the ROM inside it, and is unzipped into memory to be played (see [runtime.md](runtime.md)); a zip64 one (4 GiB or more) isn't listed. Files that only make up another game (the tracks a `.cue` lists, the discs an `.m3u` lists) aren't listed on their own. The card is scanned once the system says it can be read, and again when it comes back (see [sd-card.md](sd-card.md)); while it can't, the library shows the system's message instead.
 
 Linux's inotify watches `roms/` and every folder under it; a scan follows once no change has come for 2 s, so copying many files leads to one scan.
 

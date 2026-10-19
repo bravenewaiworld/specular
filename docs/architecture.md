@@ -88,10 +88,10 @@ pub trait Screen {
 | Thread | Work |
 |---|---|
 | UI | Slint, the app, uploading game frames |
-| I/O | migrating, loading and saving settings (saves queued together are merged) |
+| I/O | reading the card when the app asks (migrating, loading settings, starting its scan), saving settings (saves queued together are merged) |
 | Scan | looking for the cores on the card (then writing the settings' schemas), library scans (loading the games' settings), then moving saves of renamed ROMs |
 | Hardware | the device's hardware services, file transfer and SSH; reads the battery every 10 s |
-| One per radio | WiFi and Bluetooth commands, which can block for seconds |
+| One per radio, and the card | WiFi and Bluetooth commands, which can block for seconds; following the SD card's state (see [sd-card.md](sd-card.md)) |
 | Headphone jack | waits for plugging and unplugging |
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
 | Rumble | runs the motors, at the latest state asked for (`rumble::RumbleLine`) |
@@ -136,6 +136,7 @@ pub struct Hardware {
     pub bluetooth: Option<Box<Bluetooth>>,
     pub installer: Option<Box<dyn Installer>>,    // see installer.md
     pub time_zone: Option<Box<dyn TimeZone>>,     // see time-zone.md
+    pub card: Option<Box<CardService>>,           // see sd-card.md; None: always mounted
     pub headphones: Option<Box<dyn HeadphoneJack>>,
     pub rumble: Option<Box<dyn Rumble>>,
     pub file_transfer: Option<Box<dyn FileTransfer>>,   // see remote-access.md

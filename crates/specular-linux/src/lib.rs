@@ -5,6 +5,7 @@
 //! and adds only what its hardware does differently.
 
 pub mod bluez;
+pub mod card_state;
 pub mod input;
 pub mod interfaces;
 pub mod jack;

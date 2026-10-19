@@ -10,6 +10,7 @@ name = "specular"
 path = "src/main.rs"
 
 [dependencies]
+libc = "0.2"
 # Slint's desktop window (winit), drawn with the same renderer as on devices.
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg"] }
 specular-core = { path = "../../crates/specular-core" }

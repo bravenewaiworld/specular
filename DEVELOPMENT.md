@@ -8,6 +8,7 @@
   - WiFi and Bluetooth follow a recorded or hand-written scenario (see Wireless traces and scenarios).
   - The installer runs from the SD card, with one backup, a previous version and three update files (a newer one, an older one, and one that can't be installed). It can be made to run from the internal storage, where Restore prepares the card (`SPECULAR_INSTALL_INSTALLED`); to have a prepared restore waiting on the card, asked about at start-up (`SPECULAR_INSTALL_PENDING`); to fail (`SPECULAR_INSTALL_FAILS`); or to look like a task was left running (`SPECULAR_INSTALL_RUNNING=<install|restore|update|activate>`).
   - File transfer prints the `sv` commands it stands for (`simulated: sv up webdav`), and starts in half a second; `SPECULAR_TRANSFER_FAILS` makes it fail as when the server can't listen. The USB cable's address is the default scenario's `usb0`.
+  - The SD card is always in and writable, unless driven (see Driving the SD card's states).
   - SSH is a release system's: off, with no keys; importing finds two. `SPECULAR_SSH=no-keys` makes the import fail as without `authorized_keys`; `SPECULAR_SSH=development` makes it a development system's (no switch, only a note).
   - The time zone starts at UTC, whatever the PC's, and is kept in memory (lost at quit). The zones are the PC's (`/usr/share/zoneinfo`). Once allowed, the lookup is a real request over the PC's network, made when the scenario's WiFi connects (the built-in scenario connects when "Home" is joined). `SPECULAR_TIMEZONE_LOOKUP=<answer>` answers it instead, without the network: a zone (`Europe/Paris`), an alias (`US/Eastern`), one no system has (`Mars/Olympus_Mons`: refused), or empty (a blank answer: refused). To replay a device's lookup, give it the answer the device logged, without the quotes.
 - **Cores** are loaded from `SPECULAR_CORES`, or else from `cores/` next to the binary.
@@ -46,7 +47,7 @@
   4. Settings → Time zone → Zone → an area → a zone: "By hand", `brick-timezone get` prints it, and the clock changes at once. Rejoin WiFi: no lookup.
   5. Delete `time.zone` and `time.zone_lookup_allowed` from `specular.json`, restart Specular and rejoin WiFi (if it doesn't reconnect by itself); at the question, B (or "Choose it myself"): "By hand", the zone stays, and joining again asks nothing.
   6. With no internet behind the network, a lookup logs why it failed and changes nothing.
-- **Wireless trace.** Every call to and event from the WiFi and Bluetooth services is logged with a timestamp. Passwords are redacted. The trace is always on.
+- **Wireless trace.** Every call to and event from the WiFi, Bluetooth and SD card services is logged with a timestamp. Passwords are redacted. The trace is always on.
 - **Frame statistics** (a developer setting): fps, the core's median and 95th-percentile time per frame, how much sound is queued, and the rumble's strength while it rumbles (the game's and the effects' together, after the "Rumble" setting), drawn over the game. Also, at the bottom right (on every screen, and over a game), the times between the UI's frames while something animates: how many, how many came late (more than 1.5 refreshes after the one before, so a refresh showed a frame twice), how many extra (under half a refresh: two frames for one refresh, one never shown) and the longest; under them, the last animation's CPU time per frame. Each animation that ends also logs two lines:
   - `ui: 9 frame times: median 16.6 ms, longest 17.0 ms; 0 late, 0 extra`
   - `ui: CPU a frame: median 4.1 ms, 2.9 ms of it drawing (longest 6.0, 4.2); 4 row slots changed; 23 slots, 18 with rows, 6 on screen`: the UI thread's CPU time from one frame to the next, and the part spent drawing (Slint walking the scene, FemtoVG building paths and glyph runs, the GL calls; presenting the frame, the buffer swap, isn't counted in it). Then, over the animation (from the frame before it), the row slots given new data. Last, the row slots now: how many, how many hold rows (those near the view), and how many of those are on screen.
@@ -65,7 +66,16 @@
   5. Sleep with it open: open the screen and wait past "Sleep after": it doesn't sleep. Tap the power button: the stop comes before `sleepnow` runs (port 80 closed, as in 4). Wake: `sv up webdav` and `port 80 takes connections` again, and the browser page loads again after a reload.
   6. A crash with it open: open the screen, then `kill -9` Specular (the service manager starts it again). At its start-up the stop of step 1 runs, and port 80 is closed.
   7. A failed start: on a development system with its developer layer, `mv /usr/bin/dufs /usr/bin/dufs.off`, then open the screen. After 5 s it says "File transfer didn't start: " with `sv status webdav`'s line and the service's last log lines, and offers Try again; `sv status webdav` says `down`. Put dufs back and press Try again: it starts.
-  8. With the screen open, take the SD card out: "No SD card", and the log has the stop. Put it back: it starts again.
+  8. With the screen open, take the SD card out: the system's message about the card, and the log has the stop. Put it back: it starts again.
+- **Checking the SD card on the Brick.** Run Specular in the foreground to see its log, with two FAT32 cards with games (A and B), one of them with a write-protect switch if at hand, and an SSH session for `cat /run/card/state` and `logread -f -e mount-card`. Every state Specular sees is a `wireless card … event {…}` line; a recheck is `wireless card … call "Recheck"`.
+  1. In the library, take card A out: the message (line 2 of the state file) replaces the systems, within a second of `mount-card` logging `absent`; a system's game list open at the time closes to home. Put it back: "Checking…" (the system's words), then the library again; the log has `settings: loaded …` and a new scan. Copy a game onto the card over File transfer: it appears (the new watch works).
+  2. Insert card B: its library and its settings (e.g. another brightness) replace A's.
+  3. Mid-game (a GBA game, not a PS1 disc first): take card A out. The game pauses under "Card removed", asking for the card again; B and Menu do nothing. Insert card B: still waiting, "This isn't the SD card the game was started from". Take B out, insert A: "The game was saved", back to the library, and `ls -l` on the game's `.srm` and autosave shows them written just now. Launch the game again: it resumes where it was.
+  4. Mid-game again, take the card out and choose Quit unsaved: back to the library with the message; nothing is written (`game: ended without saving`). Then a PS1 disc game, the same: Specular must not crash (a core touching the pulled card would end it with SIGBUS).
+  5. A read-only card (the write-protect switch, or `mount -o remount,ro /mnt/SDCARD` over SSH, which the next write turns into the recheck below): the message stays above the library; changing a setting isn't saved (the file's time doesn't change); in a game, Save state says it can't, and quitting writes nothing.
+  6. The kernel's read-only: with card A mounted, `mount -o remount,ro /mnt/SDCARD` over SSH, then change the volume. The log has `settings: …: Read-only file system`, then `wireless card … call "Recheck"`, `mount-card` runs (its log line), and the state becomes `read-only damaged`; the notice "The SD card has turned read-only" shows, then the message above the library. Take the card out and put it back to have it checked again.
+  7. A repaired card: pull the card while a game writes (or set the FAT dirty bit on a PC with errors to fix): after reinserting, the repair message shows once above the library, with OK; it goes when pressed.
+  8. On a Brick running from the SD card, pull it: the message ("the Brick turned off…") shows for the ~3 s before it powers off, also over a game.
 - **Checking SSH on a release system on the Brick.** Turn on Developer details. (Until SSH is on there is no terminal: read the log afterwards in `/system/logs/messages`.)
   1. Settings shows "SSH" (off) and "Import SSH keys from the SD card" (0 SSH keys), with a note on where keys go. The log has `ssh: /usr/sbin/brick-ssh: exit status: 0, stdout "image=release\nssh=off\nkeys=0"`.
   2. Without `authorized_keys` at the card's root, Import says "Couldn't import SSH keys: no authorized_keys at the SD card's root", and the count stays.
@@ -93,6 +103,7 @@
   - The on-screen keyboard.
   - WiFi against a fake service socket replaying output recorded on a device.
   - Bluetooth parsing.
+  - The SD card's state file: reading it, and following it as it is replaced.
   - The installer's progress protocol.
   - `brick-ssh`'s state and the WebDAV service's log lines, as the Brick reads them.
   - The lights and rumble effects, with plain events and times, and the rumble handed between threads.
@@ -101,6 +112,14 @@
   - A wireless trace from a device converts into a scenario (`tools/trace-to-scenario.py`).
   - The desktop build replays a scenario (`SPECULAR_SCENARIO=<file>`): the same events, with the same answers and timing. A WiFi or Bluetooth problem seen on a device can be reproduced on the PC.
   - A default scenario is built in.
+- **Driving the SD card's states on the desktop.** Either way, every state is traced (`wireless card …`), as on a device.
+  - A state file you edit while it runs: `SPECULAR_CARD_STATE=/tmp/card/state` (its folder must exist; no file means a mounted card). Write it in the system's format (docs/sd-card.md), e.g. `printf 'absent\nNo SD card.\n' > /tmp/card/state`, then `printf 'mounted\n\ncard=aaaa check=repaired\n' > /tmp/card/state`. Changing `card=` between two mounted states is another card.
+  - A scenario: a `"card"` script in `SPECULAR_SCENARIO`'s file, whose events are the card's states (`{"status": "Absent", "message": "…", "id": "aaaa", "check": "clean"}`; reason and check as in the state file) and whose answer to `"Recheck"` is what the system then reports. With `SPECULAR_SCRIPT`, this drives a game whose card goes and comes back without hands: e.g. `{"card": {"start": [{"event": {"status": "Mounted", "id": "aaaa"}}, {"after_ms": 5000, "event": {"status": "Absent"}}, {"after_ms": 9000, "event": {"status": "Mounted", "id": "aaaa"}}]}}` with `SPECULAR_SCRIPT=a,a,volup,volup,volup,volup,volup,volup,volup,volup SPECULAR_SCRIPT_MS=1000` launches the first game, pauses it at 5 s and saves it at 9 s.
+  - A write refused as read-only, for real: run Specular in a user namespace whose data folder is a bind mount, and remount it read-only while it runs. With `SPECULAR_CARD_STATE`, the desktop's recheck then reports `read-only damaged`, as `mount-card` would:
+    ```
+    unshare -rm sh -c 'mount --bind sdcard sdcard; SPECULAR_CARD_STATE=/tmp/card/state specular sdcard & sleep 5; mount -o remount,bind,ro sdcard; wait'
+    ```
+    Change the volume after the remount: the settings' write fails, and the recheck follows.
 - **Scripted input and screenshots.**
   - `SPECULAR_SCRIPT=down,a,…` plays a list of button presses into the app, one every `SPECULAR_SCRIPT_MS` (default 400). `down:6000` holds the button for 6 s, repeating as if held.
   - It then saves a screenshot (raw RGBA) to `SPECULAR_SNAPSHOT` and quits.

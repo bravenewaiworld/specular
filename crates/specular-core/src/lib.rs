@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod art;
+pub mod card;
 pub mod device;
 pub mod effects;
 pub mod input;

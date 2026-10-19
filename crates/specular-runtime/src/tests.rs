@@ -25,7 +25,8 @@ impl SoundOut for Count {
 /// Outputs that discard everything: no sound or rumble, a 60 Hz display without vsync, and
 /// callbacks that do nothing. A test sets the fields it checks over these (`..outputs()`).
 fn outputs() -> Outputs {
-    Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) }
+    Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}),
+              write_failed: Box::new(|_| {}) }
 }
 
 #[test]
@@ -229,6 +230,28 @@ fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs()
     let damaged = write("damaged.zip", &damaged);
     assert!(Session::start(spec(damaged), outputs()).err().unwrap().starts_with("the zip is damaged"));
     assert!(!record_path.exists()); // nor is it left by a game that couldn't start
+}
+
+#[test]
+fn abandoning_writes_nothing_and_saves_that_fail_are_reported() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    let rom_path = dir.path().join("game.gba");
+    std::fs::write(&rom_path, rom(&[0xeaff_fffe /* b . */])).unwrap();
+    // Saves go under a file, where no folder can be made.
+    std::fs::write(dir.path().join("file"), b"").unwrap();
+    let spec = |saves: &Path| LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: saves.join("game.srm"), autosave: Some(saves.join("game.autosave")),
+                                           system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None };
+    let failed = Arc::new(Mutex::new(0));
+    let out = || {
+        let f = failed.clone();
+        Outputs { write_failed: Box::new(move |_| *f.lock().unwrap() += 1), ..outputs() }
+    };
+    Session::start(spec(dir.path()), out()).unwrap().abandon();
+    assert!(!dir.path().join("game.autosave").exists());
+    assert!(Session::start(spec(&dir.path().join("file")), out()).unwrap().quit().is_err());
+    assert_eq!(*failed.lock().unwrap(), 2); // the battery save and the autosave
 }
 
 struct Instant0;

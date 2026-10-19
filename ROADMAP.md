@@ -30,6 +30,7 @@ TODO:
  - SSH on release systems: an "SSH" switch and "Import SSH keys from the SD card" in the developer settings (built; to check on the Brick, see DEVELOPMENT.md)
  - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `brick-timezone`; the clock changes at once (built; to check on the Brick, see DEVELOPMENT.md)
  - Rumble from games (built; to check on the Brick)
+ - SD card pulled and inserted, in the library and mid-game; a read-only card; a write refused as read-only runs `mount-card` (built; to check on the Brick, see DEVELOPMENT.md)
  - Menus paced by the vsync, as games are (built; to measure on the Brick)
  - Separate volume levels for speaker and headphones, each in its own codec control (built; to check on the Brick, see DEVELOPMENT.md)
 
@@ -71,10 +72,12 @@ Completed:
  - Fuzzy name matching, only when unambiguous: one title holding every word of the file's name, with the same numbers ("II" is "2"), so sequels never collapse; the ROM's own region preferred. The log names each fuzzy match and each game not identified (with why), and counts the rest by method
  - PS1 discs identified by serial: from `SYSTEM.CNF` in a `.bin`, `.iso`, `.cue` or `.m3u`, or a `.pbp`'s `DISC_ID`, against a compiled-in Redump table
  - Saves follow a renamed or moved ROM
- - "No SD card" and "no games" shown when they apply
+ - "No games" shown when there are none
  - Search: from Home, or X in any game list, across every system, best matches first; case, accents and punctuation ignored
  - A letter index: L2/R2 jump between first letters in game lists and grids, with the letter shown large for a moment
 
+TODO:
+ - The SD card followed as the system reports it (`/run/card/state`): its message shown in place of the library while it is out, being checked or unusable, above it while read-only, and once after a repair; the library, the settings and the cores read afresh when a card comes; nothing written to a card that can't take it; a game whose card goes paused until that card is back, then saved (built; to check on the Brick, see DEVELOPMENT.md)
 ### Installer
 
 Completed:

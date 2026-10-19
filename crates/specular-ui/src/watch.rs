@@ -5,6 +5,7 @@
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Changes are waited out until none has come for this long, so a copy of many files (or of one
@@ -17,16 +18,31 @@ const QUIET: Duration = Duration::from_secs(2);
 const EVENTS: u32 = libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE
     | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
 
-/// An inotify instance; `watch` adds the folders, `wait_for_change` waits for their changes.
-pub struct CardWatch(OwnedFd);
+/// An inotify instance; `watch` adds the folders, `wait_for_change` waits for their changes, until
+/// its `Stop` is used.
+pub struct CardWatch { inotify: OwnedFd, stop: Arc<OwnedFd> }
+
+/// Ends a `CardWatch`'s waiting, from another thread: its card is gone, or being read afresh.
+pub struct Stop(Arc<OwnedFd>);
+
+impl Stop {
+    pub fn stop(&self) {
+        let one = 1u64.to_ne_bytes();
+        unsafe { libc::write(self.0.as_raw_fd(), one.as_ptr().cast(), one.len()) };
+    }
+}
 
 impl CardWatch {
     /// A watch with no folders yet.
     pub fn new() -> std::io::Result<Self> {
-        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
-        if fd < 0 { return Err(std::io::Error::last_os_error()); }
-        Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
+        let fd = |fd: i32| if fd < 0 { Err(std::io::Error::last_os_error()) } else { Ok(unsafe { OwnedFd::from_raw_fd(fd) }) };
+        let inotify = fd(unsafe { libc::inotify_init1(libc::IN_CLOEXEC) })?;
+        let stop = fd(unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) })?;
+        Ok(Self { inotify, stop: Arc::new(stop) })
     }
+
+    /// What ends this watch's waiting.
+    pub fn stopper(&self) -> Stop { Stop(self.stop.clone()) }
 
     /// Watches `roms` and the folders the scan follows under it, and the folder holding it, so a
     /// `roms/` made later is noticed too (and so is any of `folders` beside it, such as `cores/`;
@@ -52,19 +68,21 @@ impl CardWatch {
 
     fn add(&self, dir: &Path, mask: u32) {
         let Ok(path) = CString::new(dir.as_os_str().as_encoded_bytes()) else { return };
-        unsafe { libc::inotify_add_watch(self.0.as_raw_fd(), path.as_ptr(), mask) };
+        unsafe { libc::inotify_add_watch(self.inotify.as_raw_fd(), path.as_ptr(), mask) };
     }
 
-    /// Waits for a change, then until changes have stopped for `QUIET`. (The events are read
-    /// only to clear them: any change leads to a whole scan.)
-    pub fn wait_for_change(&self) {
+    /// Waits for a change, then until changes have stopped for `QUIET`; false instead if stopped
+    /// meanwhile (or before). (The events are read only to clear them: any change leads to a whole
+    /// scan.)
+    pub fn wait_for_change(&self) -> bool {
         let mut buf = [0u8; 4096];
         let mut timeout = -1; // the first change: wait as long as it takes
         loop {
-            let mut pfd = libc::pollfd { fd: self.0.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-            let ready = unsafe { libc::poll(&mut pfd, 1, timeout) };
-            if ready == 0 { return; } // quiet for QUIET
-            if ready > 0 { unsafe { libc::read(self.0.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) }; }
+            let mut fds = [self.inotify.as_raw_fd(), self.stop.as_raw_fd()].map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout) };
+            if fds[1].revents != 0 { return false; }
+            if ready == 0 { return true; } // quiet for QUIET
+            if ready > 0 { unsafe { libc::read(self.inotify.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) }; }
             timeout = QUIET.as_millis() as i32;
         }
     }

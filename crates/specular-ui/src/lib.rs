@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
 use specular_core::art::ArtKind;
+use specular_core::card::{Card, CardCmd};
 use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble, SshCmd};
 use specular_core::effects::{self, Effects, Event};
@@ -171,6 +172,14 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     let mut hardware = device.hardware();
     let device: game::SharedDevice = Arc::from(device);
     let (wifi, bluetooth, installer, time_zone) = (hardware.wifi.take(), hardware.bluetooth.take(), hardware.installer.take(), hardware.time_zone.take());
+    let card = match hardware.card.take() {
+        Some(service) => Some(radio_thread("card", service, Msg::Card)),
+        None => {
+            eprintln!("card: this device doesn't report its SD card; it counts as always in and writable");
+            post(Msg::Card(Card::mounted()));
+            None
+        }
+    };
     match hardware.headphones.take() {
         Some(jack) => { std::thread::spawn(move || jack.watch(Box::new(|plugged| post(Msg::Headphones(plugged))))); }
         None => eprintln!("input: this device has no headphone detection; headphones get the speaker's volume"),
@@ -210,7 +219,9 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
         installer: installer.map(installer_thread),
         time_zone: time_zone.map(timezone::thread),
+        card,
         io,
+        reading: Cell::new(0),
         data,
         sounds: sounds::Sounds::start(device.clone()),
         device,
@@ -537,48 +548,92 @@ fn rumble_thread(mut rumble: Box<dyn Rumble>) -> RumbleLine {
     line
 }
 
-/// A settings file to write.
-struct Save(PathBuf, serde_json::Map<String, serde_json::Value>);
+/// What the I/O thread is asked to do.
+enum Io {
+    /// Read the card afresh, as reading number `reading` (`Effect::ReadCard`).
+    Read { reading: u32, writable: bool },
+    /// Stop reading the card (`Effect::ForgetCard`).
+    Forget,
+    /// Write a settings file.
+    Save(PathBuf, serde_json::Map<String, serde_json::Value>),
+}
 
-/// The I/O thread: brings the config folder up to date and loads the settings at start, starts
-/// the library scan (`scan_thread`), then saves settings. Saves queued together are merged, so
+/// The I/O thread: reads the card when asked (`read_card`), and saves settings. It works in the
+/// order asked, so the card's settings files are read before any save asked for after, and saves
+/// asked for before reach the card they were made for. Saves queued together are merged, so
 /// holding a button that changes a value writes the file once rather than once per step.
-fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel::<Save>();
+fn io_thread(data: DataRoot) -> (mpsc::Sender<Io>, std::thread::JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<Io>();
     let handle = std::thread::spawn(move || {
-        // False if migrating failed: then nothing is written to the config folder (see `migrate`),
-        // and changes stay in memory.
-        let writable = settings::migrate::migrate(&data.0);
-        if !writable { on_ui(|r| r.toast("Settings can't be saved until Specular restarts. The log says why.")); }
-        let (config, systems) = (data.config(), playable_systems());
-        let decls = settings::declarations(&systems);
-        // The global layer, then each system's (any may get a core from the card) and each of
-        // Specular's cores'; the card's cores' are loaded as they are found, and games' with the
-        // library.
-        let cores = library::cores(&systems).into_iter().map(|c| Layer::Core(c.id().into()));
-        for layer in [Layer::Global].into_iter().chain(library::builtin_systems().iter().map(|s| Layer::System(s.id.into()))).chain(cores) {
-            post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
-        }
-        // Before the scan, so no game can have been launched (writing a new record) yet.
-        if let Some(r) = LaunchRecord::left_behind(&launch::path(&data.cache())) { post(Msg::LastGameStopped(r)); }
-        std::thread::spawn(move || scan_thread(data, writable));
-        while let Ok(first) = rx.recv() {
-            let latest: HashMap<PathBuf, _> = std::iter::once(first).chain(rx.try_iter()).map(|Save(p, v)| (p, v)).collect();
-            if !writable { continue; }
-            for (path, values) in latest {
-                if let Err(e) = store::store_layer(&path, &values) { eprintln!("settings: {}: {e}", path.display()); }
+        // The card's scan, and whether settings may be written to its config folder.
+        let (mut scan, mut writable, mut first) = (None::<watch::Stop>, false, true);
+        let mut saves = HashMap::new();
+        while let Ok(cmd) = rx.recv() {
+            for cmd in std::iter::once(cmd).chain(rx.try_iter()) {
+                if let Io::Save(path, values) = cmd { saves.insert(path, values); continue; }
+                store_settings(&mut saves, writable);
+                if let Some(s) = scan.take() { s.stop(); }
+                writable = false;
+                if let Io::Read { reading, writable: w } = cmd { (scan, writable) = read_card(&data, reading, w, std::mem::take(&mut first)); }
             }
+            store_settings(&mut saves, writable);
         }
     });
     (tx, handle)
 }
 
-/// The library scan, on a thread of its own: looks for the card's cores, then scans the games and
-/// moves the saves of renamed ROMs; again whenever the files on the card change. Schemas are
-/// written only if the config folder is `writable` (see `io_thread`).
-fn scan_thread(data: DataRoot, writable: bool) {
-    let (config, roms, saves, cores_dir, learned) = (data.config(), data.roms(), data.saves(), data.cores(), data.learned_options());
+/// Writes the settings files in `saves` (emptying it), if the card's config folder can take them.
+fn store_settings(saves: &mut HashMap<PathBuf, serde_json::Map<String, serde_json::Value>>, writable: bool) {
+    for (path, values) in saves.drain().filter(|_| writable) {
+        if let Err(e) = store::store_layer(&path, &values) { wrote_to_card(&format!("settings: {}", path.display()), &e); }
+    }
+}
+
+/// Reads the card, as reading number `reading`: brings its config folder up to date (only if
+/// `writable`), loads its settings files, then starts its scan (`scan_thread`). Returns what
+/// stops the scan (None if the card can't be watched: then it scans once), and whether settings
+/// can be written to the card. `first`: the run's first reading, which reports the launch record
+/// an earlier run left behind.
+fn read_card(data: &DataRoot, reading: u32, writable: bool, first: bool) -> (Option<watch::Stop>, bool) {
+    // False if migrating failed: then nothing is written to the config folder (see `migrate`),
+    // and changes stay in memory.
+    let migrated = writable && settings::migrate::migrate(&data.0);
+    if writable && !migrated { on_ui(|r| r.toast("Settings can't be saved until the SD card is inserted again. The log says why.")); }
+    let (config, systems) = (data.config(), playable_systems());
+    let decls = settings::declarations(&systems);
+    // The global layer, then each system's (any may get a core from the card) and each of
+    // Specular's cores'; the card's cores' are loaded as they are found, and games' with the
+    // library.
+    let cores = library::cores(&systems).into_iter().map(|c| Layer::Core(c.id().into()));
+    for layer in [Layer::Global].into_iter().chain(library::builtin_systems().iter().map(|s| Layer::System(s.id.into()))).chain(cores) {
+        post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
+    }
+    // Before the scan, so no game can have been launched (writing a new record) yet.
+    if first && let Some(r) = LaunchRecord::left_behind(&launch::path(&data.cache())) { post_reading(reading, Msg::LastGameStopped(r)); }
     let watch = watch::CardWatch::new().map_err(|e| eprintln!("library: can't watch for new games or cores: {e}")).ok();
+    let stop = watch.as_ref().map(watch::CardWatch::stopper);
+    let data = data.clone();
+    std::thread::spawn(move || scan_thread(data, reading, migrated, watch));
+    (stop, migrated)
+}
+
+/// Delivers a message from reading number `reading` of the card, unless the card has been read
+/// afresh or forgotten since (see `Runner::reading`).
+fn post_reading(reading: u32, msg: Msg) { on_ui(move |r| if r.reading.get() == reading { r.handle(msg) }); }
+
+/// Logs a failed write to the card (`what` failed: `e`), and tells the app if the card refused it
+/// as read-only (`Msg::CardReadOnly`).
+fn wrote_to_card(what: &str, e: &std::io::Error) {
+    eprintln!("{what}: {e}");
+    if e.raw_os_error() == Some(libc::EROFS) { post(Msg::CardReadOnly); }
+}
+
+/// The library scan of reading number `reading` of the card, on a thread of its own: looks for
+/// the card's cores, then scans the games and moves the saves of renamed ROMs; again whenever the
+/// files on the card change (`watch`), until it is stopped. Schemas are written only if the
+/// config folder is `writable` (see `read_card`).
+fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch::CardWatch>) {
+    let (config, roms, saves, cores_dir, learned) = (data.config(), data.roms(), data.saves(), data.cores(), data.learned_options());
     // The games whose settings files are loaded, and the files found to be for no game.
     let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
     let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
@@ -587,9 +642,8 @@ fn scan_thread(data: DataRoot, writable: bool) {
     let (mut systems, mut decls) = (Vec::new(), Vec::new());
     loop {
         // `cache/cores/` is made beforehand so it can be watched: options learned are written
-        // there as a core plays its first game, and become settings at the next look. (Not
-        // without a card: see `card_found`.)
-        if card_found(&data) && let Err(e) = std::fs::create_dir_all(&learned) { eprintln!("cores: can't make {}: {e}", learned.display()); }
+        // there as a core plays its first game, and become settings at the next look.
+        if writable && let Err(e) = std::fs::create_dir_all(&learned) { wrote_to_card(&format!("cores: can't make {}", learned.display()), &e); }
         if let Some(w) = &watch { w.watch(&roms, &[&cores_dir, &learned]); }
         let now = on_card.find(&cores_dir, &learned, &all);
         if found.as_ref() != Some(&now) {
@@ -600,10 +654,10 @@ fn scan_thread(data: DataRoot, writable: bool) {
             // options' file is loaded.
             for c in now.cores.iter().filter(|c| cores_loaded.insert(c.id())) {
                 let layer = Layer::Core(c.id().into());
-                post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
+                post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
             }
             if writable { write_schemas(&data, &decls, &systems); }
-            post(Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
+            post_reading(reading, Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
             found = Some(now);
         }
         let games = library::scan(&roms, &systems);
@@ -612,10 +666,11 @@ fn scan_thread(data: DataRoot, writable: bool) {
         }
         // Before the games are listed, so no game can be played or have its settings shown
         // before they are loaded.
-        load_games_layers(&config, &decls, &games, &mut loaded, &mut orphans);
-        post(Msg::Library { games, card_found: card_found(&data) });
-        let Some(w) = &watch else { return };
-        w.wait_for_change();
+        load_games_layers(reading, &config, &decls, &games, &mut loaded, &mut orphans);
+        post_reading(reading, Msg::Library(games));
+        // (Dropping the watch on the way out lets go of the card's folders, so a card pulled can
+        // be released.)
+        if !watch.as_ref().is_some_and(watch::CardWatch::wait_for_change) { return; }
     }
 }
 
@@ -631,16 +686,13 @@ fn log_cores(dir: &Path, found: &user_cores::Found) {
 
 /// Writes the settings files' schemas (`settings::schema::all`) for `systems`, only the files whose
 /// contents changed.
-/// Not without a card: the data folder is then the bare mount point, which must stay empty (see
-/// `card_found`).
 fn write_schemas(data: &DataRoot, decls: &[settings::SettingDecl], systems: &[SystemDecl]) {
-    if !card_found(data) { return; }
     for (file, schema) in settings::schema::all(decls, systems) {
         let path = data.config().join(file);
         match store::store_generated(&path, &schema) {
             Ok(true) => eprintln!("settings: wrote {}", path.display()),
             Ok(false) => {}
-            Err(e) => eprintln!("settings: can't write {}: {e}", path.display()),
+            Err(e) => wrote_to_card(&format!("settings: can't write {}", path.display()), &e),
         }
     }
 }
@@ -666,22 +718,18 @@ fn load_layer(config: &Path, decls: &[settings::SettingDecl], layer: &Layer) -> 
 /// Loads the settings file of each of `games` that has one and isn't `loaded` yet. Logs once each
 /// file under `games/` that is for no game in the library (a ROM renamed, say), and so not loaded
 /// (`orphans`); it is loaded if its game appears in a later scan.
-fn load_games_layers(config: &Path, decls: &[settings::SettingDecl], games: &[Game], loaded: &mut HashSet<String>, orphans: &mut HashSet<String>) {
+fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl], games: &[Game], loaded: &mut HashSet<String>, orphans: &mut HashSet<String>) {
     let files = settings::games_with_settings(config);
     for g in games {
         let layer = g.settings_layer();
         let Layer::Game { game, .. } = &layer else { continue };
-        if files.contains(game) && loaded.insert(game.clone()) { post(Msg::SettingsLoaded(layer.clone(), load_layer(config, decls, &layer))); }
+        if files.contains(game) && loaded.insert(game.clone()) { post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(config, decls, &layer))); }
     }
     for f in files.into_iter().filter(|f| !loaded.contains(f)) {
         if orphans.insert(f.clone()) { eprintln!("settings: games/{f}.json is for no game in the library, so it isn't loaded"); }
     }
 }
 
-/// Whether the SD card is in. Without it, a device's data folder is an empty (or missing) mount
-/// point. That only holds while nothing is written there: fine on a read-only system, where
-/// Specular's own writes (settings, cache) fail.
-fn card_found(data: &DataRoot) -> bool { std::fs::read_dir(&data.0).is_ok_and(|mut d| d.next().is_some()) }
 
 /// Power-key presses are ignored from the request to sleep until this long after waking. The
 /// press that woke the device is delivered as it resumes, before the sleep command returns (it
@@ -703,7 +751,12 @@ struct Runner {
     installer: Option<mpsc::Sender<specular_core::app::InstallCmd>>,
     /// The time zone's thread (None on a device whose zone can't be set).
     time_zone: Option<mpsc::Sender<specular_core::timezone::ZoneCmd>>,
-    io: mpsc::Sender<Save>,
+    /// The card service's thread (None on a device that doesn't report its card).
+    card: Option<mpsc::Sender<CardCmd>>,
+    io: mpsc::Sender<Io>,
+    /// Counts the card's readings (`Effect::ReadCard`) and forgettings: what an earlier reading
+    /// sends is stale, and dropped (`post_reading`).
+    reading: Cell<u32>,
     data: DataRoot,
     device: game::SharedDevice,
     sounds: sounds::Sounds,
@@ -815,7 +868,7 @@ impl Runner {
         match &msg {
             Msg::Button(e) if e.button == Button::Power && e.time < self.ignore_power_until.get() => return,
             Msg::Woke => self.ignore_power_until.set(now() + WAKE_GRACE),
-            Msg::Library { games, .. } => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
+            Msg::Library(games) => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
             Msg::Battery(b) => self.tell_effects(Event::Battery(*b)),
             _ => {}
         }
@@ -866,8 +919,18 @@ impl Runner {
             Effect::Redraw(t) => self.refresh(t),
             Effect::SaveSettings(layer) => {
                 let values = self.app.borrow().ctx().settings.layer(&layer);
-                let _ = self.io.send(Save(layer.path(&self.data.config()), values));
+                let _ = self.io.send(Io::Save(layer.path(&self.data.config()), values));
             }
+            Effect::ReadCard { writable } => {
+                self.reading.set(self.reading.get() + 1);
+                let _ = self.io.send(Io::Read { reading: self.reading.get(), writable });
+            }
+            Effect::ForgetCard => {
+                self.reading.set(self.reading.get() + 1);
+                let _ = self.io.send(Io::Forget);
+                let _ = self.art_worker.send(art::ArtCmd::Library(vec![]));
+            }
+            Effect::Card(cmd) => if let Some(t) = &self.card { let _ = t.send(cmd); },
             Effect::Apply { key, value } => self.apply_setting(key, &value),
             Effect::Launch(game) => self.launch(&game),
             Effect::CoreOptions(options) => if let Some(p) = self.playing.borrow().as_ref() { p.session.set_options(options); },
@@ -907,10 +970,17 @@ impl Runner {
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
                 self.tell_effects(Event::GameStopped);
             }
+            Effect::AbandonGame => {
+                if let Some(p) = self.playing.borrow_mut().take() { p.session.abandon(); }
+                eprintln!("game: ended without saving: the SD card can't be written");
+                let _ = self.art_worker.send(art::ArtCmd::Paused(false));
+                self.tell_effects(Event::GameStopped);
+            }
             Effect::Sleep => {
                 self.ignore_power_until.set(Duration::MAX); // until `Msg::Woke`
                 // A game's battery save is written first: power can fail while asleep.
-                self.with_game(|p| { p.pause(true); p.session.flush().map(|()| "") });
+                let save = self.app.borrow().ctx().card.as_ref().is_some_and(Card::writable);
+                self.with_game(|p| { p.pause(true); if save { p.session.flush().map(|()| "") } else { Ok("") } });
                 self.tell_effects(Event::GameStopped);
                 let _ = self.hardware.send(HwCmd::Sleep);
             }

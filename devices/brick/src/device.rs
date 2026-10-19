@@ -10,6 +10,7 @@ use specular_core::device::{Accent, Audio, Device, DeviceProfile, Display, Hardw
 use specular_core::input::Button;
 use specular_core::wireless::trace::Traced;
 use specular_linux::bluez::Bluez;
+use specular_linux::card_state::StateFile;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
@@ -23,6 +24,10 @@ const LEDS: &[Accent] = {
 };
 /// The LEDs are very bright at full power; like TrimUI's firmware, limit them to about 40/255.
 const LED_LIMIT: u8 = 40;
+
+/// The SD card's state, kept by the system's `mount-card`, which a recheck runs.
+const CARD_STATE: &str = "/run/card/state";
+const MOUNT_CARD: &str = "/usr/libexec/brick/mount-card";
 
 pub struct Brick;
 
@@ -51,6 +56,8 @@ impl Device for Brick {
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
             installer: Some(Box::new(crate::install::BrickInstaller)),
             time_zone: Some(Box::new(crate::timezone::BrickTimeZone)),
+            // Crystaline OS mounts the card as it comes and goes (docs/storage.md there).
+            card: Some(Box::new(Traced::new("card", StateFile::new(CARD_STATE, Box::new(|| run(MOUNT_CARD, &[])))))),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
             // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.

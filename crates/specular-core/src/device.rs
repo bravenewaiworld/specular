@@ -222,6 +222,9 @@ pub struct Hardware {
     pub wifi: Option<Box<wireless::Wifi>>,
     /// None on devices without Bluetooth.
     pub bluetooth: Option<Box<wireless::Bluetooth>>,
+    /// None on devices whose system doesn't report the SD card: it then counts as always there
+    /// and writable (`Card::mounted`).
+    pub card: Option<Box<crate::card::CardService>>,
     /// None on devices without internal storage to install onto.
     pub installer: Option<Box<dyn crate::install::Installer>>,
     /// None on devices whose time zone Specular can't set.
@@ -258,7 +261,9 @@ pub trait Device {
 /// headphone jack (a desktop key simulates one, see `specular_ui::run`), and its radios follow a
 /// scenario (`wireless::scenario`): the file named by $SPECULAR_SCENARIO, `{"wifi": <script>,
 /// "bluetooth": <script>}`, else a built-in one with a few networks and devices. File transfer and
-/// SSH are pretend (see `SimTransfer`, `SimSsh`). Its time zone is `timezone::Simulated`.
+/// SSH are pretend (see `SimTransfer`, `SimSsh`). Its time zone is `timezone::Simulated`. A
+/// scenario with a `"card"` script also plays the SD card's states (its events are
+/// `card::Card`s); without one, the card is always mounted.
 pub mod simulated {
     use std::time::Instant;
 
@@ -337,6 +342,7 @@ pub mod simulated {
             power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)),
             wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", radio(&script, "bluetooth")))),
+            card: script.get("card").is_some().then(|| Box::new(Traced::new("card", radio(&script, "card"))) as Box<crate::card::CardService>),
             installer: Some(Box::new(crate::install::Simulated)),
             time_zone: Some(Box::new(crate::timezone::Simulated::new())),
             headphones: None,

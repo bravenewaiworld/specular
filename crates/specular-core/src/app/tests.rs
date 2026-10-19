@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::*;
+use crate::card::CardStatus;
 use crate::library::builtin_systems;
 
 fn game(system: &'static str, title: &str) -> Game {
@@ -21,8 +22,16 @@ fn app() -> App { app_with(quiet()) }
 
 fn app_with(settings: Vec<SettingDecl>) -> App {
     let mut app = App::new(builtin_systems(), settings);
-    app.handle(Msg::Library { games: vec![game("gba", "Golden Sun"), game("gba", "Mother 3"), game("snes", "Super Metroid")], card_found: true });
+    app.handle(Msg::Card(Card::mounted()));
+    app.handle(Msg::Library(vec![game("gba", "Golden Sun"), game("gba", "Mother 3"), game("snes", "Super Metroid")]));
     app
+}
+
+/// `app()` with the card's settings read (none stored).
+fn app_with_settings() -> App {
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    a
 }
 
 /// Presses and releases a button at time `t` (ms); returns the effects of both.
@@ -136,7 +145,7 @@ fn holding_down_repeats_and_stops_at_the_end() {
 
 #[test]
 fn settings_change_and_save() {
-    let mut a = app();
+    let mut a = app_with_settings();
     tap(&mut a, Button::Up, 0); // wraps to Settings
     tap(&mut a, Button::A, 10);
     assert_eq!(a.view().title, "Settings");
@@ -225,7 +234,8 @@ fn the_press_that_woke_the_device_is_neither_a_tap_nor_a_hold() {
 #[ignore]
 fn time_focus_moves_in_a_long_list() {
     let mut a = App::new(builtin_systems(), quiet());
-    a.handle(Msg::Library { games: (0..3000).map(|i| game("snes", &format!("Game {i:04}"))).collect(), card_found: true });
+    a.handle(Msg::Card(Card::mounted()));
+    a.handle(Msg::Library((0..3000).map(|i| game("snes", &format!("Game {i:04}"))).collect()));
     tap(&mut a, Button::A, 0);
     let t = std::time::Instant::now();
     for i in 0..1000 {
@@ -239,7 +249,8 @@ fn time_focus_moves_in_a_long_list() {
 #[test]
 fn y_switches_games_to_a_grid_where_left_and_right_move() {
     let mut a = App::new(builtin_systems(), quiet());
-    a.handle(Msg::Library { games: (0..7).map(|i| game("gba", &format!("Game {i}"))).collect(), card_found: true });
+    a.handle(Msg::Card(Card::mounted()));
+    a.handle(Msg::Library((0..7).map(|i| game("gba", &format!("Game {i}"))).collect()));
     a.set_grid_columns(3);
     tap(&mut a, Button::A, 0);
     assert_eq!(a.view().layout, Layout::ListWithPicture);
@@ -261,7 +272,8 @@ fn y_switches_games_to_a_grid_where_left_and_right_move() {
 #[test]
 fn search_finds_games_in_every_system_best_first_and_plays_them() {
     let mut a = App::new(builtin_systems(), quiet());
-    a.handle(Msg::Library { games: vec![game("gba", "Metroid Fusion"), game("gba", "Mother 3"), game("snes", "Super Metroid")], card_found: true });
+    a.handle(Msg::Card(Card::mounted()));
+    a.handle(Msg::Library(vec![game("gba", "Metroid Fusion"), game("gba", "Mother 3"), game("snes", "Super Metroid")]));
     tap(&mut a, Button::Down, 0);
     tap(&mut a, Button::Down, 0);
     assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Redraw(Some(Transition::Push))]);
@@ -277,7 +289,7 @@ fn search_finds_games_in_every_system_best_first_and_plays_them() {
     assert_eq!(results(&a), ["Metroid Fusion GBA", "Super Metroid SNES"]);
     // A rescan keeps the results (the query is the screen's params) and the focus.
     tap(&mut a, Button::Down, 0);
-    a.handle(Msg::Library { games: vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")], card_found: true });
+    a.handle(Msg::Library(vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")]));
     assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
     assert_eq!(focused(&a), "Super Metroid");
     assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Redraw(None)]);
@@ -314,8 +326,9 @@ fn x_searches_from_a_game_list_and_no_matches_say_so() {
 #[test]
 fn l2_and_r2_jump_between_first_letters() {
     let mut a = App::new(builtin_systems(), quiet());
+    a.handle(Msg::Card(Card::mounted()));
     let titles = ["1942", "Advance Wars", "Asterix", "Boktai", "Castlevania", "Contra", "The Legend of Zelda"];
-    a.handle(Msg::Library { games: titles.iter().map(|t| game("gba", t)).collect(), card_found: true });
+    a.handle(Msg::Library(titles.iter().map(|t| game("gba", t)).collect()));
     tap(&mut a, Button::A, 0);
     assert_eq!(tap(&mut a, Button::R2, 0), vec![Effect::Redraw(None), Effect::ShowLetter('A')]);
     tap(&mut a, Button::R2, 0);
@@ -529,11 +542,12 @@ fn home_says_where_games_go_when_there_are_none() {
     let mut a = App::new(builtin_systems(), quiet());
     let labels = |a: &App| a.view().rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
     assert!(labels(&a).contains(&"Looking for games…".to_string()));
-    a.handle(Msg::Library { games: vec![], card_found: true });
+    a.handle(Msg::Card(Card::mounted()));
+    a.handle(Msg::Library(vec![]));
     assert!(labels(&a).contains(&"No games found".to_string()));
     assert_eq!(a.view().rows[a.focus()].label, "Settings"); // notes are never focused
-    a.handle(Msg::Library { games: vec![], card_found: false });
-    assert!(labels(&a).contains(&"No SD card".to_string()));
+    a.handle(Msg::Card(Card::parse("absent\nNo SD card: insert the one with your games.\n")));
+    assert!(labels(&a).contains(&"No SD card: insert the one with your games.".to_string()));
 }
 
 mod credits {
@@ -1282,7 +1296,7 @@ fn games_show_the_kind_of_picture_set_for_their_system_in_its_shape() {
     a.handle(Msg::SettingsLoaded(Layer::System("gba".into()), serde_json::Map::from_iter([(builtin::ART.into(), json!("title"))])));
     assert_eq!(art(&a), [(ArtKind::TitleScreen, (240, 160)); 2]);
     // Search results across systems: each its own.
-    a.handle(Msg::Library { games: vec![game("gba", "Metroid Fusion"), game("snes", "Super Metroid")], card_found: true });
+    a.handle(Msg::Library(vec![game("gba", "Metroid Fusion"), game("snes", "Super Metroid")]));
     tap(&mut a, Button::X, 10);
     type_text(&mut a, "metroid");
     tap(&mut a, Button::Start, 20);
@@ -1435,7 +1449,7 @@ mod user_cores {
     fn the_core_setting_chooses_a_games_core_and_shows_that_cores_options() {
         let (mut a, _card) = with_user_cores();
         let tetris = game("gb", "Tetris");
-        a.handle(Msg::Library { games: vec![tetris.clone()], card_found: true });
+        a.handle(Msg::Library(vec![tetris.clone()]));
         let at = tetris.settings_layer();
         assert_eq!(a.ctx().settings.get("core.gb", &at).unwrap().0, &json!("mgba"));
         open_a_system(&mut a, "Game Boy");
@@ -1540,13 +1554,13 @@ mod transfer {
     #[test]
     fn without_a_card_it_says_so_and_starts_once_one_is_in() {
         let mut a = transfer_app();
-        a.handle(Msg::Library { games: vec![], card_found: false });
+        a.handle(Msg::Card(Card::parse("absent\nNo SD card.\n")));
         assert!(!open(&mut a, 0).contains(&Effect::FileTransfer(true)));
-        assert_eq!(labels(&a)[0], "No SD card");
-        assert!(a.handle(Msg::Library { games: vec![], card_found: true }).contains(&Effect::FileTransfer(true)));
+        assert_eq!(labels(&a)[0], "No SD card.");
+        assert!(a.handle(Msg::Card(Card::mounted())).contains(&Effect::FileTransfer(true)));
         started(&mut a);
         // Taken out while it runs: stopped (the system also stops it by itself).
-        assert!(a.handle(Msg::Library { games: vec![], card_found: false }).contains(&Effect::FileTransfer(false)));
+        assert!(a.handle(Msg::Card(Card::parse("absent\nNo SD card.\n"))).contains(&Effect::FileTransfer(false)));
     }
 
     #[test]
@@ -1828,5 +1842,170 @@ mod time_zone {
         tap(&mut b, Button::Up, 0);
         tap(&mut b, Button::A, 0);
         assert!(!labels(&b).contains(&"Time zone".to_string()));
+    }
+}
+
+mod card {
+    use super::*;
+
+    const A: &str = "mounted\n\ncard=aaaa partition=sdcard type=vfat check=clean\n";
+    const B: &str = "mounted\n\ncard=bbbb partition=sdcard type=exfat check=clean\n";
+    const GONE: &str = "absent\nNo SD card.\n";
+    const CHECKING: &str = "checking\nChecking the SD card…\ncard=aaaa\n";
+
+    fn card(text: &str) -> Msg { Msg::Card(Card::parse(text)) }
+
+    fn labels(a: &App) -> Vec<String> { a.view().rows.iter().map(|r| r.label.clone()).collect() }
+
+    /// An app with the card `text` in, its games scanned and its settings read.
+    fn with_card(text: &str) -> App {
+        let mut a = App::new(builtin_systems(), quiet());
+        a.handle(card(text));
+        a.handle(Msg::Library(vec![game("gba", "Golden Sun"), game("gba", "Mother 3")]));
+        a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+        a
+    }
+
+    /// `with_card(A)`, playing Golden Sun.
+    fn playing() -> App {
+        let mut a = with_card(A);
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 10);
+        assert_eq!(a.input_target(), InputTarget::Game);
+        a
+    }
+
+    #[test]
+    fn the_library_and_settings_are_read_once_the_card_is_there() {
+        let mut a = App::new(builtin_systems(), quiet());
+        assert_eq!(a.handle(Msg::Library(vec![game("gba", "Golden Sun")])), vec![]); // no card yet
+        assert!(labels(&a).contains(&"Looking for games…".to_string()));
+        assert_eq!(a.handle(card(A)), vec![Effect::ReadCard { writable: true }, Effect::Redraw(None)]);
+        assert_eq!(a.handle(card(A)), vec![]); // nothing changed
+    }
+
+    #[test]
+    fn without_a_card_the_defaults_apply_and_nothing_is_saved() {
+        let mut a = App::new(builtin_systems(), quiet());
+        let e = a.handle(card(GONE));
+        assert!(e.contains(&Effect::Apply { key: "display.brightness", value: json!(6) }), "{e:?}");
+        assert!(labels(&a).contains(&"No SD card.".to_string()));
+        tap(&mut a, Button::Up, 0);
+        tap(&mut a, Button::A, 10); // Settings
+        let e = tap(&mut a, Button::Right, 20); // brightness 7
+        assert!(e.contains(&Effect::Apply { key: "display.brightness", value: json!(7) }) && !e.contains(&Effect::SaveSettings(Layer::Global)), "{e:?}");
+        // The card's own settings replace those in memory...
+        assert_eq!(a.handle(card(A)), vec![Effect::ReadCard { writable: true }, Effect::Redraw(None)]);
+        assert!(a.ctx().settings.layer(&Layer::Global).is_empty());
+        // ...but a change made before they are read wins, and is saved again with them.
+        assert!(tap(&mut a, Button::Right, 30).contains(&Effect::SaveSettings(Layer::Global)));
+        let stored = serde_json::Map::from_iter([("display.brightness".to_string(), json!(3)), ("video.scaling".to_string(), json!("fit"))]);
+        let e = a.handle(Msg::SettingsLoaded(Layer::Global, stored));
+        assert!(e.contains(&Effect::Apply { key: "display.brightness", value: json!(7) }) && e.contains(&Effect::SaveSettings(Layer::Global)), "{e:?}");
+        assert_eq!(a.ctx().settings.layer(&Layer::Global).get("video.scaling"), Some(&json!("fit")));
+    }
+
+    #[test]
+    fn a_card_that_goes_empties_the_library_and_says_why() {
+        let mut a = with_card(A);
+        tap(&mut a, Button::A, 0); // the Game Boy Advance list
+        assert_eq!(a.handle(card(GONE)), vec![Effect::ForgetCard, Effect::Redraw(Some(Transition::Pop))]);
+        assert_eq!(a.view().title, "Library");
+        assert_eq!(labels(&a), ["Systems", "No SD card.", "Device", "Settings"]);
+        assert_eq!(a.handle(Msg::Library(vec![game("gba", "Golden Sun")])), vec![]); // a scan of the old card, late
+        assert_eq!(a.handle(card(CHECKING)), vec![Effect::Redraw(None)]);
+        assert!(labels(&a).contains(&"Checking the SD card…".to_string()));
+        assert_eq!(a.handle(card(A)), vec![Effect::ReadCard { writable: true }, Effect::Redraw(None)]);
+        assert!(labels(&a).contains(&"Looking for games…".to_string()));
+    }
+
+    #[test]
+    fn a_read_only_card_says_so_above_the_library_and_nothing_is_saved() {
+        let mut a = with_card("read-only write-protected\nLocked: games play, nothing is saved.\ncard=aaaa\n");
+        assert_eq!(labels(&a)[..3], ["Locked: games play, nothing is saved.", "Systems", "Game Boy Advance"]);
+        tap(&mut a, Button::Up, 0);
+        tap(&mut a, Button::A, 10); // Settings
+        assert!(!tap(&mut a, Button::Right, 20).contains(&Effect::SaveSettings(Layer::Global)));
+        tap(&mut a, Button::Menu, 30);
+        tap(&mut a, Button::Down, 35); // from Settings, wraps to the Game Boy Advance
+        tap(&mut a, Button::A, 40);
+        let e = tap(&mut a, Button::A, 50);
+        assert!(e.contains(&Effect::Notice("The SD card is read-only: progress in this game won't be saved".into())), "{e:?}");
+        tap(&mut a, Button::Menu, 60);
+        tap(&mut a, Button::Down, 70);
+        assert_eq!(tap(&mut a, Button::A, 80), vec![Effect::Notice("The SD card is read-only: the state can't be saved".into())]);
+        assert_eq!(a.view().title, "Paused");
+        for (i, b) in [Button::Up, Button::Up].into_iter().enumerate() { tap(&mut a, b, 90 + i as u64); } // wraps to "Quit game"
+        assert_eq!(tap(&mut a, Button::A, 100), vec![Effect::AbandonGame, Effect::Redraw(Some(Transition::Pop))]);
+    }
+
+    #[test]
+    fn a_repair_is_told_once_until_dismissed() {
+        let mut a = with_card("mounted\nErrors were repaired.\ncard=aaaa check=repaired\n");
+        assert_eq!(labels(&a)[..2], ["Errors were repaired.", "OK"]);
+        assert_eq!(focused(&a), "OK");
+        assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Redraw(None)]);
+        assert_eq!(labels(&a)[0], "Systems");
+    }
+
+    #[test]
+    fn a_game_whose_card_goes_waits_for_that_card_then_saves() {
+        let mut a = playing();
+        assert_eq!(a.handle(card(GONE)), vec![Effect::ForgetCard, Effect::PauseGame(true), Effect::Redraw(Some(Transition::Push))]);
+        assert_eq!((a.view().title.as_str(), a.input_target()), ("Card removed", InputTarget::App));
+        assert!(labels(&a).contains(&"Insert the SD card again to save the game.".to_string()));
+        assert_eq!(tap(&mut a, Button::B, 20), vec![]); // there is no going back to the game
+        assert_eq!(tap(&mut a, Button::Menu, 30), vec![]);
+        assert_eq!(a.handle(card(CHECKING)), vec![Effect::Redraw(None)]);
+        // Another card is read meanwhile, but isn't the game's.
+        assert_eq!(a.handle(card(B)), vec![Effect::ReadCard { writable: true }, Effect::Redraw(None)]);
+        assert!(labels(&a)[0].starts_with("This isn't the SD card the game was started from"), "{:?}", labels(&a));
+        a.handle(card(GONE));
+        assert_eq!(a.handle(card(A)), vec![Effect::ReadCard { writable: true }, Effect::QuitGame,
+                                             Effect::Notice("The game was saved".into()), Effect::Redraw(Some(Transition::Pop))]);
+        assert_eq!((a.playing(), a.view().title.as_str()), (None, "Library"));
+    }
+
+    #[test]
+    fn a_game_whose_card_comes_back_read_only_can_only_be_quit_unsaved() {
+        let mut a = playing();
+        tap(&mut a, Button::Menu, 20); // with the game menu open, the wait goes over it
+        a.handle(card(GONE));
+        a.handle(card("read-only damaged\nGames play, nothing is saved.\ncard=aaaa\n"));
+        assert_eq!(labels(&a)[..2], ["The SD card is back, but read-only: the game can't be saved.", "Games play, nothing is saved."]);
+        assert_eq!(focused(&a), "Quit unsaved");
+        assert_eq!(tap(&mut a, Button::A, 30), vec![Effect::AbandonGame, Effect::Redraw(Some(Transition::Pop))]);
+        assert_eq!((a.playing(), a.view().title.as_str()), (None, "Library"));
+    }
+
+    #[test]
+    fn powering_off_while_waiting_for_the_card_writes_nothing() {
+        let mut a = playing();
+        a.handle(card(GONE));
+        event(&mut a, Button::Power, true, 100);
+        a.handle(Msg::Tick(Duration::from_millis(1100)));
+        assert_eq!(a.view().title, "Power");
+        assert_eq!(tap(&mut a, Button::A, 1200), vec![Effect::AbandonGame, Effect::Notice("Turning off…".into()), Effect::PowerOff]);
+    }
+
+    #[test]
+    fn when_the_systems_own_card_goes_only_its_message_shows() {
+        let mut a = playing();
+        a.handle(card("failed system-card-removed\nThe Brick turned off: insert the card and turn it on.\n"));
+        assert_eq!(labels(&a), ["The Brick turned off: insert the card and turn it on."]);
+    }
+
+    #[test]
+    fn a_write_refused_as_read_only_has_the_card_looked_at_once() {
+        let mut a = with_card(A);
+        let notice = || Effect::Notice("The SD card has turned read-only: nothing more can be saved".into());
+        assert_eq!(a.handle(Msg::CardReadOnly), vec![Effect::Card(CardCmd::Recheck), notice()]);
+        assert_eq!(a.handle(Msg::CardReadOnly), vec![]); // already asked
+        assert_eq!(a.handle(card(A)), vec![]); // the answer: unchanged
+        assert_eq!(a.handle(Msg::CardReadOnly), vec![Effect::Card(CardCmd::Recheck), notice()]); // so another failure asks again
+        let e = a.handle(card("read-only damaged\nGames play, nothing is saved.\ncard=aaaa\n"));
+        assert_eq!(e, vec![Effect::ReadCard { writable: false }, Effect::Redraw(None)]);
+        assert_eq!(a.ctx().card.as_ref().map(|c| c.status), Some(CardStatus::ReadOnly));
+        assert_eq!(a.handle(Msg::CardReadOnly), vec![]); // known to be read-only
     }
 }

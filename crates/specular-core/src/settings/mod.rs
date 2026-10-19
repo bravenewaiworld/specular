@@ -209,6 +209,9 @@ impl Settings {
         for (k, v) in values.into_iter().filter(|(k, _)| k != SCHEMA_KEY) { map.entry(k).or_insert(v); }
     }
 
+    /// Forgets every layer, before another SD card's are loaded.
+    pub fn clear_layers(&mut self) { self.layers.clear(); }
+
     /// A layer's contents as its file holds them, for `store::store_layer`: its `$schema` first
     /// (`SCHEMA_KEY`; the map keeps insertion order), then its values. Empty if it has no values,
     /// so the file is removed.
