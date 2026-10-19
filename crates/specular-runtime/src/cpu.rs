@@ -12,14 +12,12 @@ pub(crate) struct CpuSpeed {
     set: Box<dyn Fn(Option<u32>) + Send>,
     /// The minimum last set (None: the system's default, as before the game started).
     applied: Option<u32>,
-    /// `CpuMin`'s clock: the time of play, the gaps between the vsync's returns added up.
-    played: Duration,
 }
 
 impl CpuSpeed {
     /// Sets `min`'s start level.
     pub(crate) fn start(min: CpuMin, set: Box<dyn Fn(Option<u32>) + Send>) -> Self {
-        let mut s = Self { min, set, applied: None, played: Duration::ZERO };
+        let mut s = Self { min, set, applied: None };
         s.apply(s.min.current(), "as the game starts");
         s
     }
@@ -27,12 +25,11 @@ impl CpuSpeed {
     /// The minimum while the game plays (MHz; None: the system's default).
     pub(crate) fn level(&self) -> Option<u32> { self.min.current() }
 
-    /// A frame shown `gap` after the one before (by the vsync: `Pacer::wait`), the core having run
-    /// for `run`. A gap of more than 1.5 refreshes is a missed refresh. Returns whether the
-    /// minimum changed (the frame delay is then measured again: runs take another time).
+    /// A frame, as for `CpuMin::frame` (`gap` from `Pacer::wait`, which gives none for the frames
+    /// it must leave out). Returns whether the minimum changed (the frame delay is then measured
+    /// again: runs take another time).
     pub(crate) fn frame(&mut self, gap: Duration, run: Duration, period: Duration) -> bool {
-        self.played += gap;
-        match self.min.frame(self.played, gap > period * 3 / 2, run, period) {
+        match self.min.frame(gap, run, period) {
             Some(Decision::Set(mhz, why)) => { self.apply(mhz, &why); true }
             Some(Decision::Note(note)) => { eprintln!("cpu: {note}"); false }
             None => false,
