@@ -91,8 +91,9 @@ pub struct CoreDecl {
     pub user: Option<&'static user_cores::UserCore>,
 }
 
-/// When a core's games are autosaved (`LaunchSpec::autosave_when` in specular-runtime). Either way
-/// the autosave is also written when play stops: the game menu opening, sleep, and quitting.
+/// When a core's games are autosaved during play (`LaunchSpec::autosave_when` in
+/// specular-runtime). Either way it is written when play stops: as the game menu opens
+/// (`Session::autosave`), on sleep (`Session::flush`) and on quitting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Autosave {
     /// Also every 10 s of play.
@@ -199,8 +200,8 @@ const NESTOPIA: &CoreDecl = &CoreDecl {
 /// know it sees a plain pad, and the d-pad drives it in analog mode too (its default options). On
 /// the Brick it reaches full speed only with the CPU at 1.8 GHz or more, which the system's governor
 /// never picks for it (docs/runtime.md, Findings), so its games start with that as the minimum.
-/// Its 11.5 MB state takes 13–21 ms of the game's thread to make there, so it autosaves only when
-/// play stops.
+/// Its 11.5 MB state took 13–21 ms of the game's thread to make there (with a new buffer each
+/// time), so it autosaves only when play stops.
 const SWANSTATION: &CoreDecl = &CoreDecl {
     name: "SwanStation", library: "swanstation_libretro", options: swanstation::LIST,
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,

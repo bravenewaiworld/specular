@@ -52,12 +52,12 @@ pub struct LaunchSpec {
     /// changing), on `Session::flush`, and when the game ends.
     pub save: PathBuf,
     /// The automatic save state, if any: the game resumes from it if it exists (one the core
-    /// can't load is ignored, and replaced by the next), and it is written as `autosave_when`
-    /// says, on `Session::flush`, and when the game ends. Written zstd-compressed, like every
-    /// save state, so other frontends can't read it as it is.
+    /// can't load is ignored, and replaced by the next), and it is written on `Session::autosave`
+    /// and `Session::flush`, when the game ends, and as `autosave_when` says. Written
+    /// zstd-compressed, like every save state, so other frontends can't read it as it is.
     pub autosave: Option<PathBuf>,
-    /// When the autosave is written besides: every 10 s of play (time paused doesn't count), or
-    /// on pausing (see `Session::pause`).
+    /// `Autosave::Every10s`: the autosave is also written every 10 s of play (time paused
+    /// doesn't count). `Autosave::AtPauses`: it isn't.
     pub autosave_when: Autosave,
     /// Where cores look for BIOS files (the card's `bios/`): libretro's system directory.
     pub system_dir: PathBuf,
@@ -219,8 +219,9 @@ impl Drop for Running {
 }
 
 enum Cmd {
-    /// See `Session::pause`.
-    Pause { paused: bool, save: bool },
+    Pause(bool),
+    /// Writes the autosave (see `Session::autosave`).
+    Autosave,
     Reset,
     SaveState(PathBuf, mpsc::Sender<io::Result<()>>),
     LoadState(PathBuf, mpsc::Sender<io::Result<()>>),
@@ -295,10 +296,9 @@ impl Session {
     /// The buttons held now, as `joypad_bit`s.
     pub fn set_buttons(&self, bits: u16) { self.buttons.store(bits, Relaxed); }
 
-    /// Pauses or resumes the game. On pausing with `save`, the autosave is written if it is
-    /// written at pauses (`Autosave::AtPauses`); pass false where it can't be written (the card is
-    /// gone), or will be anyway (`flush` follows).
-    pub fn pause(&self, paused: bool, save: bool) { let _ = self.cmds.send(Cmd::Pause { paused, save }); }
+    pub fn pause(&self, paused: bool) { let _ = self.cmds.send(Cmd::Pause(paused)); }
+    /// Writes the autosave, without waiting for it: for when play stops (the game menu opening).
+    pub fn autosave(&self) { let _ = self.cmds.send(Cmd::Autosave); }
     pub fn reset(&self) { let _ = self.cmds.send(Cmd::Reset); }
     /// From the next frame, plays the game's sound on `out` (None: silence), closing the previous
     /// output. Returns at once: open `out` beforehand, since opening can block.
@@ -460,15 +460,16 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         };
         if let Some(cmd) = cmd {
             match cmd {
-                Cmd::Pause { paused: p, save } => {
+                Cmd::Pause(p) => {
                     paused = p;
                     frontend::with(|f| f.pause_rumble(p));
                     pacer.paused();
                     cpu.pause(p);
-                    if p && save && at_pauses { game.write_autosave(); }
                 }
+                // Its compressing may still slow the frames after the game resumes.
+                Cmd::Autosave => { game.write_autosave(); cpu.state_made(); }
                 Cmd::Reset => unsafe { (game.core.reset)() },
-                Cmd::SaveState(path, reply) => game.save_state(path, reply),
+                Cmd::SaveState(path, reply) => { game.save_state(path, reply); cpu.state_made(); }
                 Cmd::LoadState(path, reply) => { let _ = reply.send(game.load_state(&path)); }
                 Cmd::Flush(reply) => game.save_all(Some(reply)),
                 Cmd::Sound(out) => sound.set_out(out),
@@ -486,7 +487,6 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         unsafe { (game.core.run)() };
         let took = t.elapsed();
         pacer.ran(took);
-        if std::mem::take(&mut game.state_made) { cpu.state_made(); }
         if let Some(gap) = gap { cpu.frame(gap, pacer.period); }
         {
             let mut r = runs.lock().unwrap();
@@ -514,7 +514,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         frames_to_check -= 1;
         if frames_to_check == 0 {
             if game.write_save(false) { (out.on_save)(); }
-            if !at_pauses { game.write_autosave(); }
+            if !at_pauses { game.write_autosave(); cpu.state_made(); }
             frames_to_check = check_frames;
         }
     }
@@ -537,8 +537,6 @@ struct Game {
     /// next written, which checks it (see `LaunchSpec::states_restore_save`).
     loaded_state: Option<LoadedState>,
     autosave: Option<PathBuf>,
-    /// A save state was made since the CPU minimum was last told (`CpuSpeed::state_made`).
-    state_made: bool,
     writer: Writer,
     /// Kept for the core, which may hold on to the ROM's path, and open or map the file there (an
     /// unzipped ROM's file goes when this does). (The ROM's contents are freed once the core has
@@ -598,7 +596,7 @@ impl Game {
         let writer = Writer::new(write_failed).map_err(|e| format!("starting the save writer: {e}"))?;
         let mut g = Game { core, name, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
                            states_restore_save: spec.states_restore_save, loaded_state: None,
-                           autosave: spec.autosave.clone(), state_made: false, writer, _rom: (rom_path, unzipped) };
+                           autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
         drop(rom);
         g.log_discs();
         g.read_save();
@@ -703,12 +701,11 @@ impl Game {
     /// the save on the card to tell whether the game saved after the state was made.
     fn queue_state(&mut self, path: PathBuf) -> io::Result<()> {
         let size = unsafe { (self.core.serialize_size)() };
-        // The last state's buffer, if the writer is done with it: a new one must be allocated and
-        // zeroed, which takes SwanStation's 11.5 MB up to 9.5 ms on the Brick. Bytes the core
-        // leaves unwritten keep the last state's.
+        // Reuses the last state's buffer if the writer has handed it back: a new one must be
+        // allocated and zeroed, which took up to 9.5 ms of SwanStation's 11.5 MB on the Brick.
+        // Bytes the core leaves unwritten keep the last state's, which its loading ignores.
         let mut data = self.writer.spare.try_recv().unwrap_or_default();
         data.resize(size, 0);
-        self.state_made = true;
         if size == 0 || !unsafe { (self.core.serialize)(data.as_mut_ptr().cast(), size) } {
             return Err(io::Error::other("the core could not save its state"));
         }
@@ -817,7 +814,8 @@ impl Drop for MappedFile {
 /// thread finishes the writes queued, then ends; `Job::Reply` is how to wait for them.
 struct Writer {
     jobs: mpsc::Sender<Job>,
-    /// Each save state's buffer, handed back once written, for the next state to reuse.
+    /// A save state's buffer, handed back once compressed, for the next state to reuse. Room for
+    /// one: any other is freed, so a game keeps at most one spare.
     spare: mpsc::Receiver<Vec<u8>>,
 }
 
@@ -836,7 +834,7 @@ enum Job {
 impl Writer {
     fn new(failed_one: Box<dyn Fn(&io::Error) + Send>) -> io::Result<Self> {
         let (jobs, rx) = mpsc::channel();
-        let (give_back, spare) = mpsc::channel();
+        let (give_back, spare) = mpsc::sync_channel(1);
         std::thread::Builder::new().name("game-saves".into()).spawn(move || {
             let mut failed = None;
             for job in rx {
@@ -850,7 +848,7 @@ impl Writer {
                         // Level 1, the fastest of zstd's usual levels: higher ones shrink a GBA
                         // state only about 4 % more.
                         let compressed = zstd::bulk::compress(&data, 1).map(|z| with_tags(z, &tags));
-                        let _ = give_back.send(data);
+                        let _ = give_back.try_send(data);
                         let written = compressed.and_then(|z| write_atomically(&path, &z));
                         (path, written)
                     }

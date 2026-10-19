@@ -6,11 +6,12 @@ use std::time::Duration;
 
 use specular_core::cpu::{CpuMin, Decision, text};
 
-/// How many frames after a save state is made can't miss a refresh, as far as the CPU minimum is
-/// told. Making the state on the game's thread delays the next frame, and compressing it on the
-/// writer's can slow the frames after it (SwanStation's 11.5 MB: a miss 7–8 frames later on the
-/// Brick; docs/runtime.md, Findings). Those misses aren't for want of speed. Half a second covers
-/// them; a miss that is, within it, goes unseen.
+/// For this many frames after a save state is made, the CPU minimum isn't told of missed
+/// refreshes. Making the state on the game's thread delays the next frame, and compressing it on
+/// the writer's can slow the frames after it, also after a state made while paused if the game
+/// resumes soon (SwanStation's 11.5 MB: a miss 7–8 frames later on the Brick; docs/runtime.md,
+/// Findings). Those misses aren't for want of speed. 30 frames is half a second at 60 Hz; a miss
+/// for want of speed within them goes unseen.
 const AFTER_STATE: u32 = 30;
 
 /// Feeds the game's frames to its `CpuMin` and sets what it decides, logging each change.
@@ -35,8 +36,8 @@ impl CpuSpeed {
     pub(crate) fn level(&self) -> Option<u32> { self.min.current() }
 
     /// Hands one frame to `CpuMin::frame`. The caller takes `gap` from `Pacer::wait` and skips the
-    /// frames it gives none for. Within `AFTER_STATE` frames of `state_made`, a long gap counts
-    /// as one refresh: it still adds to `CpuMin`'s clock, but isn't a miss.
+    /// frames it gives none for. For the `AFTER_STATE` frames handed on after `state_made`, a long
+    /// gap is handed on as one period: not a miss, and only one period on `CpuMin`'s clock.
     pub(crate) fn frame(&mut self, mut gap: Duration, period: Duration) {
         if self.after_state > 0 {
             self.after_state -= 1;
@@ -49,7 +50,7 @@ impl CpuSpeed {
         }
     }
 
-    /// A save state was made (on the game's thread) since the last frame.
+    /// A save state was made (on the game's thread) since the last frame, or is about to be.
     pub(crate) fn state_made(&mut self) { self.after_state = AFTER_STATE; }
 
     /// The game paused (its menu, sleep) or resumed: the system's default meanwhile.

@@ -44,7 +44,7 @@ Completed:
  - Frame pacing: the core runs once per vsync of the display (`FBIO_WAITFORVSYNC`; a timer when the device has none), after a delay that adapts to how long it takes (lower input latency)
  - Battery saves: written when the game writes its save, else checked every 10 s of play; also on quit, sleep and stop. Written off the game's thread
  - One save state slot, from the in-game menu
- - Autosave as the game menu opens, on sleep and on quit, and every 10 s of play for cores whose state is quick to make (not SwanStation's: it cost PS1 games a frame each time); games resume from it at launch. Each state reuses the last one's buffer, and the frames just after a state is made don't count as misses for the CPU minimum
+ - Autosave as the game menu opens, on sleep and on quit, and every 10 s of play for cores whose state is quick to make (not SwanStation's: it cost PS1 games a frame each time); games resume from it at launch. Each state reuses the last one's buffer once the writer hands it back, and the frames just after a state is made don't count as misses for the CPU minimum
  - Save states compressed (about 11× smaller, less card wear)
  - Watchdog: a core stuck on one frame for 6 s restarts Specular
  - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)

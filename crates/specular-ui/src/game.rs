@@ -133,11 +133,10 @@ impl Playing {
         self.session.set_buttons(held);
     }
 
-    /// Pauses or resumes the game (`save`: as for `Session::pause`). Pausing releases every
-    /// button, so none stays held in the game.
-    pub fn pause(&self, paused: bool, save: bool) {
+    /// Pauses or resumes the game. Pausing releases every button, so none stays held in the game.
+    pub fn pause(&self, paused: bool) {
         if paused { self.held.set(0); self.session.set_buttons(0); }
-        self.session.pause(paused, save);
+        self.session.pause(paused);
     }
 }
 

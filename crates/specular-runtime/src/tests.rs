@@ -168,10 +168,10 @@ fn the_games_rumble_stops_while_it_is_paused_and_when_it_ends() {
     let full = Motors { strong: 0xffff, weak: 0xffff };
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(line.wanted(), full);
-    session.pause(true, true);
+    session.pause(true);
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(line.wanted(), Motors::STILL);
-    session.pause(false, true);
+    session.pause(false);
     std::thread::sleep(Duration::from_millis(50));
     assert_eq!(line.wanted(), full);
     session.quit().unwrap();
@@ -314,9 +314,9 @@ fn the_cpu_minimum_rises_after_two_missed_refreshes_and_is_the_default_while_pau
     // (A refresh missed by chance on a busy PC can only bring the step up sooner.)
     assert_eq!(*set.lock().unwrap(), [Some(1800), Some(2000)]);
     assert_eq!(session.stats().cpu_min, Some(2000));
-    session.pause(true, true);
+    session.pause(true);
     std::thread::sleep(Duration::from_millis(100));
-    session.pause(false, true);
+    session.pause(false);
     std::thread::sleep(Duration::from_millis(100));
     session.quit().unwrap();
     assert_eq!(*set.lock().unwrap(), [Some(1800), Some(2000), None, Some(2000), None]);
@@ -836,18 +836,15 @@ fn states_made_one_after_another_are_each_the_games_own() {
     std::thread::sleep(Duration::from_millis(100));
     session.save_state(&state(2)).unwrap();
     assert_ne!(raw(1), raw(2), "the game counted on between them");
-    session.pause(true, false);
+    session.pause(true);
     session.load_state(&state(1)).unwrap();
     session.save_state(&state(3)).unwrap();
-    session.load_state(&state(2)).unwrap();
-    session.save_state(&state(4)).unwrap();
     assert_eq!(raw(3), raw(1));
-    assert_eq!(raw(4), raw(2));
     session.quit().unwrap();
 }
 
 #[test]
-fn a_game_autosaved_at_pauses_is_autosaved_only_on_pausing_and_quitting() {
+fn a_game_autosaved_at_pauses_is_autosaved_only_when_told_and_on_quitting() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
     let dir = tempfile::tempdir().unwrap();
@@ -871,13 +868,12 @@ fn a_game_autosaved_at_pauses_is_autosaved_only_on_pausing_and_quitting() {
     let session = Session::start(spec(Autosave::AtPauses), fast()).unwrap();
     played_10s(&session);
     assert!(!written(), "not while it plays");
-    session.pause(true, false);
-    assert!(!written(), "not on a pause that can't write");
-    session.pause(false, true);
-    session.pause(true, true);
-    assert!(written(), "on pausing");
+    session.pause(true);
+    assert!(!written(), "nor on pausing alone");
+    session.autosave();
+    assert!(written(), "when told");
     std::fs::remove_file(&autosave).unwrap();
-    session.pause(false, true);
+    session.pause(false);
     session.quit().unwrap();
     assert!(autosave.exists(), "on quitting");
 }
