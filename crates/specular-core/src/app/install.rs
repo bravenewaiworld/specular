@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::install::{Internal, Offer, Progress, Task, TaskError, TaskKind, size};
+use crate::install::{Internal, Offer, Progress, Task, TaskError, TaskKind, file_name, size};
 
 /// What the app knows of the installer.
 #[derive(Default)]
@@ -84,7 +84,7 @@ impl App {
         state.asked_pending |= ask;
         state.offer = Some(offer);
         self.changed();
-        if ask { return self.go(|nav| Some(nav.push(focus_on(ScreenState::new(screens::RESTORE_PENDING, None), "later")))); }
+        if ask { return self.go(|nav| Some(nav.push(pending_question()))); }
         vec![Effect::Redraw(None)]
     }
 
@@ -243,7 +243,7 @@ pub(super) fn settings_press(ctx: &Ctx, row: &Row, p: Press) -> Option<Outcome> 
         "install:restore" => push(ScreenState::new(screens::RESTORE, None)),
         "install:update" => push(ScreenState::new(screens::UPDATES, None)),
         "install:previous" => push(confirm(format!("activate:{}", offer(ctx)?.previous.as_ref()?))),
-        "install:pending" => push(focus_on(ScreenState::new(screens::RESTORE_PENDING, None), "later")),
+        "install:pending" => push(pending_question()),
         _ => None,
     }
 }
@@ -377,22 +377,22 @@ impl Screen for ConfirmScreen {
         let created = |dir: &str| o.and_then(|o| o.backups.iter().find(|b| b.dir == dir)).map_or(String::new(), |b| when(&b.created));
         let (title, notes, go) = match state.params.as_deref().and_then(|p| confirmed_task(ctx, p)) {
             Some(Task::Restore { dir }) => ("Restore the internal storage?",
-                vec![format!("Everything on the internal storage is replaced by the backup from {}.", created(&dir))], "Restore"),
+                vec![format!("Everything on the internal storage is replaced by the backup from {}.", created(&dir))], Some("Restore")),
             Some(Task::PrepareRestore { dir }) => ("Restore the internal storage?",
-                vec![format!("The SD card is made to start the device, to restore the backup from {}. After a restart it asks before replacing everything on the internal storage.", created(&dir))], "Restore"),
+                vec![format!("The SD card is made to start the device, to restore the backup from {}. After a restart it asks before replacing everything on the internal storage.", created(&dir))], Some("Restore")),
             Some(Task::Update { file }) => {
                 let update = o.and_then(|o| o.updates.iter().find(|u| u.file == file));
                 let version = update.and_then(|u| u.version.clone()).unwrap_or_else(|| file_name(&file).into());
                 let mut notes = vec![format!("Version {version} starts at the next restart; {running} stays installed, to go back to.")];
                 if update.is_some_and(|u| u.older) { notes.push(format!("This update is older than {running}.")); }
-                ("Install update?", notes, "Install")
+                ("Install update?", notes, Some("Install"))
             }
             Some(Task::Activate { version }) => ("Start the previous version?",
-                vec![format!("Version {version} starts at the next restart; {running} stays installed, to switch back to.")], "Switch"),
-            _ => ("", vec![], ""),
+                vec![format!("Version {version} starts at the next restart; {running} stays installed, to switch back to.")], Some("Switch")),
+            _ => ("", vec![], None),
         };
         let mut rows: Vec<Row> = notes.into_iter().enumerate().map(|(i, n)| Row::note(format!("note:{i}"), n)).collect();
-        if !go.is_empty() { rows.push(action("go", go)); }
+        rows.extend(go.map(|go| action("go", go)));
         rows.push(action("cancel", "Cancel"));
         ScreenView { title: title.into(), layout: Layout::List, rows,
                      hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())], entry: None }
@@ -401,8 +401,11 @@ impl Screen for ConfirmScreen {
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
 }
 
-/// On the SD card's system, a restore prepared from the installed system: Restore, Not now (where
-/// the focus starts) or Cancel the restore.
+/// The prepared restore's question, with the focus on Not now.
+fn pending_question() -> ScreenState { focus_on(ScreenState::new(screens::RESTORE_PENDING, None), "later") }
+
+/// On the SD card's system, a restore prepared from the installed system: Restore, Not now or
+/// Cancel the restore.
 struct PendingScreen;
 
 impl Screen for PendingScreen {
@@ -487,6 +490,3 @@ fn when(created: &str) -> String {
     if created.len() < 13 || !created.is_ascii() { return created.into(); }
     format!("{}-{}-{} {}:{} UTC", &created[0..4], &created[4..6], &created[6..8], &created[9..11], &created[11..13])
 }
-
-/// The last part of a path.
-fn file_name(path: &str) -> &str { path.rsplit('/').next().unwrap_or(path) }

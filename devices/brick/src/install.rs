@@ -117,10 +117,7 @@ fn offer(v: &serde_json::Value) -> Offer {
         older: u["older"].as_bool().unwrap_or(false), problem: u["problem"].as_str().map(Into::into),
     })).collect();
     // { "possible": true } or { "why_not": "…" }
-    let restore = v["restore"].as_object().map(|r| match r.get("why_not").and_then(|w| w.as_str()) {
-        Some(why) => Err(why.to_string()),
-        None => Ok(()),
-    });
+    let restore = v["restore"].is_object().then(|| v["restore"]["why_not"].as_str().map_or(Ok(()), |why| Err(why.into())));
     let p = &v["restore_pending"];
     let restore_pending = p["backup"].as_str().map(|b| PendingRestore { backup: b.into(), prepared: p["prepared"].as_str().unwrap_or_default().into() });
     Offer {

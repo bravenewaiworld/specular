@@ -35,9 +35,12 @@ impl Offer {
     /// The backup a prepared restore puts back, if it is still on the SD card.
     pub fn pending_backup(&self) -> Option<&Backup> {
         let name = &self.restore_pending.as_ref()?.backup;
-        self.backups.iter().find(|b| std::path::Path::new(&b.dir).file_name().is_some_and(|f| f == name.as_str()))
+        self.backups.iter().find(|b| file_name(&b.dir) == name)
     }
 }
+
+/// The last part of a path, e.g. a backup's folder name.
+pub fn file_name(path: &str) -> &str { path.rsplit('/').next().unwrap_or(path) }
 
 /// What the internal storage holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
