@@ -136,7 +136,7 @@ fn decl(core: &'static CoreDecl, list: &'static CoreOptions, o: &'static CoreOpt
     if ours.is_some_and(|v| v != o.default) { help += &format!(" Specular's default; {}'s own is \"{}\".", core.name, o.default); }
     SettingDecl {
         key: &o.key, section, label: &o.label, help: leak(help),
-        kind: SettingKind::Choice(Box::leak(choices.into_boxed_slice())),
+        kind: SettingKind::Choice(choices.leak()),
         default: Value::from(ours.unwrap_or(&o.default)),
         visibility: Visibility::Developer, deepest: Scope::Game, core: Some(core.id()), system: None,
     }

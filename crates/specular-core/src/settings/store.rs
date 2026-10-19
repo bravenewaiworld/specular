@@ -66,6 +66,12 @@ pub fn store_layer(path: &Path, map: &Map<String, Value>) -> io::Result<()> {
     replace(path, &json_text(map), false)
 }
 
+/// Writes one of Specular's records (a struct, as a JSON object) with `store_layer`.
+pub fn store_record(path: &Path, record: &impl serde::Serialize) -> io::Result<()> {
+    let Ok(Value::Object(map)) = serde_json::to_value(record) else { panic!("a record is a JSON object") };
+    store_layer(path, &map)
+}
+
 /// Writes a generated file (a settings schema) safely, and read-only, as a hint that edits to it
 /// are ignored. Left alone if it already holds `content`, to spare the card (even if its
 /// read-only mark was cleared). Returns whether it was written.

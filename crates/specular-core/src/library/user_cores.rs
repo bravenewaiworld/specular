@@ -215,7 +215,7 @@ fn decl(id: &str, path: PathBuf, made: &Made, systems: Vec<&'static str>) -> &'s
         // Assumed: Specular can't tell whether its states hold the save memory, and assuming they do
         // keeps a newer battery save rather than letting a state roll it back.
         states_restore_save: true,
-        bios: Box::leak(bios.into_boxed_slice()), user: Some(Box::leak(Box::new(user))),
+        bios: bios.leak(), user: Some(Box::leak(Box::new(user))),
     }))
 }
 
@@ -286,8 +286,7 @@ pub fn learn(core: &'static CoreDecl, dir: &Path, declared: &CoreOptions) -> io:
     let Some(u) = core.user else { return Ok(false) };
     if u.learned && core_options::list(core) == declared { return Ok(false); }
     let learned = Learned { library_size: u.size, library_modified: u.modified, options: declared.clone() };
-    let serde_json::Value::Object(map) = serde_json::to_value(learned).expect("options always serialize") else { unreachable!() };
-    store::store_layer(&learned_path(dir, core.id()), &map).map(|()| true)
+    store::store_record(&learned_path(dir, core.id()), &learned).map(|()| true)
 }
 
 fn modified_ns(meta: &std::fs::Metadata) -> u64 {

@@ -39,10 +39,7 @@ impl LaunchRecord {
     }
 
     /// Writes the record to `path`, replacing any there.
-    pub fn write(&self, path: &Path) -> io::Result<()> {
-        let serde_json::Value::Object(map) = serde_json::to_value(self).expect("a record always serializes") else { unreachable!() };
-        store::store_layer(path, &map)
-    }
+    pub fn write(&self, path: &Path) -> io::Result<()> { store::store_record(path, self) }
 
     /// Removes the record at `path` (the store removes the file, and any `.tmp` left by a write
     /// cut short, when given nothing to store).

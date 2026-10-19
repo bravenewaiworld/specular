@@ -202,8 +202,7 @@ pub struct Ctx {
 impl Ctx {
     /// Which settings are shown: developer ones too while "Developer details" is on.
     pub fn visibility(&self) -> Visibility {
-        let on = self.settings.get(builtin::DEVELOPER_DETAILS, &Layer::Global).is_some_and(|(v, _)| *v == true);
-        if on { Visibility::Developer } else { Visibility::User }
+        if self.settings.on(builtin::DEVELOPER_DETAILS) { Visibility::Developer } else { Visibility::User }
     }
 }
 
@@ -380,7 +379,7 @@ impl App {
     /// open or not) or its game list is the current screen. None elsewhere, search results
     /// included (they span systems).
     pub fn tint(&self) -> Option<Rgb> {
-        if !self.ctx.settings.get(builtin::TINT_BY_SYSTEM, &Layer::Global).is_some_and(|(v, _)| *v == true) { return None; }
+        if !self.ctx.settings.on(builtin::TINT_BY_SYSTEM) { return None; }
         let top = self.nav.top();
         let system = match &self.playing {
             Some(game) => game.system,
@@ -527,8 +526,7 @@ impl App {
     /// switching sounds on is heard and switching them off isn't (whether a game is being played is
     /// taken from before it; see `handle`).
     fn drop_unheard_sounds(&mut self, effects: &mut Vec<Effect>, in_game: bool) {
-        let on = self.ctx.settings.get(builtin::INTERFACE_SOUNDS, &Layer::Global).is_some_and(|(v, _)| *v == true);
-        let heard = on && !in_game && !self.muted && self.volume().1 > 0;
+        let heard = self.ctx.settings.on(builtin::INTERFACE_SOUNDS) && !in_game && !self.muted && self.volume().1 > 0;
         effects.retain(|e| match e {
             Effect::Sound(_) if !heard => false,
             Effect::Sound(Sound::Move) => {

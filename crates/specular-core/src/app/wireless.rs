@@ -111,7 +111,7 @@ pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) {
 
 fn setting<'a>(ctx: &'a Ctx, key: &str) -> Option<&'a serde_json::Value> { ctx.settings.get(key, &Layer::Global).map(|(v, _)| v) }
 fn wifi_mode(ctx: &Ctx) -> &str { setting(ctx, builtin::WIFI).and_then(|v| v.as_str()).unwrap_or("off") }
-fn bluetooth_on(ctx: &Ctx) -> bool { setting(ctx, builtin::BLUETOOTH).and_then(|v| v.as_bool()).unwrap_or(false) }
+fn bluetooth_on(ctx: &Ctx) -> bool { ctx.settings.on(builtin::BLUETOOTH) }
 
 impl App {
     /// Says which radios the device has (none until told). Call before the first message.
@@ -206,7 +206,7 @@ impl App {
             let needed = self.wifi_needed();
             if self.radios.needed && !needed { self.radios.grace_until = self.now + WIFI_GRACE; }
             self.radios.needed = needed;
-            let keep_on = setting(&self.ctx, builtin::WIFI_KEEP_ON) == Some(&true.into());
+            let keep_on = self.ctx.settings.on(builtin::WIFI_KEEP_ON);
             let want = match wifi_mode(&self.ctx) {
                 "on" => true,
                 "off" => false,

@@ -229,6 +229,9 @@ impl Settings {
         Some((&d.default, None))
     }
 
+    /// Whether a global Bool setting is on (false if it isn't declared).
+    pub fn on(&self, key: &str) -> bool { self.get(key, &Layer::Global).is_some_and(|(v, _)| *v == true) }
+
     /// Sets a value at `at`. Setting it to what `at` would inherit anyway removes the override.
     pub fn set(&mut self, key: &str, at: &Layer, v: Value) -> Result<(), SettingError> {
         let d = self.decl(key).ok_or(SettingError::Unknown)?;
@@ -382,7 +385,7 @@ fn core_choice(system: &SystemDecl) -> Option<SettingDecl> {
     Some(SettingDecl {
         key: leak(core_key(system.id)), section: "Emulator", label: "Core",
         help: leak(format!("Which emulator core plays {} games: {}. A change takes effect when a game next starts.", system.name, each.join(", "))),
-        kind: SettingKind::Choice(Box::leak(choices.into_boxed_slice())), default: Value::from(system.cores[0].id()),
+        kind: SettingKind::Choice(choices.leak()), default: Value::from(system.cores[0].id()),
         visibility: Visibility::User, deepest: Scope::Game, core: None, system: Some(system.id),
     })
 }
