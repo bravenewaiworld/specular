@@ -1,6 +1,6 @@
-//! SSH in the developer settings, where the user switches it (Crystaline OS release systems): a
-//! switch, and importing login keys from the SD card. The system keeps the state; the app asks
-//! for it each time Settings opens.
+//! SSH in the developer settings, on systems where the user may switch it
+//! (`SshStatus::switchable`): a switch, and importing login keys from the SD card. The system
+//! keeps the state; the app asks for it each time Settings opens.
 
 use super::*;
 use crate::device::{SshCmd, SshStatus};
@@ -13,8 +13,8 @@ pub struct SshState {
 }
 
 impl App {
-    /// Says whether the device has SSH the user may switch (none until told). Call before the
-    /// first message.
+    /// Says whether the app manages the device's SSH (not until told). Call before the first
+    /// message.
     pub fn has_ssh(&mut self, yes: bool) { self.ctx.ssh = yes.then(SshState::default); }
 
     /// `cmd` finished. A failed switch or import says why; the state is then as before.

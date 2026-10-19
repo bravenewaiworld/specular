@@ -25,7 +25,8 @@ pub const INTERFACE_SOUNDS: &str = "sound.interface_sounds";
 pub const WIFI: &str = "wireless.wifi";
 /// Bluetooth on or off. Shown on the Bluetooth screen.
 pub const BLUETOOTH: &str = "wireless.bluetooth";
-/// WiFi set to Auto stays on (a developer setting, for SSH over WiFi, which doesn't ask for it).
+/// WiFi set to Auto stays on (a developer setting: SSH registers no `app::WifiNeed`, so on Auto
+/// WiFi would otherwise turn off while it is in use).
 pub const WIFI_KEEP_ON: &str = "dev.wifi_keep_on";
 /// The LEDs' brightness (its key predates there being more LEDs than the light bar).
 pub const LED_BRIGHTNESS: &str = "lights.brightness";

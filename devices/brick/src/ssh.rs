@@ -1,6 +1,6 @@
 //! SSH on the Brick: Crystaline OS's brick-ssh. On release systems the user switches SSH and
-//! imports its login keys; on development systems it is always on with the checkout's key, and
-//! brick-ssh refuses to change it.
+//! imports its login keys; on development systems it is always on with the key built into the
+//! system, and brick-ssh refuses to change it.
 
 use specular_core::device::{Ssh, SshCmd, SshStatus};
 
@@ -8,12 +8,13 @@ use crate::command::run;
 
 const PROGRAM: &str = "/usr/sbin/brick-ssh";
 
+/// The Brick's `Ssh`: brick-ssh.
 pub struct BrickSsh;
 
 impl Ssh for BrickSsh {
     fn send(&self, cmd: SshCmd) -> Result<SshStatus, String> {
         let arg = match cmd { SshCmd::Status => None, SshCmd::Switch(true) => Some("on"), SshCmd::Switch(false) => Some("off"), SshCmd::ImportKeys => Some("import") };
-        // Its errors start with its name, which the user needn't see.
+        // brick-ssh's error messages start with "brick-ssh: ", which the user needn't see.
         let brick_ssh = |args: &[&str]| run("ssh", PROGRAM, args).map_err(|e| e.strip_prefix("brick-ssh: ").unwrap_or(&e).to_string());
         if let Some(arg) = arg { brick_ssh(&[arg])?; }
         status(&brick_ssh(&[])?)

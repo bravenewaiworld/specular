@@ -1,6 +1,7 @@
-//! File transfer on the Brick: runit's `webdav` service, Crystaline OS's dufs serving the SD card
-//! on port 80 as WebDAV and as its own browser page, with no password. The service is down at
-//! start-up, and its run script takes it back down when no card is mounted.
+//! File transfer on the Brick: runit's `webdav` service, in which dufs (a small HTTP and WebDAV
+//! file server) serves the SD card on port 80, as WebDAV and as Crystaline OS's own browser page,
+//! with no password. The system boots with the service down, and its run script takes it back
+//! down when no card is mounted.
 
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
@@ -10,11 +11,13 @@ use specular_core::device::FileTransfer;
 use crate::command::run;
 
 const SV: &str = "/usr/bin/sv";
-/// dufs takes connections well within a second of starting; one that hasn't by then won't.
+/// dufs takes connections well within a second of starting; this leaves a wide margin, and one
+/// that hasn't by then won't.
 const START_WAIT: Duration = Duration::from_secs(5);
 /// How many of the service's last log lines a failure shows.
 const LOG_LINES: usize = 3;
 
+/// The Brick's `FileTransfer`: runit's `webdav` service.
 pub struct BrickTransfer;
 
 impl FileTransfer for BrickTransfer {

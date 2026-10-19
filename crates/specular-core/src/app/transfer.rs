@@ -2,13 +2,15 @@
 //! that PCs reach with a browser, reading and writing the SD card with no password. Leaving the
 //! screen stops it. So does sleeping, and it starts again on waking if the screen is still open;
 //! the device doesn't sleep by itself while the screen is open, as a transfer may be running.
-//! WiFi on Auto counts the open screen as a need (see app::wireless); the USB link needs no WiFi.
+//! WiFi on Auto counts the open screen as a need (see app::wireless); a PC connected by a USB
+//! cable reaches the server over the cable's network link, without WiFi.
 
 use super::*;
 use crate::wireless::wifi::WifiLink;
 
 /// What the app knows of file transfer.
 pub struct TransferState {
+    /// As last reported by the device.
     pub server: Server,
     /// Whether the server was last told to run (`Effect::FileTransfer`).
     told: bool,
@@ -39,7 +41,7 @@ impl App {
     pub(super) fn transfer_open(&self) -> bool { self.nav.contains(&screens::FILE_TRANSFER) }
 
     /// Starts or stops the server to match what is wanted now: running while its screen is open,
-    /// the SD card is in and the device is awake. Sent after every message, and before sleeping.
+    /// the SD card is in and the device is awake. Called after every message, and before sleeping.
     pub(super) fn reconcile_transfer(&mut self) -> Vec<Effect> {
         let wanted = self.transfer_open() && self.ctx.card_found && !self.asleep;
         let Some(t) = &mut self.ctx.transfer else { return vec![] };
@@ -50,9 +52,9 @@ impl App {
         vec![Effect::FileTransfer(wanted), Effect::Redraw(None)]
     }
 
-    /// A start (`start`) or stop asked for has finished. One overtaken by the opposite command
-    /// changes nothing, except that a failed stop is always told: the card may still be open to
-    /// the network.
+    /// A start (`start` true) or stop has finished. One overtaken by the opposite command changes
+    /// nothing, except that a failed stop is always shown as a notice: the card may still be open
+    /// to the network.
     pub(super) fn transfer_done(&mut self, start: bool, result: Result<(), String>) -> Vec<Effect> {
         let Some(t) = &mut self.ctx.transfer else { return vec![] };
         match result {
@@ -75,7 +77,7 @@ pub(super) fn settings_row(ctx: &Ctx) -> Option<Row> {
 fn url(address: &str) -> String { format!("http://{address}/") }
 
 /// The file transfer screen: a warning, then the addresses to open in a browser (WiFi's, and the
-/// device's other interfaces with a link, as the WiFi service reports them), or the server's
+/// device's other connected network interfaces, as the WiFi service reports them), or the server's
 /// state. A on Wi-Fi's row opens the Wi-Fi screen, with the server still running.
 struct TransferScreen;
 
@@ -99,7 +101,7 @@ impl Screen for TransferScreen {
                     };
                     rows.push(Row::new("open:wifi", "Wi-Fi", RowKind::Action { value: Some(value) }));
                 }
-                // The other interfaces with a link, such as a USB cable's to a PC.
+                // The other connected network interfaces, such as a USB cable's to a PC.
                 for i in ctx.wifi.iter().flat_map(|w| &w.interfaces) {
                     let label = if i.name.starts_with("usb") { "USB cable" } else { &i.name };
                     rows.push(Row::new(format!("address:{}:{}", i.name, i.address), label, RowKind::Note { detail: Some(url(&i.address)) }));

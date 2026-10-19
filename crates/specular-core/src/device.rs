@@ -200,11 +200,12 @@ pub struct SshStatus {
     /// always on with keys the user can't change.
     pub switchable: bool,
     pub on: bool,
-    /// How many login keys it accepts.
+    /// How many login keys it accepts. Meaningful only when `switchable`.
     pub keys: u32,
 }
 
-/// SSH that the user switches on and off, accepting only login keys imported on the device.
+/// The system's SSH: its state and, on systems that allow it, switching it and importing the
+/// login keys it accepts (only keys imported on the device).
 pub trait Ssh: Send {
     /// Carries out `cmd`, then reports SSH's state. Err: the command failed, and why in the
     /// system's words (the state is then as before).
@@ -229,7 +230,8 @@ pub struct Hardware {
     pub rumble: Option<Box<dyn Rumble>>,
     /// None on devices without file transfer.
     pub file_transfer: Option<Box<dyn FileTransfer>>,
-    /// None on devices whose SSH (if any) the user doesn't switch.
+    /// None on devices where the app doesn't manage SSH. Whether the user may switch it is
+    /// reported at run time (`SshStatus::switchable`).
     pub ssh: Option<Box<dyn Ssh>>,
 }
 
@@ -328,7 +330,7 @@ pub mod simulated {
         let t = Instant::now();
         let script = scenario().unwrap_or_else(|e| panic!("$SPECULAR_SCENARIO: {e}"));
         let development = std::env::var("SPECULAR_SSH").as_deref() == Ok("development");
-        let ssh = SshStatus { switchable: !development, on: development, keys: development as u32 };
+        let ssh = SshStatus { switchable: !development, on: development, keys: 0 };
         Hardware {
             power: Box::new(Sim(t)), display: Box::new(Sim(t)), lights: Box::new(Sim(t)), audio: Box::new(Sim(t)),
             wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),

@@ -78,8 +78,8 @@ pub enum Msg {
     InstallOffer(Result<crate::install::Offer, String>),
     /// The progress of the task started with `InstallCmd::Start`.
     InstallProgress(crate::install::Progress),
-    /// The file transfer server's start (`start`) or stop asked for with `Effect::FileTransfer`
-    /// has finished; Err: it failed, and why.
+    /// A start (`start` true) or stop of the file transfer server, asked for with
+    /// `Effect::FileTransfer`, has finished; Err: why it failed.
     FileTransfer { start: bool, result: Result<(), String> },
     /// `Effect::Ssh`'s command finished: SSH's state now, or why the command failed.
     Ssh { cmd: SshCmd, result: Result<SshStatus, String> },
@@ -149,8 +149,10 @@ pub enum Effect {
     SoundTo(Output),
     Installer(InstallCmd),
     /// Start (true) or stop the file transfer server; the outcome comes back as
-    /// `Msg::FileTransfer`. A stop comes before a `Sleep` in the same list.
+    /// `Msg::FileTransfer`. When a stop and a `Sleep` are in one list, the stop comes first:
+    /// carried out in order, the server is stopped before the device sleeps.
     FileTransfer(bool),
+    /// Carry out this SSH command; the result comes back as `Msg::Ssh`.
     Ssh(SshCmd),
     /// Play this interface sound. Only sent while they can be heard: never while a game is being
     /// played (it has the sound output, also while paused), muted, at volume 0 or with "Interface
@@ -207,7 +209,7 @@ pub struct Ctx {
     pub install: Option<InstallState>,
     /// None on a device without file transfer; see `App::has_file_transfer`.
     pub transfer: Option<TransferState>,
-    /// None on a device without SSH the user switches; see `App::has_ssh`.
+    /// None on a device where the app doesn't manage SSH; see `App::has_ssh`.
     pub ssh: Option<SshState>,
     pub credits: Credits,
     /// The files in the card's `cores/` that aren't used, and why (see `Msg::Cores`).
@@ -346,7 +348,7 @@ pub struct App {
     radios: wireless::Radios,
     /// When the last `Sound::Move` was sent (see `TICK_GAP`).
     last_tick: Option<Duration>,
-    /// Between `Effect::Sleep` and `Msg::Woke`.
+    /// True from sending `Effect::Sleep` until `Msg::Woke`.
     asleep: bool,
 }
 
@@ -1058,7 +1060,7 @@ impl Screen for SettingsScreen {
         let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
         rows.insert(system_end, credits::settings_row());
         if ctx.visibility() == Visibility::Developer {
-            // After the developer settings, the last section shown.
+            // Appended to the Developer section, the last settings section.
             rows.extend(ssh::settings_rows(ctx));
             rows.extend([action("open:cores", "Cores"), action("open:icons", "Icons")]);
         }
