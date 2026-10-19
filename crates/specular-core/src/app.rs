@@ -578,8 +578,11 @@ impl App {
     }
 
     /// Whether the device mustn't sleep by itself now: a game is running unpaused, an installer
-    /// task is running, or file transfer is open (a transfer may be under way).
-    fn stays_awake(&self) -> bool { self.input_target() == InputTarget::Game || self.task_running() || self.transfer_open() }
+    /// task is running, file transfer is open (a transfer may be under way), or a PC is connected
+    /// over USB (someone is working on the device, which is charging anyway).
+    fn stays_awake(&self) -> bool {
+        self.input_target() == InputTarget::Game || self.task_running() || self.transfer_open() || self.usb_link().is_some()
+    }
 
     /// Sleeps, stopping file transfer first (it starts again on waking, if still open).
     fn sleep(&mut self) -> Vec<Effect> {

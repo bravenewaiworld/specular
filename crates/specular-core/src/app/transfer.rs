@@ -104,7 +104,7 @@ impl Screen for TransferScreen {
                 }
                 // The other connected network interfaces, such as a USB cable's to a PC.
                 for i in ctx.wifi.iter().flat_map(|w| &w.interfaces) {
-                    let label = if i.name.starts_with("usb") { "USB cable" } else { &i.name };
+                    let label = if i.is_usb_link() { "USB cable" } else { &i.name };
                     rows.push(Row::new(format!("address:{}:{}", i.name, i.address), label, RowKind::Note { detail: Some(url(&i.address)) }));
                 }
             }

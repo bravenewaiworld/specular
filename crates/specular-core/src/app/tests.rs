@@ -5,6 +5,7 @@ use serde_json::json;
 use super::*;
 use crate::card::CardStatus;
 use crate::library::builtin_systems;
+use crate::wireless::wifi::Interface;
 
 fn game(system: &'static str, title: &str) -> Game {
     Game { system, path: format!("{system}/{title}.rom").into(), title: title.into(), sort_key: title.to_lowercase() }
@@ -513,6 +514,27 @@ fn sleeps_after_30_seconds_without_a_press_outside_a_game() {
     assert_eq!(a.sleep_deadline(), None);
     assert_eq!(a.handle(Msg::Tick(sec(60))), vec![]); // counting starts again
     assert_eq!(a.handle(Msg::Tick(sec(90))), vec![Effect::Sleep]);
+}
+
+#[test]
+fn a_pc_connected_over_usb_keeps_the_device_awake() {
+    let mut a = app();
+    a.has_radios(true, false); // the interfaces come from the WiFi service
+    let sec = |n: u64| Duration::from_secs(n);
+    let interfaces = |names: &[&str]| Msg::Wifi(WifiEvent::Interfaces(
+        names.iter().map(|n| Interface { name: n.to_string(), address: "192.168.7.2".into() }).collect()));
+    tap(&mut a, Button::Down, 0);
+    // Another wired link (a USB Ethernet adapter) doesn't hold sleep off.
+    a.handle(interfaces(&["eth0"]));
+    assert_eq!(a.sleep_deadline(), Some(sec(30)));
+    a.handle(interfaces(&["eth0", "usb0"]));
+    assert_eq!(a.sleep_deadline(), None);
+    assert!(!a.handle(Msg::Tick(sec(3600))).contains(&Effect::Sleep));
+    // Unplugged after an hour: the count starts again from the next tick, not from the last press.
+    a.handle(interfaces(&[]));
+    assert_eq!(a.handle(Msg::Tick(sec(3601))), vec![]);
+    assert_eq!(a.sleep_deadline(), Some(sec(3631)));
+    assert_eq!(a.handle(Msg::Tick(sec(3631))), vec![Effect::Sleep]);
 }
 
 #[test]

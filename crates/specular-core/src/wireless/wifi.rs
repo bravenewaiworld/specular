@@ -49,6 +49,13 @@ pub enum WifiLink {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interface { pub name: String, pub address: String }
 
+impl Interface {
+    /// Whether this is a USB network link to a PC: the device's USB gadget interface (`usb0` on
+    /// the Brick), which has a link only while a PC has set it up. Known by its name, as Linux
+    /// names gadget interfaces; a USB Ethernet adapter is `eth…` and doesn't count.
+    pub fn is_usb_link(&self) -> bool { self.name.starts_with("usb") }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JoinStep { Associating, Authenticating, GettingAddress }
 

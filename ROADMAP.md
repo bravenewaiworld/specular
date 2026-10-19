@@ -18,7 +18,7 @@ Completed:
  - Volume, with an on-screen gauge; the FN switch mutes
  - WiFi On/Off/Auto: Auto turns WiFi on only while something needs it (e.g. box art downloads). Scan, join with the on-screen keyboard, forget. A network is saved only once it connects, so a wrong password is never kept. Select shows or hides the password as it is typed (hidden each time the keyboard opens)
  - Bluetooth: search, pair, connect, disconnect, forget. Bluetooth headphones as a sound output with their own volume; the output can switch mid-game, and falls back to the speaker if the headphones fail
- - Sleep: a tap of the power button, or after an idle time (never during a game). The game is paused and saved first, and its menu is open on waking. Power presses are ignored briefly after waking
+ - Sleep: a tap of the power button, or after an idle time (never during a game, nor while a PC is connected over the USB network link). The game is paused and saved first, and its menu is open on waking. Power presses are ignored briefly after waking
  - Power menu: hold the power button for 1 s for Power off and Restart, also during a game (saved first)
  - Clock in the status bar, hidden until the time has been set
  - Controls that appear late or disconnect are picked up again

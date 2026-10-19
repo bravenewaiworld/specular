@@ -141,7 +141,28 @@ impl App {
     /// for something (they are in the trace either way).
     fn on_screen(&self, id: &ScreenId) -> bool { self.nav.contains(id) }
 
+    /// The USB network link to a PC, while it is up (see `Interface::is_usb_link`).
+    pub(super) fn usb_link(&self) -> Option<&Interface> {
+        self.ctx.wifi.as_ref()?.interfaces.iter().find(|i| i.is_usb_link())
+    }
+
+    /// Logs the USB link to a PC coming up or going, as it holds off idle sleep (`stays_awake`).
+    /// When it goes, the idle count starts again at the next tick, so pulling the cable after a
+    /// long idle doesn't put the device straight to sleep.
+    fn usb_link_changes(&mut self, now: &[Interface]) {
+        let after = now.iter().find(|i| i.is_usb_link());
+        match (self.usb_link().is_some(), after) {
+            (false, Some(i)) => eprintln!("power: a PC is connected over USB ({}, {}): no idle sleep until it goes", i.name, i.address),
+            (true, None) => {
+                eprintln!("power: the USB link to the PC is gone: idle sleep as set again");
+                self.idle_since = None;
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn wifi_event(&mut self, e: WifiEvent) -> Vec<Effect> {
+        if let WifiEvent::Interfaces(i) = &e { self.usb_link_changes(i); }
         let notify = self.on_screen(&screens::WIFI);
         let Some(w) = &mut self.ctx.wifi else { return vec![] };
         let mut out = vec![];
