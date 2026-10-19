@@ -85,6 +85,10 @@ Completed:
  - An install or restore cut short (crash, power cut) is recognised: one still running is shown again, and an unfinished one can be run again
  - Developer details show why installing isn't possible
 
+TODO:
+ - Settings → Updates: the running version; install an update file from the SD card's `updates/` (an older one with a warning, one that can't be installed with why), then restart; start the previous version (built; to check on the Brick, see DEVELOPMENT.md)
+ - Restore from the installed system: it prepares the SD card, whose system then asks once (Restore, Not now, Cancel the restore), never restoring by itself (built; to check on the Brick, see DEVELOPMENT.md)
+
 ### Customization
 
 Completed:

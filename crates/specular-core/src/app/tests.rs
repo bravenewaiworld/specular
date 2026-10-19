@@ -912,7 +912,9 @@ mod wireless {
 
 mod install {
     use super::*;
-    use crate::install::{Backup, InstallOffer, Internal, Offer, Progress, Task, TaskError};
+    use crate::install::{Backup, InstallOffer, Internal, Offer, PendingRestore, Progress, Task, TaskError, TaskKind, UpdateFile};
+
+    const BACKUP: &str = "/mnt/SDCARD/backups/internal-20261014-232447";
 
     /// An app with an installer, at home.
     fn install_app() -> App {
@@ -921,11 +923,31 @@ mod install {
         a
     }
 
+    /// On the SD card's system: installing is possible, with one backup; there is a previous
+    /// version, and update files: a newer one, an older one and one that can't be installed.
     fn offer() -> Offer {
+        let update = |name: &str, version: Option<&str>, older, problem: Option<&str>| UpdateFile {
+            file: format!("/mnt/SDCARD/updates/{name}"), version: version.map(Into::into), older, problem: problem.map(Into::into),
+        };
         Offer {
             install: Some(InstallOffer { bytes: 7_818_182_656, backup_possible: true, free: 20_000_000_000 }), why_not: None, internal: Internal::TrimUi,
-            backups: vec![Backup { dir: "/mnt/SDCARD/backups/internal-20261014-232447".into(), created: "20261014-232447".into(), bytes: 7_818_182_656, holds: Some(Internal::TrimUi) }],
+            backups: vec![Backup { dir: BACKUP.into(), created: "20261014-232447".into(), bytes: 7_818_182_656, holds: Some(Internal::TrimUi) }],
+            version: Some("20261018-212347-b3a6d97".into()),
+            previous: Some("20261012-090000-1a2b3c4".into()),
+            updates: vec![update("new.update", Some("20261019-101500-c4d5e6f"), false, None),
+                          update("old.update", Some("20000101-000000-0000000"), true, None),
+                          update("bad.update", None, false, Some("/mnt/SDCARD/updates/bad.update isn't signed for this system"))],
+            restore: None, restore_pending: None,
         }
+    }
+
+    /// On the installed system: restores are prepared, nothing can be installed.
+    fn installed() -> Offer {
+        Offer { install: None, why_not: Some("the system isn't running from an SD card".into()), internal: Internal::Unknown, restore: Some(Ok(())), ..offer() }
+    }
+
+    fn pending() -> Offer {
+        Offer { restore_pending: Some(PendingRestore { backup: "internal-20261014-232447".into(), prepared: "20261018-120000".into() }), ..offer() }
     }
 
     /// Opens Settings (which asks the installer what it can do) and gives it `offer`.
@@ -942,8 +964,147 @@ mod install {
         settings(&mut a, offer());
         let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
         assert!(labels.ends_with(&["Internal storage".into(), "Install to internal storage".into(), "Restore internal storage".into()]), "{labels:?}");
-        a.handle(Msg::InstallOffer(Ok(Offer { install: None, why_not: Some("running from the internal storage".into()), internal: Internal::Unknown, backups: vec![] })));
-        assert!(!a.view().rows.iter().any(|r| r.label == "Internal storage"));
+        a.handle(Msg::InstallOffer(Ok(Offer { why_not: Some("running from the internal storage".into()), ..Offer::default() })));
+        assert!(!a.view().rows.iter().any(|r| r.label == "Internal storage" || r.label == "Updates"));
+    }
+
+    #[test]
+    fn settings_show_the_version_updates_and_the_previous_version() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        let rows = a.view().rows.clone();
+        let at = rows.iter().position(|r| r.label == "Updates").expect("an Updates section");
+        assert_eq!(rows[at + 1].kind, RowKind::Note { detail: Some("20261018-212347-b3a6d97".into()) });
+        assert_eq!(rows[at + 2..at + 4].iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Install update", "Start previous version"]);
+        // An older installer reports none of it.
+        a.handle(Msg::InstallOffer(Ok(Offer { version: None, previous: None, updates: vec![], ..offer() })));
+        assert!(!labels(&a).contains(&"Updates".into()));
+    }
+
+    #[test]
+    fn an_update_warns_when_older_says_why_one_cant_be_installed_then_restarts() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        press(&mut a, "Install update");
+        assert_eq!(a.view().title, "Install update");
+        let rows = a.view().rows.clone();
+        assert_eq!(rows[1], Row::new("update:/mnt/SDCARD/updates/old.update", "old.update", RowKind::Action { value: Some("Older".into()) }));
+        assert_eq!(rows[2].label, "bad.update can't be installed: /mnt/SDCARD/updates/bad.update isn't signed for this system");
+        assert!(!rows[2].kind.focusable());
+        press(&mut a, "old.update");
+        assert_eq!(a.view().title, "Install update?");
+        assert_eq!(focused(&a), "Cancel");
+        assert!(labels(&a).contains(&"This update is older than version 20261018-212347-b3a6d97.".into()), "{:?}", labels(&a));
+        let e = press(&mut a, "Install");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Update { file: "/mnt/SDCARD/updates/old.update".into() })));
+        assert_eq!(a.view().title, "Updating…");
+        for b in [Button::B, Button::Menu] { assert_eq!(tap(&mut a, b, 0), vec![]); }
+        assert_eq!(tap(&mut a, Button::Power, 0), vec![Effect::Notice("Please wait until updating has finished".into())]);
+        assert_eq!(a.sleep_deadline(), None);
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("Version 20000101-000000-0000000 starts at the next restart.".into()))));
+        assert_eq!(a.view().title, "Updated");
+        assert_eq!(focused(&a), "Restart");
+        assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Restart]);
+    }
+
+    #[test]
+    fn an_update_refused_on_a_low_battery_says_why_and_goes_back() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        press(&mut a, "Install update");
+        press(&mut a, "new.update");
+        press(&mut a, "Install");
+        let error = TaskError { message: "the battery is at 30 %".into(), hint: "Connect the charger, or charge to at least 50 %, then try again.".into(), log: Some("/mnt/SDCARD/logs/update-x.log".into()) };
+        a.handle(Msg::InstallProgress(Progress::Done(Err(error))));
+        assert_eq!(a.view().title, "Update failed");
+        let l = labels(&a);
+        assert!(l.contains(&"Connect the charger, or charge to at least 50 %, then try again.".into()) && l.contains(&"Log: /mnt/SDCARD/logs/update-x.log".into()), "{l:?}");
+        tap(&mut a, Button::B, 0);
+        assert_eq!(a.view().title, "Install update?");
+        assert!(!a.task_running());
+    }
+
+    #[test]
+    fn the_previous_version_is_started_after_asking_then_a_restart() {
+        let mut a = install_app();
+        settings(&mut a, offer());
+        press(&mut a, "Start previous version");
+        assert_eq!(a.view().title, "Start the previous version?");
+        assert_eq!(focused(&a), "Cancel");
+        let e = press(&mut a, "Switch");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Activate { version: "20261012-090000-1a2b3c4".into() })));
+        assert_eq!(a.view().title, "Switching versions…");
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("Version 20261012-090000-1a2b3c4 starts at the next restart.".into()))));
+        assert_eq!(press(&mut a, "Restart"), vec![Effect::Restart]);
+    }
+
+    #[test]
+    fn restoring_from_the_installed_system_prepares_it_then_restarts() {
+        let mut a = install_app();
+        settings(&mut a, installed());
+        assert!(!labels(&a).contains(&"Install to internal storage".into()));
+        press(&mut a, "Restore internal storage");
+        press(&mut a, "TrimUI's system · 2026-10-14 23:24 UTC");
+        assert!(labels(&a)[0].starts_with("The SD card is made to start the device"), "{:?}", labels(&a));
+        let e = press(&mut a, "Restore");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::PrepareRestore { dir: BACKUP.into() })));
+        assert_eq!(a.view().title, "Preparing the restore…");
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("Restart to continue the restore from the SD card.".into()))));
+        assert_eq!(focused(&a), "Restart");
+    }
+
+    #[test]
+    fn a_restore_that_cant_be_prepared_isnt_offered() {
+        let mut a = install_app();
+        settings(&mut a, Offer { restore: Some(Err("the SD card's boot slot \"boot_a\" holds no system".into())), ..installed() });
+        assert!(!labels(&a).contains(&"Restore internal storage".into()));
+    }
+
+    #[test]
+    fn a_prepared_restore_is_asked_about_once_and_never_run_by_itself() {
+        let mut a = install_app();
+        // At start-up the installer reports it: the question opens, on Not now.
+        let e = a.handle(Msg::InstallOffer(Ok(pending())));
+        assert!(!e.iter().any(|e| matches!(e, Effect::Installer(_))), "{e:?}");
+        assert_eq!(a.view().title, "Restore the internal storage?");
+        assert_eq!(focused(&a), "Not now");
+        assert!(labels(&a)[0].starts_with("A restore was prepared on 2026-10-18 12:00 UTC"), "{:?}", labels(&a));
+        assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
+        // Only once; afterwards it is in Settings.
+        settings(&mut a, pending());
+        assert_eq!(a.view().title, "Settings");
+        press(&mut a, "Continue the prepared restore");
+        let e = press(&mut a, "Restore");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Restore { dir: BACKUP.into() })));
+        assert_eq!(a.view().title, "Restoring…");
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("Restored the internal storage. Power off, remove the SD card, then turn the device on.".into()))));
+        assert_eq!(focused(&a), "Power off");
+    }
+
+    #[test]
+    fn a_prepared_restore_can_be_cancelled() {
+        let mut a = install_app();
+        a.handle(Msg::InstallOffer(Ok(pending())));
+        let e = press(&mut a, "Cancel the restore");
+        assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::CancelRestore)));
+        assert_eq!(a.view().title, "Cancelling the restore…");
+        a.handle(Msg::InstallProgress(Progress::Done(Ok("The restore is cancelled. Restart to start from the internal storage.".into()))));
+        assert_eq!(focused(&a), "Restart");
+    }
+
+    #[test]
+    fn a_prepared_restore_whose_backup_is_gone_cant_be_run() {
+        let mut a = install_app();
+        a.handle(Msg::InstallOffer(Ok(Offer { backups: vec![], ..pending() })));
+        assert_eq!(labels(&a), ["The backup this restore was prepared for (internal-20261014-232447) isn't on the SD card any more.", "Not now", "Cancel the restore"]);
+    }
+
+    #[test]
+    fn a_prepared_restore_isnt_asked_about_over_a_running_task() {
+        let mut a = install_app();
+        a.handle(Msg::InstallProgress(Progress::Task(TaskKind::Restore)));
+        a.handle(Msg::InstallOffer(Ok(pending())));
+        assert_eq!(a.view().title, "Restoring…");
     }
 
     #[test]
@@ -1006,7 +1167,7 @@ mod install {
     fn a_task_left_running_by_an_earlier_run_is_shown_and_not_interrupted() {
         let mut a = install_app();
         // The installer, following it (Installer::follow), reports it from its start.
-        a.handle(Msg::InstallProgress(Progress::Task { restore: true }));
+        a.handle(Msg::InstallProgress(Progress::Task(TaskKind::Restore)));
         a.handle(Msg::InstallProgress(Progress::Step { index: 1, of: 3, label: "Checking the backup".into() }));
         assert_eq!(a.view().title, "Restoring…");
         assert!(a.task_running());
@@ -1015,7 +1176,11 @@ mod install {
         a.handle(Msg::InstallProgress(Progress::Done(Ok("Restored.".into()))));
         assert_eq!(focused(&a), "Power off");
         // A task this run started also reports which it is first: nothing changes.
-        assert_eq!(a.handle(Msg::InstallProgress(Progress::Task { restore: false })), vec![]);
+        assert_eq!(a.handle(Msg::InstallProgress(Progress::Task(TaskKind::Install))), vec![]);
+        // An update left running is named as one.
+        let mut a = install_app();
+        a.handle(Msg::InstallProgress(Progress::Task(TaskKind::Update)));
+        assert_eq!(a.view().title, "Updating…");
     }
 
     #[test]

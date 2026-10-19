@@ -501,13 +501,14 @@ fn radio_thread<C: Send + 'static, E: Send + 'static>(name: &str, mut service: B
 }
 
 /// The installer's thread: first has it follow a task an earlier run of Specular left running,
-/// then asks it what can be done and starts its tasks (whose progress it reports from a thread of
-/// its own).
+/// and asks it what can be done (so a prepared restore is asked about at start-up); then asks
+/// again and starts its tasks when told (their progress is reported from a thread of their own).
 fn installer_thread(installer: Box<dyn specular_core::install::Installer>) -> mpsc::Sender<specular_core::app::InstallCmd> {
     use specular_core::app::InstallCmd;
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new().name("installer".into()).spawn(move || {
         installer.follow(Box::new(|p| post(Msg::InstallProgress(p))));
+        post(Msg::InstallOffer(installer.offer()));
         for cmd in rx {
             match cmd {
                 InstallCmd::Offer => post(Msg::InstallOffer(installer.offer())),

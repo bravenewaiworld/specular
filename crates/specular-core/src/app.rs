@@ -294,12 +294,15 @@ pub mod screens {
     /// The on-screen keyboard, for the screen below it. Its presses are handled by the app itself
     /// (see `App::keyboard`).
     pub const KEYBOARD: ScreenId = ScreenId(std::borrow::Cow::Borrowed("keyboard"));
-    /// "Install to internal storage?", "Restore internal storage" (the backups), "Restore …?",
-    /// and a running task's progress (see `app::install`). Install, restore-confirm and task
-    /// presses are handled by the app itself.
+    /// The installer's screens (see `app::install`): "Install to internal storage?", the backups,
+    /// the update files, a confirm screen for a restore, an update or the previous version, the
+    /// prepared restore's question, and a task's progress. The app handles presses on those that
+    /// start tasks (`App::install_press`).
     pub const INSTALL: ScreenId = ScreenId(std::borrow::Cow::Borrowed("install"));
     pub const RESTORE: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore"));
-    pub const RESTORE_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore confirm"));
+    pub const UPDATES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("updates"));
+    pub const CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("install confirm"));
+    pub const RESTORE_PENDING: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore pending"));
     pub const TASK: ScreenId = ScreenId(std::borrow::Cow::Borrowed("task"));
     pub const CREDITS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("credits"));
     /// One game's settings, with its path under `roms/` in its params; also opened from the in-game
@@ -709,9 +712,7 @@ impl App {
         let row = focused.map(|r| r.id.0.as_str());
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
-        if id == screens::INSTALL { return self.install_screen(p.button, row); }
-        if id == screens::RESTORE_CONFIRM { return self.restore_confirm(p.button, row); }
-        if id == screens::TASK { return self.task_screen(p.button, row); }
+        if let Some(e) = self.install_press(&id, p.button, row) { return e; }
         // (A, B and Menu never repeat.) Over a paused game, Menu resumes it.
         if p.button == Button::Menu && self.nav.contains(&screens::GAME_MENU) { return self.resume(); }
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
@@ -797,7 +798,7 @@ impl App {
         // Nothing may interrupt the installer (see app::install).
         if self.task_running() {
             self.power_down = None;
-            return if e.pressed { vec![Effect::Notice(self.task_wait_notice().into())] } else { vec![] };
+            return if e.pressed { vec![Effect::Notice(self.task_wait_notice())] } else { vec![] };
         }
         if e.pressed {
             self.repeater.reset();
