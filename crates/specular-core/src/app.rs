@@ -792,7 +792,8 @@ impl App {
     }
 
     /// A press in the in-game menu: B and Menu resume, A does the focused row's action, and on the
-    /// Disc row, right (or A) and left change to the next or previous disc, wrapping around. Every action closes the menu, resuming the game unless it was quit.
+    /// Disc row, right (or A) and left change to the next or previous disc, wrapping around. Every
+    /// action closes the menu, resuming the game unless it was quit.
     fn game_menu(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
         let mut e = match (button, row) {
             (Button::B | Button::Menu, _) | (Button::A, Some("resume")) => vec![Effect::PauseGame(false)],
@@ -1014,7 +1015,7 @@ impl Screen for SettingsScreen {
             rows.extend([action("open:cores", "Cores"), action("open:icons", "Icons")]);
         }
         rows.extend(install::settings_rows(ctx));
-        ScreenView { title: "Settings".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
+        ScreenView::list("Settings", rows)
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {

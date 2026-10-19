@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::{Ctx, Outcome, Screen, screens};
 use crate::device::Battery;
 use crate::input::{Button, Press};
-use crate::model::{Icon, Layout, Row, RowKind, ScreenId, ScreenView};
+use crate::model::{Icon, Row, RowKind, ScreenId, ScreenView};
 use crate::nav::ScreenState;
 use crate::wireless::bluetooth::BtKind;
 
@@ -47,7 +47,7 @@ fn rows() -> Vec<Row> {
 
 impl Screen for IconsScreen {
     fn view(&self, _: &Ctx, _: &ScreenState) -> ScreenView {
-        ScreenView { title: "Icons".into(), layout: Layout::List, rows: rows(), hints: vec![(Button::B, "Back".into())], entry: None }
+        ScreenView::list("Icons", rows())
     }
 
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, p: Press) -> Outcome {

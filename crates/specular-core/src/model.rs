@@ -125,6 +125,13 @@ pub struct ScreenView {
     pub entry: Option<TextEntry>,
 }
 
+impl ScreenView {
+    /// A plain list, whose only hint is B for Back.
+    pub fn list(title: impl Into<String>, rows: Vec<Row>) -> Self {
+        Self { title: title.into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
+    }
+}
+
 /// Text being typed: as shown (masked text as dots), and the caret's place in characters.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextEntry { pub text: String, pub caret: usize }

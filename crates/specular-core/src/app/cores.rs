@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{Ctx, Outcome, Screen, screens};
 use crate::input::{Button, Press};
 use crate::library;
-use crate::model::{Layout, Row, RowKind, ScreenId, ScreenView};
+use crate::model::{Row, RowKind, ScreenId, ScreenView};
 use crate::nav::ScreenState;
 
 pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) { screens.insert(screens::CORES, Box::new(CoresScreen)); }
@@ -36,7 +36,7 @@ impl Screen for CoresScreen {
             rows.push(Row::new(format!("away:{i}"), &t.file, RowKind::Text { detail: None }));
             rows.push(Row::note(format!("why:{i}"), sentence(&t.why)));
         }
-        ScreenView { title: "Cores".into(), layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
+        ScreenView::list("Cores", rows)
     }
 
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, p: Press) -> Outcome {

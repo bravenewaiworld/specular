@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{Ctx, Outcome, Screen, screens};
 use crate::input::{Button, Press};
 use crate::library::{Game, SystemDecl};
-use crate::model::{Layout, Row, RowKind, ScreenId, ScreenView};
+use crate::model::{Row, RowKind, ScreenId, ScreenView};
 use crate::nav::ScreenState;
 use crate::settings::Layer;
 
@@ -31,11 +31,11 @@ impl Screen for GameSettings {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         // The library was scanned again since the screen opened, and the game is gone.
         let Some((game, system)) = Self::game(ctx, state) else {
-            return view("Game settings".into(), vec![Row::note("note:gone", "This game is no longer on the SD card")]);
+            return ScreenView::list("Game settings", vec![Row::note("note:gone", "This game is no longer on the SD card")]);
         };
         let all = [Row::new("header:system", system.name, RowKind::Header),
                    Row::new("open:system", format!("All {} games…", system.name), RowKind::Action { value: None })];
-        view(game.title.clone(), rows(ctx, &game.settings_layer(), system, all.into()))
+        ScreenView::list(game.title.clone(), rows(ctx, &game.settings_layer(), system, all.into()))
     }
 
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
@@ -57,17 +57,13 @@ impl SystemSettings {
 
 impl Screen for SystemSettings {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
-        let Some(system) = Self::system(ctx, state) else { return view("Settings".into(), vec![]) };
-        view(format!("All {} games", system.name), rows(ctx, &Layer::System(system.id.into()), system, vec![]))
+        let Some(system) = Self::system(ctx, state) else { return ScreenView::list("Settings", vec![]) };
+        ScreenView::list(format!("All {} games", system.name), rows(ctx, &Layer::System(system.id.into()), system, vec![]))
     }
 
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         press(ctx, Self::system(ctx, state).map(|s| Layer::System(s.id.into())), focused, p)
     }
-}
-
-fn view(title: String, rows: Vec<Row>) -> ScreenView {
-    ScreenView { title, layout: Layout::List, rows, hints: vec![(Button::B, "Back".into())], entry: None }
 }
 
 /// The rows of `at`'s settings: Specular's, then `between`, then the options of the core that
