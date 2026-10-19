@@ -46,10 +46,26 @@ pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type InstallPlatform = Box<dyn FnOnce(Box<dyn FnMut(ButtonEvent)>) -> Result<(), Error>>;
 
 /// Now, on the monotonic clock button times use.
-pub fn now() -> Duration {
+pub fn now() -> Duration { clock(libc::CLOCK_MONOTONIC) }
+
+/// The CPU time the calling thread has used.
+fn cpu_time() -> Duration { clock(libc::CLOCK_THREAD_CPUTIME_ID) }
+
+fn clock(id: libc::clockid_t) -> Duration {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    unsafe { libc::clock_gettime(id, &mut ts) };
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
+
+/// For the frame statistics: how many texts Slint has shaped, and how many times it broke a
+/// text's lines again, in `window` so far (its text layout cache's misses; a text measured for a
+/// layout's widths is cached apart, so its misses count as shaped too). Slint counts them
+/// only with i-slint-core's `testing` feature (which adds nothing else), and offers them only in
+/// its internal API, so this is tied to the Slint version pinned in Cargo.toml.
+fn text_layout_misses(window: &slint::Window) -> (u64, u64) {
+    let adapter = i_slint_core::window::WindowInner::from_pub(window).window_adapter();
+    adapter.renderer().text_layout_cache()
+        .map_or((0, 0), |c| (c.cache_miss_count() + c.content_widths_miss_count(), c.layout_miss_count()))
 }
 
 /// Gives Slint the fonts to fall back on for characters Geist lacks: Specular's emoji font
@@ -206,6 +222,8 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
         shown_layout: Cell::new(None),
+        slots_changed: Cell::new(0),
+        slots: Cell::new((0, 0, 0)),
         repeating: Cell::new(false),
         art: RefCell::default(),
         picture: RefCell::default(),
@@ -644,6 +662,10 @@ struct Runner {
     ignore_power_until: Cell<Duration>,
     /// The layout last drawn: a new one gets fresh row slots.
     shown_layout: Cell<Option<Layout>>,
+    /// For the frame statistics (`frames::Work`): row slots changed so far, and (slots, slots
+    /// holding a row, those on screen) as of the last `refresh`.
+    slots_changed: Cell<u64>,
+    slots: Cell<(usize, usize, usize)>,
     /// Pictures loaded so far, by ROM path: an image, or None if the game has none yet. A game
     /// not in it hasn't been loaded (or was dropped, see `MAX_PICTURES`).
     art: RefCell<HashMap<PathBuf, Option<slint::Image>>>,
@@ -918,7 +940,7 @@ impl Runner {
         let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
         if let Some(w) = self.window.upgrade() {
             let cover = self.app.borrow().view().rows.iter().find(|r| r.id.0 == game.path.to_string_lossy()).map(|r| self.cover(r));
-            w.set_flyer(cover.unwrap_or_default());
+            w.set_flyer(cover.unwrap_or_else(empty_cover));
             let (gw, gh) = system.as_ref().map_or((0, 0), |s| s.screen);
             w.set_game_width(gw as i32);
             w.set_game_height(gh as i32);
@@ -1018,6 +1040,7 @@ impl Runner {
     /// Before each frame is drawn: the game's newest frame goes into its texture.
     fn before_render(&self, api: &slint::GraphicsAPI) {
         let Some(w) = self.window.upgrade() else { return };
+        if let Some(times) = self.frame_times.borrow_mut().as_mut() { times.drawing(cpu_time()); }
         let playing = self.playing.borrow();
         // The launched game's first frame: it shows once its splash has had its time.
         if self.game_screen.borrow_mut().before_render(api, playing.as_ref().map(|p| &*p.frames), &w) && let Some(launched) = self.launched.take() {
@@ -1034,7 +1057,10 @@ impl Runner {
     fn after_render(&self) {
         let mut times = self.frame_times.borrow_mut();
         let (Some(times), Some(w)) = (times.as_mut(), self.window.upgrade()) else { return };
-        if let Some(line) = times.drawn(now(), w.window().has_active_animations()) { eprintln!("ui: {line}"); }
+        let (shaped, broken) = text_layout_misses(w.window());
+        let work = frames::Work { shaped, broken, slots_changed: self.slots_changed.get(), slots: self.slots.get() };
+        let lines = times.drawn(now(), cpu_time(), w.window().has_active_animations(), work);
+        lines.into_iter().flatten().for_each(|line| eprintln!("ui: {line}"));
     }
 
     /// Carries out the settings the device acts on; ignores the rest.
@@ -1111,16 +1137,22 @@ impl Runner {
         // The keyboard draws every key at once, so it needs a slot per key.
         let slots = if keys { view.rows.len() } else { list::max_drawn(width, height, grid) };
         debug_assert!(layout.drawn.len() <= slots, "two drawn rows would share a slot");
-        let empty = RowData { index: -1, ..Default::default() };
-        let mut wanted = vec![empty; slots];
+        // `focus` is 0 on a screen where no row can take the focus: nothing is focused then.
+        let focusable = view.rows.get(focus).is_some_and(|r| r.kind.focusable());
+        let mut wanted = vec![empty_row(); slots];
         for i in layout.drawn.clone() {
-            wanted[i % slots] = self.row_data(&view.rows[i], i, layout.rects[i]);
+            wanted[i % slots] = self.row_data(&view.rows[i], focusable && i == focus, layout.rects[i]);
         }
-        if t.is_none() && self.shown_layout.get() == Some(view.layout) && self.rows.row_count() == slots {
-            for (slot, r) in wanted.into_iter().enumerate() { if self.rows.row_data(slot).as_ref() != Some(&r) { self.rows.set_row_data(slot, r); } }
+        let on_screen = layout.drawn.clone().filter(|&i| { let r = layout.rects[i]; r.y + r.height > layout.scroll && r.y < layout.scroll + height }).count();
+        self.slots.set((slots, layout.drawn.len(), on_screen));
+        let changed = if t.is_none() && self.shown_layout.get() == Some(view.layout) && self.rows.row_count() == slots {
+            wanted.into_iter().enumerate().filter(|(slot, r)| self.rows.row_data(*slot).as_ref() != Some(r))
+                .map(|(slot, r)| self.rows.set_row_data(slot, r)).count()
         } else {
             self.rows.set_vec(wanted);
-        }
+            slots
+        };
+        self.slots_changed.set(self.slots_changed.get() + changed as u64);
         self.shown_layout.set(Some(view.layout));
         let hints = self.hints(&view, focus);
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
@@ -1135,9 +1167,6 @@ impl Runner {
             w.set_entry_height(keys::ENTRY_HEIGHT);
         }
         w.set_crumb(app.parent_title().unwrap_or_default().into());
-        // `focus` is 0 on a screen where no row can take the focus: nothing is focused then.
-        let focusable = view.rows.get(focus).is_some_and(|r| r.kind.focusable());
-        w.set_focused_row(if focusable { focus as i32 } else { -1 });
         w.set_plate_shown(focusable);
         let plate = layout.rects.get(focus).copied().unwrap_or_default();
         w.set_plate_x(plate.x);
@@ -1233,17 +1262,17 @@ impl Runner {
 
     /// The cover for a row with a picture: the picture if loaded, else a generated one.
     fn cover(&self, r: &Row) -> Cover {
-        let Some((system, rom)) = art_of(r) else { return Cover::default() };
+        let Some((system, rom)) = art_of(r) else { return empty_cover() };
         let known = self.art.borrow().get(rom).cloned();
         let (top, bottom) = cover_colours(&r.label);
         Cover {
-            known: known.is_some(), has_art: matches!(known, Some(Some(_))), art: known.flatten().unwrap_or_default(),
+            known: known.is_some(), has_art: matches!(known, Some(Some(_))), art: known.flatten().unwrap_or_else(no_art),
             top, bottom, title: r.label.as_str().into(), system: system.to_uppercase().into(),
         }
     }
 
-    /// Row `index` of a screen, ready to draw at `rect` (u).
-    fn row_data(&self, r: &Row, index: usize, rect: Rect) -> RowData {
+    /// A screen's row `r`, ready to draw at `rect` (u).
+    fn row_data(&self, r: &Row, focused: bool, rect: Rect) -> RowData {
         let (kind, value, on, fraction) = match &r.kind {
             RowKind::Header => (Kind::Header, String::new(), false, 0.0),
             RowKind::Note { detail } => (Kind::Note, detail.clone().unwrap_or_default(), false, 0.0),
@@ -1260,7 +1289,7 @@ impl Runner {
             _ => r.label.clone(),
         };
         RowData {
-            shown: true, index: index as i32, kind, label: label.into(), value: value.into(), on, fraction,
+            shown: true, focused, kind, label: label.into(), value: value.into(), on, fraction,
             overridden: r.overridden, x: rect.x, top: rect.y, width: rect.width, height: rect.height,
             cover: self.cover(r),
             // Transparent (not drawn) for rows without one.
@@ -1295,6 +1324,22 @@ impl Runner {
 fn art_of(r: &Row) -> Option<(&'static str, &PathBuf)> {
     match &r.kind { RowKind::Image { image: ImageRef::Art { system, rom }, .. } => Some((system, rom)), _ => None }
 }
+
+thread_local! {
+    static NO_ART: slint::Image = slint::Image::from_rgba8(slint::SharedPixelBuffer::new(1, 1));
+}
+
+/// The `art` of a cover without any: a 1×1 image (never drawn, as `has_art` is false). Not
+/// Slint's empty `Image::default()`, which never equals another image, nor itself (i-slint-core
+/// 1.18.1, `ImageInner::eq`): at each `Runner::refresh`, every row slot or cover holding one
+/// would compare unequal to the copy already shown, be set again, and be laid out and have its
+/// text shaped again.
+fn no_art() -> slint::Image { NO_ART.with(Clone::clone) }
+
+fn empty_cover() -> Cover { Cover { art: no_art(), ..Default::default() } }
+
+/// The data of a row slot that holds no row.
+fn empty_row() -> RowData { RowData { cover: empty_cover(), ..Default::default() } }
 
 /// A generated cover's gradient (top, bottom), from the title, so each game keeps its own.
 fn cover_colours(title: &str) -> (slint::Color, slint::Color) {
@@ -1364,20 +1409,28 @@ fn key_button(text: &str) -> Option<Button> {
 /// the names in `KEYS`) 400 ms apart (or `SPECULAR_SCRIPT_MS`), the first after two steps, each
 /// held for 50 ms (so a game sees it: games read buttons once a frame), then, one step after the
 /// last, saves the window as raw RGBA to `SPECULAR_SNAPSHOT` (default /tmp/specular.rgba) and
-/// quits.
+/// quits. `down:3000` holds the button for 3000 ms instead (it repeats as if held), and the next
+/// press comes at the first step after it is released. Unknown names and unreadable times are
+/// skipped.
 fn script(window: &AppWindow, names: &str) -> slint::Timer {
-    let mut steps: Vec<Button> = names.split(',')
-        .filter_map(|n| KEYS.iter().find(|(_, _, name)| *name == n.trim()).map(|&(_, b, _)| b)).collect();
+    let mut steps: Vec<(Button, u64)> = names.split(',').filter_map(|n| {
+        let (n, hold) = n.trim().split_once(':').unwrap_or((n.trim(), "50"));
+        Some((KEYS.iter().find(|(_, _, name)| *name == n)?.1, hold.parse().ok()?))
+    }).collect();
     steps.reverse();
     let weak = window.as_weak();
     let timer = slint::Timer::default();
     let mut started = false;
-    let step = std::env::var("SPECULAR_SCRIPT_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
+    let step: u64 = std::env::var("SPECULAR_SCRIPT_MS").ok().and_then(|s| s.parse().ok()).unwrap_or(400);
+    // Steps left to wait for a held button's release.
+    let mut holding = 0;
     timer.start(slint::TimerMode::Repeated, Duration::from_millis(step), move || {
         if !started { started = true; return; } // let the scan and the first frames finish
-        if let Some(button) = steps.pop() {
+        if holding > 0 { holding -= 1; return; }
+        if let Some((button, hold)) = steps.pop() {
             post(Msg::Button(ButtonEvent { button, pressed: true, time: now() }));
-            slint::Timer::single_shot(Duration::from_millis(50), move || post(Msg::Button(ButtonEvent { button, pressed: false, time: now() })));
+            slint::Timer::single_shot(Duration::from_millis(hold), move || post(Msg::Button(ButtonEvent { button, pressed: false, time: now() })));
+            holding = hold / step;
             return;
         }
         let Some(w) = weak.upgrade() else { return };
@@ -1400,6 +1453,13 @@ mod tests {
                             (Key::RightArrow, "\u{f703}"), (Key::Return, "\n"), (Key::Tab, "\t"), (Key::Escape, "\u{1b}")] {
             assert_eq!(slint::SharedString::from(key).as_str(), code);
         }
+    }
+
+    #[test]
+    fn rows_without_art_equal_themselves() {
+        // Slint's quirk that `no_art` works around; if this fails, `no_art` can go.
+        assert_ne!(slint::Image::default(), slint::Image::default());
+        assert_eq!(super::empty_row(), super::empty_row());
     }
 
     #[test]

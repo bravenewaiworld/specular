@@ -26,10 +26,12 @@ export struct Cover {
 
 // One row, ready to draw, in one of the window's row slots (see Runner::refresh).
 export struct RowData {
-    // False for an empty slot (whose index is -1).
+    // False for an empty slot.
     shown: bool,
-    // The row's index in its screen, matched against `focused-row`.
-    index: int,
+    // True only in the focused row's data, so a focus move changes just the two rows it leaves
+    // and reaches. A binding comparing each row with a window-wide focus property would be
+    // marked changed in every row, and Slint would lay out and shape all their text again.
+    focused: bool,
     kind: Kind,
     label: string,
     // Right-aligned text: a count, the choice or number shown, an action's value.
@@ -331,7 +333,6 @@ export component AppWindow inherits Window {
     in property <string> crumb;
     in property <ScreenLayout> layout;
     in property <[RowData]> rows;
-    in property <int> focused-row;
     // Beside a list with pictures: the focused row's picture.
     in property <Cover> picture;
     // The focus plate (the focused row's or cell's place) and scroll offset, in u (from the
@@ -481,7 +482,12 @@ export component AppWindow inherits Window {
         animate background { duration: Motion.tint; }
         drop-shadow-blur: 18px * Theme.u; drop-shadow-color: Theme.tint.with-alpha(0.45);
     }
-    StatusBar { visible: root.screens-shown; y: 0; width: root.width; crumb: root.crumb; clock: root.clock; icons: root.status-icons; }
+    // This bar and the HintBar below are drawn into textures, redrawn only when they change
+    // (`cache-rendering-hint`): FemtoVG builds every rounded shape anew each frame, which the
+    // battery and the hints' button badges make costly while a list scrolls. (The focus plate
+    // and the picture beside a list aren't: drawn through a texture, their glow and gradient
+    // come out slightly different.)
+    StatusBar { visible: root.screens-shown; y: 0; width: root.width; crumb: root.crumb; clock: root.clock; icons: root.status-icons; cache-rendering-hint: true; }
 
     content := Rectangle {
         visible: root.screens-shown;
@@ -507,10 +513,10 @@ export component AppWindow inherits Window {
                         y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
                         animate y, height { duration: Motion.focus; easing: Motion.focus-easing; }
                     }
-                    for row in root.rows : RowView { data: row; focused: row.index == root.focused-row; }
+                    for row in root.rows : RowView { data: row; focused: row.focused; }
                 }
                 if root.layout == ScreenLayout.grid : Rectangle {
-                    for row in root.rows : GridCell { data: row; focused: row.index == root.focused-row; }
+                    for row in root.rows : GridCell { data: row; focused: row.focused; }
                 }
                 if root.layout == ScreenLayout.keys : Rectangle {
                     TextEntry {
@@ -523,7 +529,7 @@ export component AppWindow inherits Window {
                         y: root.plate-top * 1px * Theme.u; height: root.plate-height * 1px * Theme.u;
                         animate x, y, width { duration: Motion.focus; easing: Motion.focus-easing; }
                     }
-                    for row in root.rows : KeyLabel { data: row; focused: row.index == root.focused-row; }
+                    for row in root.rows : KeyLabel { data: row; focused: row.focused; }
                 }
             }
             // Soft edges where list rows scroll under the title and the hint bar.
@@ -549,7 +555,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; }
+    HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; cache-rendering-hint: true; }
     if root.ui-stats != "" : Text {
         x: root.width - self.width - 16px * Theme.u; y: root.height - Theme.hint-bar - self.height - 8px * Theme.u;
         text: root.ui-stats; font-family: Theme.mono; font-size: Theme.caption; color: Theme.accent;

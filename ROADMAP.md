@@ -115,6 +115,7 @@ Completed:
  - Generated covers for games without box art
  - Emoji in WiFi network and Bluetooth device names
  - A list's drawing cost doesn't grow with its length (checked with 3,000 games)
+ - Scrolling lays out only the rows coming into view and the two the focus moves between, and the status and hint bars are drawn from cached textures; profiled on the desktop (docs/look-and-motion.md)
  - 60 fps while animating; nothing drawn while idle
  - The design mockup (`design/mockup.html`) shows the Light Bar look only
  - Credits in Settings: every project shipped (cores, fonts, data, libraries) and its licence, worked out when the binary is built; the full licence texts installed beside it
@@ -127,7 +128,7 @@ Completed:
 TODO:
  - Interface sounds: to check on the Brick (how loud they are, and that the speaker doesn't pop as their output opens and closes)
  - Title screens and screenshots as art
- - Profile FemtoVG's per-frame cost while scrolling (about 47 % of a core on the Brick): text layout cache hits, how many row slots redraw, whether off-screen slots draw
+ - Measure scrolling's cost on the Brick (about 47 % of a core before the fixes) with the frame statistics' `ui: CPU a frame` line (DEVELOPMENT.md)
 
 ## V1
 

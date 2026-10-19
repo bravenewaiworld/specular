@@ -14,6 +14,9 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 libc = "0.2"
 serde_json = { version = "1", features = ["preserve_order"] }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
+# Only for the counts of its text layout cache's misses in the frame statistics (see
+# `text_layout_misses`). Slint's internal crate: pinned to the same version as `slint`.
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["testing"] }
 specular-core = { path = "../specular-core" }
 specular-runtime = { path = "../specular-runtime" }
 glow = "0.18"
