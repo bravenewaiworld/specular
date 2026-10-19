@@ -1,7 +1,7 @@
 //! Effects: brief reactions of the lights and the rumble to events (the battery becoming low, the
-//! game saving, its sound), drawn over the accent colours. Each is an `Effect`; `Effects` runs an
-//! ordered list of them (the built-ins, `builtin`; plugins will add their own), each turned on by
-//! a setting. Effects only react: between events nothing runs, and nothing is redrawn.
+//! game saving, its sound), drawn over the accent colours. Each is an `effects::Effect` (unrelated
+//! to `app::Effect`, the app's requests to the UI); `Effects` runs an ordered list of them (the
+//! built-ins, `builtin`; plugins will add their own), each turned on by a setting. Effects only react: between events nothing runs, and nothing is redrawn.
 //!
 //! The lights are one colour per accent (`device::Accent`): each LED shows the colour of the accent
 //! the device profile gives it (`DeviceProfile::leds`), and the on-screen light bar the first

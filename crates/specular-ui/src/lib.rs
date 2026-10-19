@@ -536,7 +536,7 @@ fn scan_thread(data: DataRoot, writable: bool) {
     let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
     let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
     let all = library::builtin_systems();
-    // Set at the first look, which always finds something new.
+    // Set at the first look: `found` starts as None, so it always counts as a change.
     let (mut systems, mut decls) = (Vec::new(), Vec::new());
     loop {
         // `cache/cores/` is made beforehand so it can be watched: options learned are written
@@ -782,8 +782,8 @@ impl Runner {
         if needs_clock { self.tick_clock(); }
         self.tell_art_online();
         self.tell_art_kinds();
-        // Each of the app's deadlines gets a `Tick`, the timers re-armed after every message as the
-        // deadlines change.
+        // Each of the app's deadlines has a timer, which gives the app a `Tick` when it is due; all
+        // are re-armed after every message, as the deadlines change.
         let app = self.app.borrow();
         let tick = |r: &Rc<Runner>| r.handle(Msg::Tick(now()));
         for (timer, due) in [(&self.repeat, app.next_deadline()), (&self.sleep_timer, app.sleep_deadline()), (&self.wifi_timer, app.wifi_deadline())] {
@@ -986,7 +986,7 @@ impl Runner {
         self.show_for(&self.toast_timer, TOAST_TIME, AppWindow::set_toast_shown);
     }
 
-    /// Shows something for `time` (from now, or from its last showing): `shown(true)` now, then
+    /// Shows something for `time` from now, extending a showing under way: `shown(true)` now, then
     /// `shown(false)` on `timer`.
     fn show_for(&self, timer: &slint::Timer, time: Duration, shown: fn(&AppWindow, bool)) {
         let Some(w) = self.window.upgrade() else { return };

@@ -48,9 +48,9 @@ pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
     /// Starts `game` with `core` (`App::playing_core`), given these `options` (`App::core_options`),
-    /// with `r`'s card, device, sound output and rumble, on another thread, since reading a large
-    /// ROM or opening a Bluetooth output can take a second or more; then calls `started` there
-    /// with the result. The UI is told of each new frame (`Runner::game_frame`) and each in-game
+    /// with `r`'s data folders, device, sound output and rumble, on another thread, since reading a
+    /// large ROM or opening a Bluetooth output can take a second or more; then calls `started`
+    /// there with the result. The caller checks the BIOS first (`CoreDecl::check_bios`). The UI is told of each new frame (`Runner::game_frame`) and each in-game
     /// save. Before opening the game's output, that thread waits for the interface sounds to close
     /// theirs. A core the user added has the options it declares learned, once the game has
     /// started (`user_cores::learn`).

@@ -79,8 +79,9 @@ pub(crate) fn switches(file: &File) -> Option<u32> {
     (unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGSW_4, bits.as_mut_ptr()) } >= 0).then(|| u32::from_le_bytes(bits))
 }
 
-/// Where the kernel describes its input devices, and where their nodes are.
+/// Where the kernel describes its input devices.
 pub(crate) const SYSFS: &str = "/sys/class/input";
+/// Where their device nodes are.
 pub(crate) const DEV: &str = "/dev/input";
 
 /// An event device as sysfs describes it, for finding one by its name or what it can do.
