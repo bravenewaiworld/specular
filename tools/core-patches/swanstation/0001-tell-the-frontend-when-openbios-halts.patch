@@ -1,0 +1,90 @@
+--- a/src/core/bus.h
++++ b/src/core/bus.h
+@@ -70,6 +70,10 @@
+ extern uint32_t g_ram_mask;       // Active address bits for RAM.
+ extern uint8_t g_bios[BIOS_SIZE]; // 512K BIOS ROM
+ 
++// Specular: set when the built-in OpenBIOS halts for good with a disc in (see DoEXP2Access);
++// retro_run_frame tells the frontend, and clears it.
++extern bool g_openbios_halted;
++
+ /// Returns true if the address specified is writable (RAM).
+ ALWAYS_INLINE static bool IsRAMAddress(PhysicalMemoryAddress address)
+ {
+--- a/src/core/bus.cpp
++++ b/src/core/bus.cpp
+@@ -1,6 +1,7 @@
+ #include "bus.h"
+ #include "cdrom.h"
+ #include "common/align.h"
++#include "common/log.h"
+ #include "common/make_array.h"
+ #include "common/state_wrapper.h"
+ #include "cpu_code_cache.h"
+@@ -19,6 +20,7 @@
+ #include <cstring>
+ #include <tuple>
+ #include <utility>
++Log_SetChannel(Bus);
+ // Disable MSVC unreachable code warnings for code that actually get reached
+ #ifdef _MSC_VER
+ #pragma warning(push)
+@@ -79,6 +81,7 @@
+ uint32_t g_ram_size = 0;
+ uint32_t g_ram_mask = 0;
+ uint8_t g_bios[BIOS_SIZE]{}; // 512K BIOS ROM
++bool g_openbios_halted = false;
+ 
+ static std::array<TickCount, 3> m_exp1_access_time = {};
+ static std::array<TickCount, 3> m_exp2_access_time = {};
+@@ -92,6 +95,7 @@
+ static uint32_t m_ram_size_reg = 0;
+ 
+ static std::string m_tty_line_buffer;
++static uint8_t m_post; // the last POST (boot progress) code written
+ 
+ static Common::MemoryArena m_memory_arena;
+ 
+@@ -704,6 +708,17 @@
+     else
+       m_tty_line_buffer += static_cast<char>(static_cast<uint8_t>(value));
+   }
++  // Specular: OpenBIOS writes its boot progress (POST) code to 0x41, and to 0x81 (PCSX-Redux's
++  // debug break) just before it halts for good: on a function it doesn't implement, a patch of
++  // its code it doesn't know, or a fatal error (POST 0F: the disc couldn't boot, or a CD read
++  // failed). Sony's BIOSes never write 0x81.
++  else if (offset == 0x41)
++    m_post = static_cast<uint8_t>(value);
++  else if (offset == 0x81 && std::memcmp(&g_bios[0x78], "OpenBIOS", 8) == 0)
++  {
++    Log_ErrorPrintf("OpenBIOS halted the game (POST %02X%s)", m_post, g_cdrom.HasMedia() ? "" : ", no disc in");
++    g_openbios_halted = g_cdrom.HasMedia();
++  }
+   return 0;
+ }
+ 
+--- a/src/libretro/libretro_host_interface.cpp
++++ b/src/libretro/libretro_host_interface.cpp
+@@ -36,6 +36,12 @@
+ #include <streams/file_stream.h>
+ #include <vfs/vfs_hybrid.h>
+ 
++// A private environment call (from RETRO_ENVIRONMENT_PRIVATE's range, agreed with Specular): the
++// built-in OpenBIOS has halted the game for good (see Bus::g_openbios_halted), so the game may need
++// a real BIOS. Made inside retro_run, once. Takes no data; a frontend that doesn't know it just
++// refuses it.
++#define SPECULAR_ENVIRONMENT_BIOS_HALTED (RETRO_ENVIRONMENT_PRIVATE + 2)
++
+ Log_SetChannel(HostInterface);
+ 
+ namespace {
+@@ -955,6 +961,9 @@
+ 
+   System::RunFrame();
+ 
++  if (std::exchange(Bus::g_openbios_halted, false))
++    g_retro_environment_callback(SPECULAR_ENVIRONMENT_BIOS_HALTED, nullptr);
++
+   // Detect post-frame timing changes from the PSX side. The CRTC config
+   // can change mid-game (NTSC <-> PAL detection, interlace toggle,
+   // overclock change), and that updates both the aspect ratio and the

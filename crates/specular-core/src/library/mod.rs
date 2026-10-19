@@ -113,12 +113,28 @@ impl CoreDecl {
             let files = b.files.join(", ");
             eprintln!("game: no BIOS for {} in {} (looked for {files}){}", b.games, bios_dir.display(),
                 b.fallback.map_or(String::new(), |f| format!("; {} uses {f}", self.name)));
-            if b.fallback.is_none() {
-                let which = if b.files.len() > 1 { format!("one of {files}") } else { files };
-                return Err(format!("{} need {which} in the bios folder", b.games));
-            }
+            if b.fallback.is_none() { return Err(format!("{} need {} in the bios folder", b.games, b.which())); }
         }
         Ok(())
+    }
+
+    /// Why the game stopped, for the player, when the core says the BIOS it uses without a BIOS
+    /// file has halted it for good (specular-runtime's `Outputs::on_bios_halt`): which file to put
+    /// where.
+    pub fn bios_halt_notice(&self) -> String {
+        match self.bios.iter().find_map(|b| Some((b, b.fallback?))) {
+            Some((b, fallback)) => format!("{} ran it on {fallback}, which lacks something it uses. It may need a BIOS file: put {} in the bios folder on the SD card",
+                self.name, b.which()),
+            None => format!("{}'s built-in BIOS halted it", self.name),
+        }
+    }
+}
+
+impl Bios {
+    /// Its files, for the player: "disksys.rom", or "one of a.bin, b.bin".
+    fn which(&self) -> String {
+        let files = self.files.join(", ");
+        if self.files.len() > 1 { format!("one of {files}") } else { files }
     }
 }
 

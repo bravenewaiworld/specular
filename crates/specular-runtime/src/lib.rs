@@ -94,6 +94,12 @@ pub struct Outputs {
     /// that says when its save memory was written (`ENV_SAVE_RAM_WRITTEN`), else at the next check,
     /// up to 10 s of play later.
     pub on_save: Box<dyn Fn() + Send>,
+    /// Called on the game's thread when the core says the BIOS it uses without a BIOS file has
+    /// halted the game for good (`core::ENV_BIOS_HALTED`): the game may need a real BIOS. The
+    /// game runs on, frozen, until quit. Its autosave is removed and no longer written:
+    /// SwanStation's states hold the BIOS they were made with, so resuming one would halt again,
+    /// even with a BIOS file added since.
+    pub on_bios_halt: Box<dyn Fn() + Send>,
 }
 
 /// About the running game.
@@ -443,6 +449,10 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
             r.sound_peak = r.sound_peak.max(peak);
         }
         if frontend::with(|f| std::mem::take(&mut f.save_ram_written)) == Some(true) && game.write_save(false) { (out.on_save)(); }
+        if frontend::with(|f| std::mem::take(&mut f.bios_halted)) == Some(true) {
+            game.drop_autosave(&format!("says its built-in BIOS halted the game, at frame {}", runs.lock().unwrap().count));
+            (out.on_bios_halt)();
+        }
         frames_to_check -= 1;
         if frames_to_check == 0 {
             if game.write_save(false) { (out.on_save)(); }
@@ -597,6 +607,14 @@ impl Game {
         if let Err(e) = self.queue_state(path) { eprintln!("game: autosave: {e}"); }
     }
 
+    /// Removes the autosave, once the states queued before it are written, and writes no more
+    /// (see `Outputs::on_bios_halt`); `why` is for the log.
+    fn drop_autosave(&mut self, why: &str) {
+        let Some(path) = self.autosave.take() else { return eprintln!("game: {} {why}", self.name) };
+        eprintln!("game: {} {why}; its autosave {} is removed, and no longer written", self.name, path.display());
+        let _ = self.writer.0.send(Job::Remove(path));
+    }
+
     /// Writes a save state to `path`, then sends `reply` once it is on the card.
     fn save_state(&mut self, path: PathBuf, reply: mpsc::Sender<io::Result<()>>) {
         match self.queue_state(path) {
@@ -733,6 +751,8 @@ enum Job {
     Save { path: PathBuf, data: Vec<u8>, loaded_state: Option<LoadedState> },
     /// A save state: compressed, then followed by its tags.
     State { path: PathBuf, data: Vec<u8>, tags: StateTags },
+    /// A file removed (if there).
+    Remove(PathBuf),
     /// Sends how the writes since the last reply went: the first error, if any failed.
     Reply(mpsc::Sender<io::Result<()>>),
 }
@@ -756,10 +776,14 @@ impl Writer {
                         let written = data.and_then(|data| write_atomically(&path, &data));
                         (path, written)
                     }
+                    Job::Remove(path) => {
+                        let removed = std::fs::remove_file(&path).or_else(|e| if e.kind() == io::ErrorKind::NotFound { Ok(()) } else { Err(e) });
+                        (path, removed)
+                    }
                     Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); continue; }
                 };
                 if let Err(e) = written {
-                    eprintln!("game: writing {}: {e}", path.display());
+                    eprintln!("game: {}: {e}", path.display());
                     failed.get_or_insert(e);
                 }
             }

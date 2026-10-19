@@ -38,6 +38,11 @@ pub const ENV_SET_CORE_OPTIONS_V2_INTL: c_uint = 68;
 /// has changed its save memory and finished writing to it. Made inside `retro_run`, once the
 /// save memory has gone 15 frames (a quarter of a second) without a write. No data.
 pub const ENV_SAVE_RAM_WRITTEN: c_uint = PRIVATE + 1;
+/// A call of Specular's own, from our patched SwanStation (`tools/core-patches/swanstation/0001`):
+/// its built-in OpenBIOS, used when it finds no BIOS file, has halted the game for good, with a
+/// disc in (a function or a patch it lacks, or a disc it couldn't boot). Made inside `retro_run`,
+/// once. No data.
+pub const ENV_BIOS_HALTED: c_uint = PRIVATE + 2;
 const EXPERIMENTAL: c_uint = 0x10000;
 /// The start of the range libretro leaves to private agreements between a frontend and its cores.
 const PRIVATE: c_uint = 0x20000;

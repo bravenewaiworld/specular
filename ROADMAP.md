@@ -53,10 +53,12 @@ Completed:
  - Nestopia for the NES (and the Famicom Disk System, with `disksys.rom`), and SwanStation for the PS1 with its software renderer; PS1 games run without a BIOS, on SwanStation's built-in OpenBIOS. Both built for the PC and the Brick, licences checked, and checked on whether their save states restore the save memory (both do)
  - Battery saves protected from cores whose save states also restore the save memory: each state carries a checksum of the save it was made with, and a newer `.srm` that a loaded state would overwrite is kept as `<name>.newer.srm`
  - A game that needs a BIOS file it doesn't have says which file to put in `bios/`; environment calls a core makes that Specular refuses are logged
+ - A PS1 game that OpenBIOS halts (a BIOS function or patch it lacks, or its fatal error) is quit, saying which BIOS files to put in `bios/` on the SD card; its autosave, which would halt again, is removed. Crashes, the watchdog and games that hang in their own code carry no sign of the BIOS, so say nothing of it
  - PS1 games on several discs (an `.m3u`, or a `.pbp` holding several): the disc changes from the in-game menu, and a game resumes on the disc it was on
  - Cores added to the SD card (`cores/<name>_libretro.so` with its `.info`, as the libretro buildbot ships them) for the systems Specular has: the SNES and Mega Drive appear once one serves them, and a "Core" setting per system and per game chooses where there are several (Specular's own by default). Their options are learned at their first game, and are settings from then on (relearned when the core is replaced). A core without an `.info`, for no system Specular has, or built for another processor is turned away with why, in the log and (with Developer details) on Settings → Cores. Their splash shows their `.info`'s name, authors and licence; their battery saves are protected as if their states restore save memory
 
 TODO:
+ - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
  - Speed check of Nestopia and SwanStation on the Brick (measured on a PC only), including whether SwanStation's drawing thread helps there
 
 ### Library and Game Management

@@ -29,6 +29,9 @@ pub struct Frontend {
     /// Set when the core makes the `ENV_SAVE_RAM_WRITTEN` call; the game's thread clears it after
     /// each `retro_run`.
     pub save_ram_written: bool,
+    /// Set when the core makes the `ENV_BIOS_HALTED` call; the game's thread clears it after each
+    /// `retro_run`.
+    pub bios_halted: bool,
     /// The environment calls refused so far, each logged once.
     pub refused: HashSet<c_uint>,
     /// Where the game's rumble goes; None offers the core none.
@@ -56,7 +59,7 @@ impl Default for Frontend {
             buttons: Arc::default(), frames: Arc::default(), on_frame: Box::new(|| {}),
             pixel_format: PIXEL_0RGB1555, // libretro's default
             samples: Vec::new(), options: Options::default(), system_dir: CString::default(), save_dir: CString::default(),
-            save_ram_written: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false, disks: None,
+            save_ram_written: false, bios_halted: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false, disks: None,
         }
     }
 }
@@ -138,6 +141,7 @@ impl Frontend {
                 }
                 ENV_GET_LOG_INTERFACE => { (*(data as *mut LogCallback)).log = crate::log::specular_log; true }
                 ENV_SAVE_RAM_WRITTEN => { self.save_ram_written = true; true }
+                ENV_BIOS_HALTED => { self.bios_halted = true; true }
                 // Version 1: the extended interface, with disc labels and the disc to start on.
                 ENV_GET_DISK_CONTROL_INTERFACE_VERSION => { *(data as *mut c_uint) = 1; true }
                 ENV_SET_DISK_CONTROL_INTERFACE => {

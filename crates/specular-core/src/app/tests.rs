@@ -108,6 +108,19 @@ fn a_game_that_didnt_end_last_time_is_reported_at_start_up() {
 }
 
 #[test]
+fn a_game_that_stops_for_good_is_quit_and_says_why() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10);
+    tap(&mut a, Button::Menu, 20); // even under its menu
+    assert_eq!(a.handle(Msg::GameStopped("it needs a BIOS".into())),
+               vec![Effect::QuitGame, Effect::Notice("The game stopped: it needs a BIOS".into()), Effect::Redraw(None)]);
+    assert_eq!((a.playing(), a.input_target(), a.view().title.as_str()), (None, InputTarget::App, "Game Boy Advance"));
+    // Already quit: nothing more to do.
+    assert_eq!(a.handle(Msg::GameStopped("it needs a BIOS".into())), vec![]);
+}
+
+#[test]
 fn holding_down_repeats_and_stops_at_the_end() {
     let mut a = app();
     a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: true, time: Duration::ZERO }));

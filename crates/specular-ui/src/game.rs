@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use glow::HasContext;
 use specular_core::device::{Device, Output, SoundOut};
+use specular_core::app::Msg;
 use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
@@ -51,7 +52,7 @@ impl Playing {
     /// with `r`'s data folders, device, sound output and rumble, on another thread, since reading a
     /// large ROM or opening a Bluetooth output can take a second or more; then calls `started`
     /// there with the result. The caller checks the BIOS first (`CoreDecl::check_bios`). The UI is told of each new frame (`Runner::game_frame`) and each in-game
-    /// save. Before opening the game's output, that thread waits for the interface sounds to close
+    /// save, and the app if the core's built-in BIOS halts the game (`Msg::GameStopped`). Before opening the game's output, that thread waits for the interface sounds to close
     /// theirs. A core the user added has the options it declares learned, once the game has
     /// started (`user_cores::learn`).
     pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
@@ -81,6 +82,15 @@ impl Playing {
             crate::on_ui(move |r| { pending.store(false, Relaxed); r.game_frame(); });
         });
         let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
+        // The game is quit, unless another has started since.
+        let (why, rom) = (core.bios_halt_notice(), game.path.clone());
+        let on_bios_halt = Box::new(move || {
+            let (why, rom) = (why.clone(), rom.clone());
+            crate::on_ui(move |r| if r.playing.borrow().as_ref().is_some_and(|p| p.record.1.game == rom) {
+                eprintln!("game: stopped: {why}");
+                crate::post(Msg::GameStopped(why));
+            });
+        });
         let (vsync, display_hz) = (r.device.open_vsync(), r.profile.refresh_hz);
         let state = game.state_path(&data.roms(), "state1");
         let (roms, saves, learned, played, device, sounds) = (data.roms(), data.saves(), data.learned_options(), game.clone(), r.device.clone(), r.sounds.clone());
@@ -88,7 +98,7 @@ impl Playing {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
-            let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame, rumble, on_save };
+            let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt };
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }

@@ -62,6 +62,9 @@ pub enum Msg {
     /// The game launched couldn't start, and why. (None, a game that ended by itself, isn't sent
     /// yet.)
     GameEnded(Option<String>),
+    /// The running game stopped for good, and why, for the player (its core's built-in BIOS
+    /// halted it): it is quit.
+    GameStopped(String),
     /// At start-up: the game last played didn't end (its launch record was left behind).
     LastGameStopped(crate::launch::LaunchRecord),
     /// A settings layer was read from its file.
@@ -662,6 +665,13 @@ impl App {
                 self.nav.close(&screens::GAME_MENU);
                 self.changed();
                 why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
+            }
+            Msg::GameStopped(why) => {
+                if self.playing.take().is_none() { return vec![]; }
+                self.idle_since = None;
+                self.nav.close(&screens::GAME_MENU);
+                self.changed();
+                vec![Effect::QuitGame, Effect::Notice(format!("The game stopped: {why}")), Effect::Redraw(None)]
             }
             Msg::LastGameStopped(r) => {
                 let title = crate::library::display_title(r.game.file_stem().unwrap_or_default().to_str().unwrap_or_default());

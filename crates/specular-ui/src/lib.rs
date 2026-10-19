@@ -790,8 +790,10 @@ type ArtKey = (PathBuf, ArtKind);
 const SPLASH_TIME: Duration = Duration::from_millis(1000);
 /// How long the core may take over one frame before the game counts as stuck (`watch_game`).
 const STUCK_LIMIT: Duration = Duration::from_secs(6);
-/// How long a toast shows.
+/// How long a toast shows at least; a long one stays long enough to be read (`TOAST_READING`).
 const TOAST_TIME: Duration = Duration::from_millis(2500);
+/// How long a toast shows per character: about 15 characters a second, for reading at arm's length.
+const TOAST_READING: Duration = Duration::from_millis(65);
 /// How long the volume shows after the last change.
 const VOLUME_TIME: Duration = Duration::from_millis(1200);
 /// How long the letter index's letter shows after the last jump.
@@ -1032,11 +1034,11 @@ impl Runner {
         });
     }
 
-    /// Shows `text` for a moment.
+    /// Shows `text` for a moment, longer the longer it is.
     fn toast(&self, text: &str) {
         let Some(w) = self.window.upgrade() else { return };
         w.set_toast(text.into());
-        self.show_for(&self.toast_timer, TOAST_TIME, AppWindow::set_toast_shown);
+        self.show_for(&self.toast_timer, TOAST_TIME.max(TOAST_READING * text.chars().count() as u32), AppWindow::set_toast_shown);
     }
 
     /// Shows something for `time` from now, extending a showing under way: `shown(true)` now, then
