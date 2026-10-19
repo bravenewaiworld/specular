@@ -18,7 +18,7 @@ pub struct Offer {
     /// The running system's version.
     pub version: Option<String>,
     /// The other installed version, which can be started instead (`Task::Activate`): the one
-    /// that ran before the last update or switch, so it may be the newer one.
+    /// that ran before the last update or `Task::Activate`, so it may be the newer one.
     pub previous: Option<String>,
     /// Update files on the SD card, newest first.
     pub updates: Vec<UpdateFile>,
@@ -98,7 +98,8 @@ pub struct Backup {
     pub holds: Option<Internal>,
 }
 
-/// An update file on the SD card. Only its signature has been checked, not its contents.
+/// An update file on the SD card. The installer has checked its signature (a failure is in
+/// `problem`) but not its contents, so installing it can still fail.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpdateFile {
     /// Where it is (passed back in `Task::Update`).
@@ -146,6 +147,7 @@ pub enum Task {
 pub enum TaskKind { Install, Restore, PrepareRestore, CancelRestore, Update, Activate }
 
 impl Task {
+    /// What the task does, without its arguments.
     pub fn kind(&self) -> TaskKind {
         match self {
             Task::Install { .. } => TaskKind::Install,
@@ -161,8 +163,8 @@ impl Task {
 /// How a task is going.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
-    /// Which task this is; comes first. An installer may not tell a restore from preparing or
-    /// cancelling one (brick-install doesn't), and report all three as `Restore`.
+    /// Which task this is; comes first. An installer may report a restore, preparing one and
+    /// cancelling one all as `Restore` (brick-install does).
     Task(TaskKind),
     /// Step `index` (from 1) of `of` started.
     Step { index: usize, of: usize, label: String },
@@ -202,8 +204,10 @@ pub fn size(bytes: u64) -> String { format!("{:.1} GB", bytes as f64 / 1e9) }
 /// previous version, and three update files: a newer one, an older one and one that can't be
 /// installed. Each task takes a few seconds and succeeds, with brick-install's steps and closing
 /// message. Environment variables change that:
-/// - `SPECULAR_INSTALL_INSTALLED`: it runs from the internal storage, where a restore is prepared.
-/// - `SPECULAR_INSTALL_PENDING`: on the SD card, a prepared restore is waiting.
+/// - `SPECULAR_INSTALL_INSTALLED`: it runs from the internal storage, where Restore prepares the
+///   SD card instead of restoring.
+/// - `SPECULAR_INSTALL_PENDING`: on the SD card, a prepared restore is waiting (ignored with
+///   `SPECULAR_INSTALL_INSTALLED`).
 /// - `SPECULAR_INSTALL_FAILS`: tasks fail.
 /// - `SPECULAR_INSTALL_RUNNING=<install|restore|update|activate>`: that task is running when
 ///   Specular starts (any other value: an install).

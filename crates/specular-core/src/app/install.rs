@@ -9,8 +9,8 @@
 //! once the installer reports it (`Installer::follow`).
 //!
 //! A restore prepared from the installed system continues on the SD card's system, which asks
-//! about it once per run, when the first offer that reports it arrives (and from Settings after
-//! that). It never restores by itself.
+//! about it once per run, when the first offer reporting it arrives while no game or task is
+//! open (and from Settings after that). It never restores by itself.
 
 use std::collections::HashMap;
 
@@ -30,6 +30,8 @@ pub struct InstallState {
 
 /// A task's progress, as its screen shows it.
 pub struct TaskView {
+    /// For a task followed from an earlier run, the installer's kind: `Restore` may really be
+    /// preparing or cancelling one (see `Progress::Task`).
     pub kind: TaskKind,
     /// The steps started so far, and how many there are.
     pub steps: Vec<String>,
@@ -126,8 +128,8 @@ impl App {
         self.go(|nav| Some(nav.push(ScreenState::new(screens::TASK, None))))
     }
 
-    /// A press on one of the installer's screens whose presses the app handles itself (they start
-    /// tasks); None for the others.
+    /// A press on one of the installer's screens whose presses the app handles itself (those that
+    /// start a task, and the progress screen); None for the others.
     pub(super) fn install_press(&mut self, id: &ScreenId, button: Button, row: Option<&str>) -> Option<Vec<Effect>> {
         Some(match id {
             id if *id == screens::INSTALL => self.install_screen(button, row),
@@ -178,7 +180,7 @@ impl App {
     }
 
     /// A press on the progress screen: nothing while the task runs; then A does what the screen
-    /// offers (restart, power off, or back), and B goes back after a failure.
+    /// offers (restart, power off, or back), and B goes back.
     fn task_screen(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
         if self.task_running() { return vec![]; }
         match (button, row) {
@@ -354,8 +356,8 @@ impl Screen for UpdatesScreen {
 /// "activate:<version>". The focus starts on Cancel.
 fn confirm(params: String) -> ScreenState { focus_on(ScreenState::new(screens::CONFIRM, Some(params)), "cancel") }
 
-/// The task a confirm screen's params name. A restore from the installed system (the offer says
-/// whether one can be prepared there) prepares it.
+/// The task a confirm screen's params name. A restore is prepared instead when the offer has a
+/// `restore` field: only a system running from the internal storage reports one.
 fn confirmed_task(ctx: &Ctx, params: &str) -> Option<Task> {
     Some(match params.split_once(':')? {
         ("restore", dir) if offer(ctx)?.restore.is_some() => Task::PrepareRestore { dir: dir.into() },
@@ -466,8 +468,10 @@ impl Screen for TaskScreen {
             }
             Some(Ok(message)) => {
                 rows.push(Row::note("note:done", message.as_str()));
-                // A restore ends with the SD card still able to start the device: it is taken out
-                // with the device off. Everything else takes effect at the next start.
+                // A restore leaves the SD card able to start the device, so the card is removed
+                // with the device off. (A prepare or cancel followed from an earlier run is
+                // reported as a restore too, see `Progress::Task`; powering off suits it as well.)
+                // Every other task takes effect at the next start.
                 rows.push(if t.kind == TaskKind::Restore { action("off", "Power off") } else { action("restart", "Restart") });
                 (done, vec![(Button::A, "Select".into())])
             }

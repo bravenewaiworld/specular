@@ -294,15 +294,20 @@ pub mod screens {
     /// The on-screen keyboard, for the screen below it. Its presses are handled by the app itself
     /// (see `App::keyboard`).
     pub const KEYBOARD: ScreenId = ScreenId(std::borrow::Cow::Borrowed("keyboard"));
-    /// The installer's screens (see `app::install`): "Install to internal storage?", the backups,
-    /// the update files, a confirm screen for a restore, an update or the previous version, the
-    /// prepared restore's question, and a task's progress. The app handles presses on those that
-    /// start tasks (`App::install_press`).
+    // The installer's screens (see `app::install`). The app handles presses on those that start a
+    // task, and on the progress screen (`App::install_press`).
+    /// "Install to internal storage?".
     pub const INSTALL: ScreenId = ScreenId(std::borrow::Cow::Borrowed("install"));
+    /// The backups on the SD card.
     pub const RESTORE: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore"));
+    /// The update files on the SD card.
     pub const UPDATES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("updates"));
+    /// Asks before a restore, an update or starting the previous version; its params name the task
+    /// (`restore:<dir>`, `update:<file>`, `activate:<version>`).
     pub const CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("install confirm"));
+    /// The question about a restore prepared from the installed system.
     pub const RESTORE_PENDING: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore pending"));
+    /// A task's progress.
     pub const TASK: ScreenId = ScreenId(std::borrow::Cow::Borrowed("task"));
     pub const CREDITS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("credits"));
     /// One game's settings, with its path under `roms/` in its params; also opened from the in-game

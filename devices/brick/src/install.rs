@@ -14,7 +14,7 @@ pub struct BrickInstaller;
 impl Installer for BrickInstaller {
     fn offer(&self) -> Result<Offer, String> {
         let out = Command::new(PROGRAM).arg("offer").output().map_err(|e| format!("{PROGRAM}: {e}"))?;
-        // Logged whole, so what Settings showed can be reproduced (e.g. in the desktop build).
+        // Logged whole, so what Settings showed can be worked out afterwards from the log.
         eprintln!("install: offer {}", String::from_utf8_lossy(&out.stdout).trim());
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
             .map_err(|e| format!("{PROGRAM} offer: {e} ({}; {})", out.status, String::from_utf8_lossy(&out.stderr).trim()))?;
@@ -26,8 +26,8 @@ impl Installer for BrickInstaller {
     fn follow(&self, progress: Box<dyn FnMut(Progress) + Send>) { run(vec!["follow".into()], true, progress); }
 }
 
-/// brick-install's command line for `task`. It decides by itself whether `restore` restores or
-/// prepares a restore (by where the system runs from).
+/// brick-install's command line for `task`. brick-install itself decides whether `restore`
+/// restores or prepares one, by where the system runs from.
 fn args(task: Task) -> Vec<String> {
     match task {
         Task::Install { backup, keep_card_bootable } => std::iter::once("install".to_string())
@@ -142,8 +142,8 @@ fn internal(name: &str) -> Internal {
 mod tests {
     use super::*;
 
-    // Lines as brick-install prints them (its report.rs, and the tasks in its install.rs,
-    // backup.rs, update.rs and slots.rs; checked in its tools/system/test-installer.sh).
+    // Lines as Crystaline OS's userspace/brick-install prints them (report.rs; the tasks in
+    // install.rs, backup.rs, update.rs and slots.rs); its tools/system/test-installer.sh tests them.
     #[test]
     fn reads_brick_installs_output() {
         let log = Some("/mnt/SDCARD/logs/install-x.log".to_string());
