@@ -163,3 +163,4 @@ TODO:
 
 TODO:
  - The in-game menu's blurred backdrop: a blurred copy of the game's frame, made once as the menu opens (docs/look-and-motion.md)
+ - Button hints driven by the focused element, as a feature of the UI framework: each row says what its buttons do, so none shows that does nothing (today a screen's own hints show beside the focused row's, e.g. home's "A Open" while a note being read has the focus). B (back) is the exception: its hint comes from whatever decides where B returns to
