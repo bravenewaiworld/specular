@@ -173,7 +173,8 @@ fn a_missing_bios_stops_only_the_games_that_need_one() {
 fn a_game_its_cores_built_in_bios_halted_is_told_which_file_to_add() {
     let systems = builtin_systems();
     let core = |id: &str| systems.iter().find(|s| s.id == id).unwrap().cores[0];
-    assert_eq!(core("ps1").bios_halt_notice(), "SwanStation ran it on its built-in OpenBIOS, which lacks something it uses. It may need a BIOS file: \
+    assert_eq!(core("ps1").bios_halt_notice(), "SwanStation ran the game on its built-in OpenBIOS, which lacks something the game uses. It may need a BIOS file: \
         put one of scph5500.bin, scph5501.bin, scph5502.bin, psxonpsp660.bin, ps1_rom.bin in the bios folder on the SD card");
-    assert_eq!(core("gba").bios_halt_notice(), "mGBA's built-in BIOS halted it"); // (it never says so)
+    // mGBA never says its BIOS halted a game: only the wording for a core without a fallback.
+    assert_eq!(core("gba").bios_halt_notice(), "mGBA's built-in BIOS halted it");
 }

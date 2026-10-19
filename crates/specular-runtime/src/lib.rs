@@ -94,11 +94,11 @@ pub struct Outputs {
     /// that says when its save memory was written (`ENV_SAVE_RAM_WRITTEN`), else at the next check,
     /// up to 10 s of play later.
     pub on_save: Box<dyn Fn() + Send>,
-    /// Called on the game's thread when the core says the BIOS it uses without a BIOS file has
+    /// Called on the game's thread when the core says its stand-in for a missing BIOS file has
     /// halted the game for good (`core::ENV_BIOS_HALTED`): the game may need a real BIOS. The
-    /// game runs on, frozen, until quit. Its autosave is removed and no longer written:
-    /// SwanStation's states hold the BIOS they were made with, so resuming one would halt again,
-    /// even with a BIOS file added since.
+    /// game runs on, frozen, until quit. Before this is called, the runtime removes the game's
+    /// autosave and stops writing it: SwanStation's states hold the BIOS they were made with, so
+    /// resuming one would halt again, even with a BIOS file added since.
     pub on_bios_halt: Box<dyn Fn() + Send>,
 }
 
@@ -607,8 +607,8 @@ impl Game {
         if let Err(e) = self.queue_state(path) { eprintln!("game: autosave: {e}"); }
     }
 
-    /// Removes the autosave, once the states queued before it are written, and writes no more
-    /// (see `Outputs::on_bios_halt`); `why` is for the log.
+    /// Queues the autosave's removal (after the states already queued) and writes no autosave for
+    /// the rest of this game (see `Outputs::on_bios_halt`); `why` is for the log.
     fn drop_autosave(&mut self, why: &str) {
         let Some(path) = self.autosave.take() else { return eprintln!("game: {} {why}", self.name) };
         eprintln!("game: {} {why}; its autosave {} is removed, and no longer written", self.name, path.display());
@@ -776,14 +776,20 @@ impl Writer {
                         let written = data.and_then(|data| write_atomically(&path, &data));
                         (path, written)
                     }
-                    Job::Remove(path) => match std::fs::remove_file(&path) {
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                        removed => (path, removed),
-                    },
+                    Job::Remove(path) => {
+                        match std::fs::remove_file(&path) {
+                            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                                eprintln!("game: removing {}: {e}", path.display());
+                                failed.get_or_insert(e);
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
                     Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); continue; }
                 };
                 if let Err(e) = written {
-                    eprintln!("game: {}: {e}", path.display());
+                    eprintln!("game: writing {}: {e}", path.display());
                     failed.get_or_insert(e);
                 }
             }

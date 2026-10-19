@@ -22,8 +22,8 @@ impl SoundOut for Count {
     fn capacity(&self) -> usize { 0 }
 }
 
-/// Outputs that take nothing: no sound or rumble, a 60 Hz display without vsync, and callbacks
-/// that do nothing. A test sets the ones it watches over these (`..outputs()`).
+/// Outputs that discard everything: no sound or rumble, a 60 Hz display without vsync, and
+/// callbacks that do nothing. A test sets the fields it checks over these (`..outputs()`).
 fn outputs() -> Outputs {
     Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}) }
 }
@@ -382,7 +382,7 @@ fn mode2_sectors(data: &[u8]) -> Vec<u8> {
 fn ps1_disc_booting(exe: &[u8]) -> Vec<u8> {
     const ROOT: u32 = 19;
     const EXE: u32 = 20;
-    let mut iso = vec![0u8; 2048 * (EXE as usize + exe.len().div_ceil(2048) + 8)];
+    let mut iso = vec![0u8; 2048 * (EXE as usize + exe.len().div_ceil(2048) + 8)]; // and a few spare sectors after
     let both_ends = |n: u32| [n.to_le_bytes(), n.to_be_bytes()].concat();
     // A directory record: its extent's first sector and size, whether it is a folder, its name.
     let record = |lba: u32, size: u32, folder: bool, name: &[u8]| {
@@ -400,13 +400,14 @@ fn ps1_disc_booting(exe: &[u8]) -> Vec<u8> {
     let pvd = sector(16);
     iso[pvd..pvd + 7].copy_from_slice(b"\x01CD001\x01");
     let sectors = (iso.len() / 2048) as u32;
-    iso[pvd + 80..pvd + 88].copy_from_slice(&both_ends(sectors));
+    iso[pvd + 80..pvd + 88].copy_from_slice(&both_ends(sectors)); // the volume's size
     iso[pvd + 128..pvd + 132].copy_from_slice(&[0, 8, 8, 0]); // 2048-byte blocks, both ends
     iso[pvd + 132..pvd + 140].copy_from_slice(&both_ends(10)); // the path table's size
     iso[pvd + 140..pvd + 144].copy_from_slice(&18u32.to_le_bytes()); // its sector
-    iso[pvd + 156..pvd + 190].copy_from_slice(&record(ROOT, 2048, true, b"\0"));
+    iso[pvd + 156..pvd + 190].copy_from_slice(&record(ROOT, 2048, true, b"\0")); // the root folder's record
     iso[sector(17)..sector(17) + 7].copy_from_slice(b"\xffCD001\x01"); // the descriptors' end
-    // The path table: the root folder only.
+    // The path table: the root folder only (its name's length 1, its sector, its parent 1, its
+    // name 0, a pad byte).
     iso[sector(18)..sector(18) + 10].copy_from_slice(&[&[1, 0][..], &ROOT.to_le_bytes(), &[1, 0, 0, 0]].concat());
     let root: Vec<u8> = [record(ROOT, 2048, true, b"\0"), record(ROOT, 2048, true, b"\x01"), record(EXE, exe.len() as u32, false, b"PSX.EXE;1")].concat();
     iso[sector(ROOT)..sector(ROOT) + root.len()].copy_from_slice(&root);
@@ -414,15 +415,15 @@ fn ps1_disc_booting(exe: &[u8]) -> Vec<u8> {
     mode2_sectors(&iso)
 }
 
-/// A PS-X EXE that calls the BIOS's A0 function BFh (unused by Sony's BIOS, and one OpenBIOS
-/// doesn't implement), then loops.
+/// A PS-X EXE that calls the BIOS's A0 function BFh, which Sony's BIOS leaves unused and OpenBIOS
+/// doesn't implement, then loops.
 fn ps1_exe_calling_a_missing_bios_function() -> Vec<u8> {
     let mut exe = ps1_exe();
     let code: [u32; 5] = [
         0x240a_00a0, // addiu $t2, $zero, 0xa0
-        0x0140_f809, // jalr $t2: the A0 table's entry
+        0x0140_f809, // jalr $t2: the BIOS's A0 functions, at 0xa0, take the function in $t1
         0x2409_00bf, // addiu $t1, $zero, 0xbf (in the delay slot): the function
-        0x0800_4003, // j 0x8001000c: loop here
+        0x0800_4003, // j 0x8001000c: to itself (`ps1_exe` loads the code at 0x80010000)
         0,           // nop
     ];
     for (i, w) in code.iter().enumerate() { exe[2048 + 4 * i..2048 + 4 * i + 4].copy_from_slice(&w.to_le_bytes()); }

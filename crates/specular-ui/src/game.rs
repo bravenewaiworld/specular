@@ -82,7 +82,8 @@ impl Playing {
             crate::on_ui(move |r| { pending.store(false, Relaxed); r.game_frame(); });
         });
         let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
-        // The game is quit, unless another has started since.
+        // The app is told to quit the game, unless another ROM is playing by the time the UI
+        // thread has this (the same one quit and started again would be quit too).
         let rom = game.path.clone();
         let on_bios_halt = Box::new(move || {
             let rom = rom.clone();

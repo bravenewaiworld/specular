@@ -792,7 +792,7 @@ const SPLASH_TIME: Duration = Duration::from_millis(1000);
 const STUCK_LIMIT: Duration = Duration::from_secs(6);
 /// How long a toast shows at least; a long one stays long enough to be read (`TOAST_READING`).
 const TOAST_TIME: Duration = Duration::from_millis(2500);
-/// How long a toast shows per character: about 15 characters a second, for reading at arm's length.
+/// How long a toast shows per character: about 15 characters a second, an easy reading pace.
 const TOAST_READING: Duration = Duration::from_millis(65);
 /// How long the volume shows after the last change.
 const VOLUME_TIME: Duration = Duration::from_millis(1200);

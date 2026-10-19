@@ -46,7 +46,8 @@ pub enum Msg {
     /// The current time, on the clock button times use: due button repeats are generated, and
     /// the device sleeps if it has been left alone for the "Sleep after" time. Sent when a repeat
     /// or the sleep is due (`App::next_deadline`, `App::sleep_deadline`), and after `Woke`,
-    /// `GameEnded`, `GameStopped` and at startup: the idle count starts from the first tick after those.
+    /// `GameEnded`, `GameStopped` and at startup: the idle count starts from the first tick after
+    /// those.
     Tick(Duration),
     /// A library scan finished. `card_found` is false when the data folder is missing or empty,
     /// which is how a device looks without its SD card.
@@ -62,8 +63,8 @@ pub enum Msg {
     /// The game launched couldn't start, and why. (None, a game that ended by itself, isn't sent
     /// yet.)
     GameEnded(Option<String>),
-    /// The running game stopped for good, and why, for the player (its core's built-in BIOS
-    /// halted it): it is quit.
+    /// The running game can't go on (its core's built-in BIOS halted it), with the reason for the
+    /// player. The app quits the game and shows the reason; with no game playing, it is ignored.
     GameStopped(String),
     /// At start-up: the game last played didn't end (its launch record was left behind).
     LastGameStopped(crate::launch::LaunchRecord),

@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-/// Running totals of work the UI did, and the row slots, read as each frame is drawn. An
-/// animation's line says how much each total grew from the frame before it started to its last.
+/// The running count of row slots changed, and the row slots, read as each frame is drawn. An
+/// animation's line says how much the count grew from the frame before it started to its last.
 #[derive(Clone, Copy, Default)]
 pub struct Work {
     /// Row slots given a new row, or a change to theirs.

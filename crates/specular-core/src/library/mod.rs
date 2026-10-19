@@ -118,12 +118,13 @@ impl CoreDecl {
         Ok(())
     }
 
-    /// Why the game stopped, for the player, when the core says the BIOS it uses without a BIOS
-    /// file has halted it for good (specular-runtime's `Outputs::on_bios_halt`): which file to put
-    /// where.
+    /// Why the game stopped, for the player, when the core says its stand-in for a missing BIOS
+    /// file (`Bios::fallback`) has halted it for good (specular-runtime's `Outputs::on_bios_halt`):
+    /// which files to put where. Names the first `Bios` with a fallback, whatever the game (each
+    /// core has at most one).
     pub fn bios_halt_notice(&self) -> String {
         match self.bios.iter().find_map(|b| Some((b, b.fallback?))) {
-            Some((b, fallback)) => format!("{} ran it on {fallback}, which lacks something it uses. It may need a BIOS file: put {} in the bios folder on the SD card",
+            Some((b, fallback)) => format!("{} ran the game on {fallback}, which lacks something the game uses. It may need a BIOS file: put {} in the bios folder on the SD card",
                 self.name, b.which()),
             None => format!("{}'s built-in BIOS halted it", self.name),
         }
