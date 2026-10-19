@@ -493,10 +493,9 @@ fn rumble_thread(mut rumble: Box<dyn Rumble>) -> RumbleLine {
 /// A settings file to write.
 struct Save(PathBuf, serde_json::Map<String, serde_json::Value>);
 
-/// The I/O thread: brings the config folder up to date and loads the settings at start, then
-/// saves settings. Saves queued together are merged, so holding a button that changes a value
-/// writes the file once rather than once per step. The library scan runs on a thread of its own:
-/// it looks for the card's cores, then scans the games and moves the saves of renamed ROMs.
+/// The I/O thread: brings the config folder up to date and loads the settings at start, starts
+/// the library scan (`scan_thread`), then saves settings. Saves queued together are merged, so
+/// holding a button that changes a value writes the file once rather than once per step.
 fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<Save>();
     let handle = std::thread::spawn(move || {
@@ -504,9 +503,8 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         // and changes stay in memory.
         let writable = settings::migrate::migrate(&data.0);
         if !writable { on_ui(|r| r.toast("Settings can't be saved until Specular restarts. The log says why.")); }
-        let config = data.config();
-        let mut systems = playable_systems();
-        let mut decls = settings::declarations(&systems);
+        let (config, systems) = (data.config(), playable_systems());
+        let decls = settings::declarations(&systems);
         // The global layer, then each system's (any may get a core from the card) and each of
         // Specular's cores'; the card's cores' are loaded as they are found, and games' with the
         // library.
@@ -516,47 +514,7 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         }
         // Before the scan, so no game can have been launched (writing a new record) yet.
         if let Some(r) = LaunchRecord::left_behind(&launch::path(&data.cache())) { post(Msg::LastGameStopped(r)); }
-        // The cores and the library: looked for now, and again whenever the files on the card change.
-        std::thread::spawn(move || {
-            let (roms, saves, cores_dir, learned) = (data.roms(), data.saves(), data.cores(), data.learned_options());
-            let watch = watch::CardWatch::new().map_err(|e| eprintln!("library: can't watch for new games or cores: {e}")).ok();
-            // The games whose settings files are loaded, and the files found to be for no game.
-            let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
-            let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
-            let all = library::builtin_systems();
-            loop {
-                // `cache/cores/` is made beforehand so it can be watched: options learned are written
-                // there as a core plays its first game, and become settings at the next look. (Not
-                // without a card: see `card_found`.)
-                if card_found(&data) && let Err(e) = std::fs::create_dir_all(&learned) { eprintln!("cores: can't make {}: {e}", learned.display()); }
-                if let Some(w) = &watch { w.watch(&roms, &[&cores_dir, &learned]); }
-                let now = on_card.find(&cores_dir, &learned, &all);
-                if found.as_ref() != Some(&now) {
-                    log_cores(&cores_dir, &now);
-                    systems = user_cores::playable(all.clone(), &now.cores);
-                    decls = settings::declarations(&systems);
-                    // Before the app hears of them, so no game can be played with one before its
-                    // options' file is loaded.
-                    for c in now.cores.iter().filter(|c| cores_loaded.insert(c.id())) {
-                        let layer = Layer::Core(c.id().into());
-                        post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
-                    }
-                    if writable { write_schemas(&data, &decls, &systems); }
-                    post(Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
-                    found = Some(now);
-                }
-                let games = library::scan(&roms, &systems);
-                for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
-                    eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
-                }
-                // Before the games are listed, so no game can be played or have its settings shown
-                // before they are loaded.
-                load_games_layers(&config, &decls, &games, &mut loaded, &mut orphans);
-                post(Msg::Library { games, card_found: card_found(&data) });
-                let Some(w) = &watch else { return };
-                w.wait_for_change();
-            }
-        });
+        std::thread::spawn(move || scan_thread(data, writable));
         while let Ok(first) = rx.recv() {
             let latest: HashMap<PathBuf, _> = std::iter::once(first).chain(rx.try_iter()).map(|Save(p, v)| (p, v)).collect();
             if !writable { continue; }
@@ -566,6 +524,52 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         }
     });
     (tx, handle)
+}
+
+/// The library scan, on a thread of its own: looks for the card's cores, then scans the games and
+/// moves the saves of renamed ROMs; again whenever the files on the card change. Schemas are
+/// written only if the config folder is `writable` (see `io_thread`).
+fn scan_thread(data: DataRoot, writable: bool) {
+    let (config, roms, saves, cores_dir, learned) = (data.config(), data.roms(), data.saves(), data.cores(), data.learned_options());
+    let watch = watch::CardWatch::new().map_err(|e| eprintln!("library: can't watch for new games or cores: {e}")).ok();
+    // The games whose settings files are loaded, and the files found to be for no game.
+    let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
+    let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
+    let all = library::builtin_systems();
+    // Set at the first look, which always finds something new.
+    let (mut systems, mut decls) = (Vec::new(), Vec::new());
+    loop {
+        // `cache/cores/` is made beforehand so it can be watched: options learned are written
+        // there as a core plays its first game, and become settings at the next look. (Not
+        // without a card: see `card_found`.)
+        if card_found(&data) && let Err(e) = std::fs::create_dir_all(&learned) { eprintln!("cores: can't make {}: {e}", learned.display()); }
+        if let Some(w) = &watch { w.watch(&roms, &[&cores_dir, &learned]); }
+        let now = on_card.find(&cores_dir, &learned, &all);
+        if found.as_ref() != Some(&now) {
+            log_cores(&cores_dir, &now);
+            systems = user_cores::playable(all.clone(), &now.cores);
+            decls = settings::declarations(&systems);
+            // Before the app hears of them, so no game can be played with one before its
+            // options' file is loaded.
+            for c in now.cores.iter().filter(|c| cores_loaded.insert(c.id())) {
+                let layer = Layer::Core(c.id().into());
+                post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
+            }
+            if writable { write_schemas(&data, &decls, &systems); }
+            post(Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
+            found = Some(now);
+        }
+        let games = library::scan(&roms, &systems);
+        for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
+            eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
+        }
+        // Before the games are listed, so no game can be played or have its settings shown
+        // before they are loaded.
+        load_games_layers(&config, &decls, &games, &mut loaded, &mut orphans);
+        post(Msg::Library { games, card_found: card_found(&data) });
+        let Some(w) = &watch else { return };
+        w.wait_for_change();
+    }
 }
 
 /// Logs the cores found in the card's `cores/` (`dir`), and the files there turned away.
