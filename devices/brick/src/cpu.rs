@@ -1,5 +1,5 @@
 //! The CPU's speed on the Brick: Crystaline OS's brick-power, which sets the speed range of the
-//! one clock all four cores share, and a minimum within it (its `cpu-min`, refused until a profile
+//! one clock all four CPU cores share, and a minimum within it (its `cpu-min`, refused until a profile
 //! has been applied since start-up). Nothing it sets outlasts a restart.
 
 use specular_core::device::Cpu;
@@ -12,7 +12,8 @@ const PROGRAM: &str = "/usr/sbin/brick-power";
 pub struct BrickCpu;
 
 impl Cpu for BrickCpu {
-    /// Applies the balanced profile (408–2000 MHz, as at start-up), then reads the speed steps.
+    /// Applies the balanced profile (408–2000 MHz), the one the system boots with, again: `cpu-min` is
+    /// refused until a profile has been applied since boot. Then reads the speed steps.
     fn prepare(&self) -> Result<Vec<u32>, String> {
         run("cpu", PROGRAM, &["profile", "balanced"])?;
         steps(&run("cpu", PROGRAM, &[])?)
@@ -28,7 +29,7 @@ impl Cpu for BrickCpu {
 fn steps(status: &str) -> Result<Vec<u32>, String> {
     let line = status.lines().find_map(|l| l.strip_prefix("cpu-steps")).ok_or("brick-power's status has no cpu-steps line")?;
     let steps: Vec<u32> = line.split_whitespace().map(|s| s.parse().map_err(|_| format!("brick-power's cpu-steps has {s:?}"))).collect::<Result<_, _>>()?;
-    if steps.is_empty() || !steps.is_sorted() { return Err(format!("brick-power's cpu-steps are{line}")); }
+    if steps.is_empty() || !steps.is_sorted() { return Err(format!("brick-power's cpu-steps aren't a list of speeds, slowest first: {:?}", line.trim())); }
     Ok(steps)
 }
 

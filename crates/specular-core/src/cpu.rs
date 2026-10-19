@@ -15,7 +15,8 @@ pub const AUTO: &str = "auto";
 pub const OFF: &str = "off";
 
 /// The time the UI needs to draw and present a frame once the core has made it. The runtime's
-/// frame delay leaves this much of each refresh, and so must the slowest runs after a step down.
+/// frame delay leaves this much of each refresh, and a step down is taken only if it would still
+/// leave this much after the slowest runs (see `HEADROOM`).
 pub const UI_TIME: Duration = Duration::from_millis(6);
 
 /// Two misses at most this far apart raise the minimum a step. One alone (a scene loading, say)
@@ -40,7 +41,7 @@ pub struct CpuMin {
     adaptive: bool,
     /// When the last missed refresh that didn't raise the level came.
     last_miss: Option<Duration>,
-    /// Since when every frame has been on time (or since the level last changed).
+    /// When the on-time window began: the last miss, or the last check for a step down.
     on_time_since: Duration,
     /// How long the core ran for each frame since `on_time_since`.
     runs: Vec<Duration>,
@@ -103,7 +104,7 @@ impl CpuMin {
 
     /// After `ON_TIME` on time: the level a step down, if the slowest runs (the 95th percentile),
     /// slowed in proportion to the lower speed, would still leave `UI_TIME` within `HEADROOM` of a
-    /// refresh. Below the lowest step is the system's default, taken as no slower than it.
+    /// refresh. Below the lowest step is the system's default, assumed to be no slower than the lowest step.
     fn step_down(&mut self, period: Duration) -> Option<Decision> {
         let i = self.level?;
         let lower = i.checked_sub(1);
@@ -126,7 +127,7 @@ impl CpuMin {
     }
 }
 
-/// The controller for a game, as `setting` says (a value of `settings::builtin::CPU_MIN`: `AUTO`,
+/// The `CpuMin` for a game, as `setting` says (a value of `settings::builtin::CPU_MIN`: `AUTO`,
 /// `OFF` or a speed in MHz), `start` being its core's start level (`CoreDecl::cpu_start`), and
 /// `steps` the CPU's (empty: the speed can't be set, and none is). Also says where its first
 /// level comes from, for the log.
@@ -136,7 +137,7 @@ pub fn for_game(setting: &str, start: Option<u32>, steps: Vec<u32>) -> (CpuMin, 
         // The settings accept only `AUTO`, `OFF` and numbers; anything else is taken as `AUTO`.
         _ => match setting.parse() {
             Ok(mhz) => (CpuMin::fixed(steps, Some(mhz)), "as the config files set it, for the whole game"),
-            Err(_) => (CpuMin::new(steps, start), "the emulator's start level, then as the frames need"),
+            Err(_) => (CpuMin::new(steps, start), "the core's start level, then as the frames need"),
         },
     }
 }

@@ -523,7 +523,8 @@ impl App {
         crate::settings::core_options::values(&self.ctx.settings, core, &game.settings_layer())
     }
 
-    /// The running game's CPU minimum (`cpu::for_game`, as `builtin::CPU_MIN` says at its layer),
+    /// The running game's CPU minimum (`cpu::for_game`, as `builtin::CPU_MIN` says for it: its own
+    /// file, else its system's, else the global one, else the default),
     /// given the CPU's speed steps (empty: the speed can't be set, and none is), with a line for
     /// the log saying what it starts at and why. With no game, none.
     pub fn cpu_min(&self, steps: Vec<u32>) -> (cpu::CpuMin, String) {
