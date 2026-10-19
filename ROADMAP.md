@@ -44,7 +44,7 @@ Completed:
  - Frame pacing: the core runs once per vsync of the display (`FBIO_WAITFORVSYNC`; a timer when the device has none), after a delay that adapts to how long it takes (lower input latency)
  - Battery saves: written when the game writes its save, else checked every 10 s of play; also on quit, sleep and stop. Written off the game's thread
  - One save state slot, from the in-game menu
- - Autosave as the game menu opens, on sleep and on quit, and every 10 s of play for cores whose state is quick to make (not SwanStation's: it cost PS1 games a frame each time; `game.autosave` in the config files overrides it); games resume from it at launch. Each state reuses the last one's buffer once the writer hands it back, and the frames just after a state is made don't count as misses for the CPU minimum
+ - Autosave as the game menu opens, on sleep and on quit, and every 10 s of play for cores whose state is quick to make (not SwanStation's: it cost PS1 games a frame each time; `game.autosave` in the config files overrides it); games resume from it at launch. Each state reuses the last one's buffer once the writer hands it back, and the frames just after a state is made don't count as misses for the CPU minimum. Checked on the Brick: the 10 s misses of PS1 games are gone, their autosave is written as the menu opens and on quit and resumed at launch, and GBA games still autosave every 10 s without misses, with repeated save states and loads
  - Save states compressed (about 11× smaller, less card wear)
  - Watchdog: a core stuck on one frame for 6 s restarts Specular
  - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)
@@ -65,6 +65,7 @@ TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
  - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps; a game without a start level going to 1.2 GHz after two misses; the frame statistics' second line). Left:
    - Steps up have no settling time: a burst of misses (as when something reads the framebuffer) raised Contra three steps in a second, and with no step down it keeps them until the game ends
+   - A disc load early in a PS1 game raises it to 2.0 GHz for the rest of the game: Symphony of the Night's title screen 60 s in (5 misses in a second), Metal Gear Solid's opening 18 s in. Symphony of the Night runs on time at 1.8 GHz otherwise
    - Measure what it costs in battery (docs/runtime.md, Open questions)
 
 ### Library and Game Management
