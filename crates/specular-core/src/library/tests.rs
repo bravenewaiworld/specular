@@ -149,3 +149,16 @@ fn every_core_is_in_the_credits_by_its_name() {
     let listed: Vec<&str> = tsv.lines().filter_map(|l| l.strip_prefix("core:")?.split('\t').nth(1)).collect();
     for core in builtin_systems().iter().filter_map(|s| s.core) { assert!(listed.contains(&core.name), "data/credits.tsv has no core named {}", core.name); }
 }
+
+#[test]
+fn a_missing_bios_stops_only_the_games_that_need_one() {
+    let systems = builtin_systems();
+    let core = |id: &str| systems.iter().find(|s| s.id == id).unwrap().core.unwrap();
+    let bios = tempfile::tempdir().unwrap();
+    let (nes, fds, ps1) = (core("nes"), Path::new("Zelda.fds"), core("ps1"));
+    assert!(nes.check_bios(Path::new("Mario.nes"), bios.path()).is_ok());
+    assert_eq!(nes.check_bios(fds, bios.path()).unwrap_err(), "Famicom Disk System games need disksys.rom in the bios folder");
+    assert!(ps1.check_bios(Path::new("Game.cue"), bios.path()).is_ok()); // OpenBIOS instead
+    touch(bios.path(), "DISKSYS.ROM", b""); // FAT names in any case
+    assert!(nes.check_bios(fds, bios.path()).is_ok());
+}

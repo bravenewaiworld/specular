@@ -66,7 +66,9 @@ impl Playing {
             options: core.options.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
             rom_by_path: core.rom_by_path,
             record: Some(record.clone()),
+            states_restore_save: core.states_restore_save,
         };
+        if let Err(why) = core.check_bios(&spec.rom, &spec.system_dir) { return started(Err(why)); }
         let frames = Arc::new(FrameSlot::default());
         // One redraw request at a time: frames arriving while one is pending are drawn by it.
         let pending = Arc::new(AtomicBool::new(false));

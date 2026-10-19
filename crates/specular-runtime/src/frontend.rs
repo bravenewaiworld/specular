@@ -3,7 +3,7 @@
 //! every call into the core is made.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString, c_char, c_uint, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering::Relaxed};
@@ -27,6 +27,8 @@ pub struct Frontend {
     /// Set when the core makes the `ENV_SAVE_RAM_WRITTEN` call; the game's thread clears it after
     /// each `retro_run`.
     pub save_ram_written: bool,
+    /// The environment calls refused so far, each logged once.
+    pub refused: HashSet<c_uint>,
 }
 
 thread_local! {
@@ -111,7 +113,12 @@ impl Frontend {
                 | ENV_SET_SUPPORT_ACHIEVEMENTS | ENV_SET_SUPPORT_NO_GAME | ENV_SET_PERFORMANCE_LEVEL
                 | ENV_SET_CORE_OPTIONS_DISPLAY | ENV_SET_MINIMUM_AUDIO_LATENCY | ENV_SET_SYSTEM_AV_INFO
                 | ENV_SET_GEOMETRY => true,
-                _ => false,
+                _ => {
+                    // Logged as its number in libretro.h (without the RETRO_ENVIRONMENT_EXPERIMENTAL
+                    // bit, 0x10000) and as the core passed it.
+                    if self.refused.insert(cmd) { eprintln!("game: refused the core's environment call {} ({cmd:#x})", cmd & 0xffff); }
+                    false
+                }
             }
         }
     }

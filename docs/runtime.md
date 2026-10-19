@@ -8,8 +8,11 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 
 - **Our own libretro runtime, in Rust** (2026-10-13). It ports the algorithms of muOS's runtime ("Pickles", the `retro/` folder of MustardOS/frontend, GPLv3) for the hard parts: sound and video rate control, frame pacing and battery-save writing. Rejected: reusing Pickles' files (about 53,000 lines of C tied to muOS's own UI); building on NextUI (MinUI-derived code has no licence, and NextUI itself has been PolyForm Noncommercial since 2026-08-15), which stays a reference only.
 - **Cores are chosen system by system: mGBA for GB, GBC and GBA** (2026-10-13). One core (MPL-2.0) for all three; the most accurate GBA core, and it detects Pokémon Emerald hacks itself. The first release plays these three systems. Rejected: Gambatte for GB (GPL-2.0-only, which clashes with GPLv3 code in the same process); gpSP for GBA (lighter; it may come later as a per-game choice if a game needs it).
-- **NES and PS1 cores come from the GPLv3-compatible candidates; SNES and Mega Drive wait for V1** (2026-10-18): QuickNES or Nestopia (NES), SwanStation (PS1). Each is chosen after a licence check, a speed check on the Brick, and the save-memory check below. SNES and Mega Drive need more research: bsnes is likely too slow for the Brick's Cortex-A53, and BlastEm's 68000 emulation is an x86 recompiler (both inferred, unmeasured); Beetle Supafaust and ClownMDEmu are candidates too. Rejected: bsnes and BlastEm for V0 (speed).
-- **Battery saves are protected from cores whose save states also restore save memory** (2026-10-18). Loading such a state rolls the save memory back, and writing it would lose newer in-game saves. For those cores only, each save state is stored with a hash of the `.srm` as it was when the state was made. When the `.srm` is about to be overwritten after a state was loaded, and the `.srm` on the card doesn't match that state's hash (a newer in-game save exists), the existing file is first renamed to `<name>.newer.srm`, so nothing is lost. Not built yet: mGBA's states don't restore save memory, so no current core is affected; each new core is checked. Rejected: RetroArch's copy-back of the save memory after loading (restores only the bytes, not the core's own save-chip state; see Findings); blocking writes after a load.
+- **Nestopia for the NES** (2026-10-18). GPL-2.0-or-later, with LGPL-2.1-or-later and MIT code, so it can share a process with GPLv3 code. It is the more accurate of the two candidates (cycle-based, with the most boards, and the Famicom Disk System), and the NES is light enough that accuracy costs little: 0.5 ms a frame on a desktop (see Findings). Rejected: QuickNES (its licence is fine too, LGPL-2.1-or-later and GPL-2.0-or-later; it is faster but less accurate, drawing a scanline at a time with fewer boards, and the speed isn't needed).
+- **SwanStation for the PS1, with its software renderer** (2026-10-18). GPL-3.0; the code it bundles is BSD, MIT, public domain or GPL-2.0-or-later (see Findings), and it has a recompiler for ARM64. Its hardware renderers need a GL context shared with the UI, which comes with 3D cores (V1). Rejected: PCSX ReARMed (possibly GPLv2-only).
+- **A PS1 game starts without a BIOS, on SwanStation's built-in OpenBIOS** (2026-10-18). SwanStation runs OpenBIOS (MIT) when `bios/` has no BIOS, so games start, though some don't run with it; Specular logs the files it looked for. Rejected: refusing to start PS1 games without a BIOS (it would stop games that run, and SwanStation also finds a known BIOS dump under any name, which a check of file names can't see). Famicom Disk System games have no such fallback: without `disksys.rom` they don't start, and the player is told which file to add.
+- **SNES and Mega Drive wait for V1** (2026-10-18). They need more research: bsnes is likely too slow for the Brick's Cortex-A53, and BlastEm's 68000 emulation is an x86 recompiler (both inferred, unmeasured); Beetle Supafaust and ClownMDEmu are candidates too. Rejected: bsnes and BlastEm for V0 (speed).
+- **Battery saves are protected from cores whose save states also restore save memory** (2026-10-18). Loading such a state rolls the save memory back, and writing it would lose newer in-game saves. Each save state is stored with the crc32 of the save memory as it was when the state was made. For the cores flagged (`CoreDecl::states_restore_save`: Nestopia and SwanStation; not mGBA), the first time the `.srm` is written after a state was loaded, an `.srm` on the card that is neither the state's (by its crc32) nor what is about to be written is a newer save, and is first renamed to `<name>.newer.srm`, so it isn't lost. A state without a crc32 counts as not matching. Rejected: RetroArch's copy-back of the save memory after loading (restores only the bytes, not the core's own save-chip state; see Findings); blocking writes after a load.
 - **Games are paced by the display's vsync, with an adaptive frame delay** (2026-10-12). Latency comes from when frames are started, not from the toolkit. The core runs once per vsync, started as late as it safely can, so buttons are read late and a press reaches the screen sooner. On the Brick this cuts start-to-screen from 32 ms to about 6 ms (see [brick.md](brick.md)). Rejected: draw-then-swap, as toolkits do by default (frames queue for two vsyncs); a core on its own clock (it drifts against the display, and its frames sometimes wait a whole refresh).
 - **The game's speed is matched to the display** (2026-10-13). A game within 5 % of the display's rate runs at the display's rate, its sound resampled to match (a Game Boy game at 59.73 fps plays 0.8 % fast on a 60.2 Hz panel). Further off, a timer paces it at its own rate.
 - **Sound goes through libasound, loaded at runtime** (2026-10-13), like the GPU libraries, so the same code runs on the Brick and on a desktop, and runs silently without it.
@@ -38,6 +41,7 @@ pub struct LaunchSpec {
     pub options: Vec<(String, String)>, // core options; the rest keep their defaults
     pub rom_by_path: bool,              // only for cores known to read the file themselves
     pub record: Option<(PathBuf, LaunchRecord)>, // the launch record (see architecture.md)
+    pub states_restore_save: bool,      // keep a newer .srm when a state rolls it back (see Saves and states)
 }
 pub struct Outputs {
     pub sound: Option<Box<dyn SoundOut>>,
@@ -63,7 +67,7 @@ A zip that can't be unzipped fails the start with a message for the player ("the
 
 Frames are handed over in a `FrameSlot` holding the newest frame: neither side waits, and a frame the UI hasn't taken is replaced by a newer one. The UI uploads it on its own thread just before Slint draws (the only time its GL context is sure to be current), into one texture the window shows. 3D cores will need a GL context shared with the UI's instead.
 
-Only the libretro environment calls Specular needs are accepted; the rest are refused, which cores must cope with. A change of timing or picture size while running is accepted but not acted on: frames carry their own size, and pacing and sound keep the timing the game started with. Buttons are read when the core asks, so as late as possible.
+Only the libretro environment calls Specular needs are accepted; the rest are refused, which cores must cope with. Each call refused is logged once a game, with its number (`game: refused the core's environment call 13 (0xd)`). A change of timing or picture size while running is accepted but not acted on: frames carry their own size, and pacing and sound keep the timing the game started with. Buttons are read when the core asks, so as late as possible.
 
 ### Frame pacing
 
@@ -84,14 +88,45 @@ Every game's sound is resampled, by linear interpolation, to the output's rate (
 | Battery save | `saves/<path under roms/>.srm` | when the game has written its save memory; else checked every 10 s of play; on quit, sleep and SIGTERM |
 | Autosave | `roms/<folder>/.states/<name>.autosave` | every 10 s of play (time paused doesn't count), on sleep and quit |
 | Save state (one slot) | `roms/<folder>/.states/<name>.state1` | from the in-game menu |
+| Newer battery save | `saves/<path under roms/>.newer.srm` | renamed from the `.srm` when a loaded state would overwrite it (see below); an older one is replaced |
 
 - A battery save is written only if it changed. Its size is read each time, as some cores (mGBA) only know it once the game has used its save memory. A save file that exists but couldn't be loaded yet (the core had no save memory then) is never overwritten until it is.
 - Our mGBA build says when the game has finished writing its save memory, through a private environment call (`0x20001`, from the range libretro leaves to frontends and their cores), made once the save memory has gone 15 frames without a write. Other cores fall back to the 10 s check.
 - Writes go through one writer thread, in order. `flush` and `quit` return the first error since the last flush.
 - An autosave the core can't load is ignored, and replaced by the next.
-- States start with zstd's frame marker; anything else is loaded as an uncompressed state (as earlier builds wrote them). mGBA's own state format doesn't start with that marker.
+- States start with zstd's frame marker; anything else is loaded as an uncompressed state (as earlier builds wrote them). mGBA's, Nestopia's and SwanStation's own state formats don't start with that marker.
+- After the zstd frame, a state has a zstd skippable frame (zstd's tools pass over it) holding the crc32 of the save memory the state was made with: `5e 2a 4d 18`, `08 00 00 00`, `SRAM`, then the crc32 (little-endian). A core without save memory gets none.
+- **A newer battery save is kept** (see Decisions). After a state is loaded into a core whose states restore save memory, the next `.srm` write first checks the file on the card, on the writer's thread: if it is neither the state's save (crc32) nor what is being written, it is renamed to `.newer.srm`, logged with both crc32s and the paths. If the rename fails, the write is skipped and the error reported like any write's. The autosave a game resumes from counts as a loaded state.
 - On sleep the game is paused and its saves flushed first; waking opens its menu.
 - **Saves follow a renamed or moved ROM.** Specular records the size and checksum of each ROM played in `saves/.specular-saves.json`. After a scan, the saves (battery saves and states) of a recorded ROM that is gone move to the one game without battery saves whose ROM has the same size and checksum. With none, or several, they stay.
+
+### Cores
+
+```rust
+pub struct CoreDecl {        // specular-core's library module: how Specular runs a core
+    pub name: &'static str,
+    pub library: &'static str,                            // e.g. "nestopia_libretro"
+    pub options: &'static [(&'static str, &'static str)],
+    pub rom_by_path: bool,
+    pub states_restore_save: bool,                        // see Saves and states
+    pub bios: &'static [Bios],
+}
+pub struct Bios {
+    pub games: &'static str,                     // "Famicom Disk System games", for messages
+    pub extensions: &'static [&'static str],     // the games that use it; empty: all
+    pub files: &'static [&'static str],          // any one will do; matched ignoring case
+    pub fallback: Option<&'static str>,          // what the core uses without; None: they can't start
+}
+impl CoreDecl { pub fn check_bios(&self, rom: &Path, bios_dir: &Path) -> Result<(), String>; }
+```
+
+| Core | Systems | Options set | BIOS in `bios/` | States restore save memory |
+|---|---|---|---|---|
+| mGBA | GB, GBC, GBA | `mgba_idle_optimization = Remove Known` | none | no |
+| Nestopia | NES, Famicom Disk System | `nestopia_blargg_ntsc_filter = disabled` | `disksys.rom`, for `.fds` games only; required | yes (battery memory) |
+| SwanStation | PS1 | `swanstation_GPU_Renderer = Software` | `scph5500.bin`, `scph5501.bin`, `scph5502.bin`, `psxonpsp660.bin`, `ps1_rom.bin`, or a known dump under any name; else OpenBIOS | yes (memory card 1) |
+
+A missing required BIOS stops the launch before the core is loaded, with "The game couldn't start: Famicom Disk System games need disksys.rom in the bios folder"; the log names the folder and the files looked for. Nestopia's NTSC filter, on by default, widens the picture to 602 pixels, blurs it and costs time. SwanStation's memory card 1 is the libretro save memory (its default), so it is saved as the game's `.srm`; card 2 is off.
 
 ### Patches to mGBA
 
@@ -101,7 +136,7 @@ Kept in `tools/core-patches/mgba`; `tools/build-cores.sh` fetches mGBA at a pinn
 2. `0002`: tell the frontend when save memory has been written.
 3. `0003`: make a save state in one pass rather than two.
 
-mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-wait loops of known games: it saves battery without changing how they run (TrimUI's own setting too).
+mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-wait loops of known games: it saves battery without changing how they run (TrimUI's own setting too). Nestopia and SwanStation are built unpatched.
 
 ## Findings
 
@@ -114,5 +149,13 @@ mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-w
 - (2026-10-13, upstream) mGBA detects Pokémon Emerald hacks itself (128 KiB flash and the cartridge clock). Source: mGBA.
 - (2026-10-13, upstream) libretro keeps the ROM contents it hands a core valid only until loading returns, unless the core asks for longer with `SET_CONTENT_INFO_OVERRIDE` (Specular refuses it). So cores copy what they need, and Specular frees its copy once the core has loaded. Source: libretro.h.
 - (2026-10-13, upstream) The usual NES, SNES and Mega Drive cores are non-commercial (snes9x, Genesis Plus GX, PicoDrive) or possibly GPLv2-only (FCEUmm, and PCSX ReARMed for PS1). GPLv3-compatible candidates: bsnes, BlastEm, QuickNES or Nestopia, and SwanStation. Source: the cores' licences.
+- (2026-10-18, upstream) Nestopia (libretro/nestopia): GPL-2.0-or-later in every core file's header and the README; its NTSC filter (nes_ntsc) is LGPL-2.1-or-later; libretro-common is MIT. QuickNES (libretro/QuickNES_Core): its LICENSE file is the GPL-2.0 text; Shay Green's files are LGPL-2.1-or-later and the later mappers GPL-2.0-or-later. Both are compatible with GPL-3.0-only. Source: the cores' sources.
+- (2026-10-18, upstream) SwanStation (libretro/swanstation): LICENSE is GPL-3.0, with no headers in its files. Bundled: libchdr (BSD-3-Clause), with zstd (BSD-3-Clause), the LZMA SDK (public domain) and miniz (MIT); xxHash (BSD-2-Clause); VIXL (BSD-3-Clause, ARM builds); Xbyak (BSD-3-Clause, x86-64 builds); OpenBIOS from PCSX-Redux (MIT); glad's loader with Khronos' `khrplatform.h` (MIT); stb_image (MIT or public domain); libretro-common (MIT); a Vulkan loader from Dolphin and DuckStation, and PGXP from Beetle PSX (both GPL-2.0-or-later). Source: SwanStation's `dep/` and `src/core/pgxp.cpp`.
+- (2026-10-18, upstream, desktop) Nestopia's `retro_unserialize` restores the battery memory: the board's work RAM is saved in each state and loaded back. Its libretro save memory is that battery RAM (or EEPROM). Famicom Disk System disk writes are saved by the core itself, as `<name>.sav` in the save directory (`saves/<folder>/`). Source: Nestopia's `NstBoard.cpp` and `libretro.cpp`; `crates/specular-runtime/src/tests.rs`.
+- (2026-10-18, upstream, desktop) SwanStation's `retro_unserialize` restores memory cards: each card's contents are in the state and replace the card's on loading. Memory card 1 is the libretro save memory by default (128 KiB, Specular's `.srm`), card 2 is off; the other card types write `.mcd` files into the save directory. SwanStation also finds a BIOS by content: any file of a BIOS's size whose MD5 it knows, preferring the console's region. Source: SwanStation's `memory_card.cpp`, `libretro_host_interface.cpp` and `host_interface.cpp`; `crates/specular-runtime/src/tests.rs`.
+- (2026-10-18, desktop) On this PC (Intel Core Ultra 7 355, heavily loaded by other work: load average about 45 on 8 threads), Nestopia takes a median 0.48 ms a frame (95 % under 0.51 ms) on a generated test ROM (background and sprites on, a tone). SwanStation, on a generated test disc that draws two full-screen shaded triangles over and over (more drawing than games do), takes a median 3.4 ms (95 % under 10 ms) with its drawing thread off, and 19 ms (95 % under 42 ms) with it on, its default: then the core waits for that thread, which the loaded PC kept short of time. Neither has been measured on the Brick. Source: `play` on `target/cores/host`.
+- (2026-10-18, desktop) With no BIOS, SwanStation boots a disc (through its `SYSTEM.CNF`) on OpenBIOS, but not a PS-X EXE given directly: that patches the Sony BIOS's jump to its shell, so OpenBIOS shows its own shell instead. Source: `play`.
+- (2026-10-18, desktop) With its NTSC filter on (its default), Nestopia crashed in the filter's drawing after save states were loaded in a third game session in one process; with it off, not in six. Source: runtime tests.
+- (2026-10-18, desktop) Environment calls refused: Nestopia makes 45 (VFS interface) and 59 (message interface version); SwanStation also makes 69 (core options display callback), 23 (rumble), 57 and 13 (disk control: changing discs), 47 (audio/video enable) and 40 (preferred hardware renderer). Both run correctly without them; without 13, multi-disc games can't change discs. Source: `play`.
 - (2026-10-13, upstream) mGBA's libretro build doesn't replace the game's save memory when loading a save state (`retro_unserialize`). Source: mGBA's libretro port.
 - (2026-10-13, upstream) RetroArch's "Block SaveRAM Overwrite" copies the save memory before loading a state and copies it back afterwards. That restores only the bytes, not the core's own save-chip state (such as the detected chip type or a flash write in progress). Source: RetroArch.

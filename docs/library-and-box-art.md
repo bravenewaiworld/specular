@@ -53,7 +53,7 @@ pub struct SystemDecl {
 }
 ```
 
-Built in: GB, GBC, GBA (with mGBA), and NES, SNES, Mega Drive and PS1 (no core yet). PS1 discs are listed by their `.cue`, `.chd`, `.pbp` or `.m3u`.
+Built in: GB, GBC and GBA (with mGBA), NES (Nestopia), PS1 (SwanStation), and SNES and Mega Drive (no core yet). PS1 discs are listed by their `.cue`, `.chd`, `.pbp` or `.m3u`.
 
 ### Search
 

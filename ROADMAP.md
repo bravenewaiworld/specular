@@ -48,11 +48,15 @@ Completed:
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play: the ROM is unzipped into memory, never onto the card; a zip that can't be played says why
  - Cores' own log messages go into Specular's log (debug messages left out, and at most 30 a second)
+ - Nestopia for the NES (and the Famicom Disk System, with `disksys.rom`), and SwanStation for the PS1 with its software renderer; PS1 games run without a BIOS, on SwanStation's built-in OpenBIOS. Both built for the PC and the Brick, licences checked, and checked on whether their save states restore the save memory (both do)
+ - Battery saves protected from cores whose save states also restore the save memory: each state carries a checksum of the save it was made with, and a newer `.srm` that a loaded state would overwrite is kept as `<name>.newer.srm`
+ - A game that needs a BIOS file it doesn't have says which file to put in `bios/`; environment calls a core makes that Specular refuses are logged
 
 TODO:
  - User added/pluggable libretro cores (loaded from `{sd card}/cores/{name}`)
- - NES and PS1 cores, from QuickNES or Nestopia, and SwanStation (each needs a licence, speed and save-memory check)
- - Protect battery saves from cores whose save states also restore the save memory, by storing a hash of the `.srm` with each state and renaming a newer `.srm` to `<name>.newer.srm` before it is overwritten
+ - Speed check of Nestopia and SwanStation on the Brick (measured on a PC only), including whether SwanStation's drawing thread helps there
+ - PS1 games on several discs: changing discs (SwanStation's disk control interface is refused today)
+ - Zipped Famicom Disk System games (Nestopia tells them apart by the `.fds` in the path, which an unzipped ROM's path lacks)
 
 ### Library and Game Management
 

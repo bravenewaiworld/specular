@@ -59,6 +59,11 @@ pub struct LaunchSpec {
     /// start) and its core is unloaded. Since only one game runs at a time (`Session::start`), one
     /// launch's ending can't remove the record of another.
     pub record: Option<(PathBuf, LaunchRecord)>,
+    /// The core's save states hold its save memory too, so loading one rolls the battery save
+    /// back. Then, the first time the battery save is written after a state is loaded, a save on
+    /// the card that the state wasn't made with (a newer one) is first renamed to
+    /// `<name>.newer.srm`.
+    pub states_restore_save: bool,
 }
 
 /// Where the game's output goes.
@@ -388,6 +393,10 @@ struct Game {
     /// The save file exists but couldn't be loaded yet, because the core had no save memory
     /// then: it must not be overwritten until it is.
     save_pending: bool,
+    states_restore_save: bool,
+    /// The state last loaded, if it restored the save memory: kept until the battery save is
+    /// next written, which checks it (see `LaunchSpec::states_restore_save`).
+    loaded_state: Option<LoadedState>,
     autosave: Option<PathBuf>,
     writer: Writer,
     /// Kept for the core, which may hold on to the ROM's path, and open or map the file there (an
@@ -423,6 +432,7 @@ impl Game {
             overrides: spec.options.iter().cloned().collect(),
             system_dir, save_dir,
             save_ram_written: false,
+            refused: Default::default(),
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
@@ -437,6 +447,7 @@ impl Game {
         unsafe { (core.get_system_av_info)(&mut av) };
         let writer = Writer::new().map_err(|e| format!("starting the save writer: {e}"))?;
         let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
+                           states_restore_save: spec.states_restore_save, loaded_state: None,
                            autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
         drop(rom);
         g.read_save();
@@ -471,22 +482,25 @@ impl Game {
         let ram = self.core.save_ram();
         if ram.is_empty() || (!always && ram == self.saved.as_slice()) { return; }
         self.saved = ram.to_vec();
-        self.writer.write(self.save.clone(), self.saved.clone());
+        self.writer.write_save(self.save.clone(), self.saved.clone(), self.loaded_state.take());
+    }
+
+    /// The crc32 of the save memory as it is now; None if the core has none.
+    fn save_crc(&mut self) -> Option<u32> {
+        let ram = self.core.save_ram();
+        (!ram.is_empty()).then(|| crc32fast::hash(ram))
     }
 
     /// Queues the autosave to be written, if there is one.
     fn write_autosave(&mut self) {
         let Some(path) = self.autosave.clone() else { return };
-        match self.state() {
-            Ok(data) => self.writer.write_state(path, data),
-            Err(e) => eprintln!("game: autosave: {e}"),
-        }
+        if let Err(e) = self.queue_state(path) { eprintln!("game: autosave: {e}"); }
     }
 
     /// Writes a save state to `path`, then sends `reply` once it is on the card.
     fn save_state(&mut self, path: PathBuf, reply: mpsc::Sender<io::Result<()>>) {
-        match self.state() {
-            Ok(data) => { self.writer.write_state(path, data); self.writer.reply(reply); }
+        match self.queue_state(path) {
+            Ok(()) => self.writer.reply(reply),
             Err(e) => { let _ = reply.send(Err(e)); }
         }
     }
@@ -499,24 +513,32 @@ impl Game {
         if let Some(r) = reply { self.writer.reply(r); }
     }
 
-    /// The game's state, as a save state's contents.
-    fn state(&mut self) -> io::Result<Vec<u8>> {
+    /// Queues the game's state to be written to `path` as a save state, with the crc32 of the
+    /// save memory as it is now.
+    fn queue_state(&mut self, path: PathBuf) -> io::Result<()> {
         let size = unsafe { (self.core.serialize_size)() };
         let mut data = vec![0u8; size];
         if size == 0 || !unsafe { (self.core.serialize)(data.as_mut_ptr().cast(), size) } {
             return Err(io::Error::other("the core could not save its state"));
         }
-        Ok(data)
+        let save_crc = self.save_crc();
+        self.writer.write_state(path, data, save_crc);
+        Ok(())
     }
 
     /// Loads a save state written by `Writer::write_state`, or an uncompressed one (as earlier
     /// builds wrote them).
     fn load_state(&mut self, path: &Path) -> io::Result<()> {
         let mut data = std::fs::read(path)?;
-        if data.starts_with(&ZSTD_MAGIC) { data = zstd::decode_all(data.as_slice())?; }
+        let mut save_crc = None;
+        if data.starts_with(&ZSTD_MAGIC) {
+            save_crc = save_crc_of(&data);
+            data = zstd::decode_all(data.as_slice())?;
+        }
         if !unsafe { (self.core.unserialize)(data.as_ptr().cast(), data.len()) } {
             return Err(io::Error::other("the core could not load this state"));
         }
+        if self.states_restore_save { self.loaded_state = Some(LoadedState { path: path.into(), save_crc }); }
         Ok(())
     }
 }
@@ -562,8 +584,11 @@ impl Drop for MappedFile {
 struct Writer(mpsc::Sender<Job>);
 
 enum Job {
-    /// Writes the data to the path, compressed first if `compress` is set.
-    Write { path: PathBuf, data: Vec<u8>, compress: bool },
+    /// A battery save, written as it is. With `loaded_state`, a different save already on the
+    /// card is kept first (see `keep_newer_save`).
+    Save { path: PathBuf, data: Vec<u8>, loaded_state: Option<LoadedState> },
+    /// A save state: compressed, then followed by the crc32 of the save memory it was made with.
+    State { path: PathBuf, data: Vec<u8>, save_crc: Option<u32> },
     /// Sends how the writes since the last reply went: the first error, if any failed.
     Reply(mpsc::Sender<io::Result<()>>),
 }
@@ -574,28 +599,39 @@ impl Writer {
         std::thread::Builder::new().name("game-saves".into()).spawn(move || {
             let mut failed = None;
             for job in rx {
-                match job {
-                    Job::Write { path, data, compress } => {
+                let (path, written) = match job {
+                    Job::Save { path, data, loaded_state } => {
+                        let kept = loaded_state.map_or(Ok(()), |s| keep_newer_save(&path, &data, &s));
+                        let written = kept.and_then(|()| write_atomically(&path, &data));
+                        (path, written)
+                    }
+                    Job::State { path, data, save_crc } => {
                         // Level 1, the fastest of zstd's usual levels: higher ones shrink a GBA
                         // state only about 4 % more.
-                        let data = if compress { zstd::bulk::compress(&data, 1) } else { Ok(data) };
-                        if let Err(e) = data.and_then(|data| write_atomically(&path, &data)) {
-                            eprintln!("game: writing {}: {e}", path.display());
-                            failed.get_or_insert(e);
-                        }
+                        let data = zstd::bulk::compress(&data, 1).map(|z| with_save_crc(z, save_crc));
+                        let written = data.and_then(|data| write_atomically(&path, &data));
+                        (path, written)
                     }
-                    Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); }
+                    Job::Reply(reply) => { let _ = reply.send(failed.take().map_or(Ok(()), Err)); continue; }
+                };
+                if let Err(e) = written {
+                    eprintln!("game: writing {}: {e}", path.display());
+                    failed.get_or_insert(e);
                 }
             }
         })?;
         Ok(Self(jobs))
     }
 
-    /// Writes uncompressed: for battery saves, which other emulators and tools must be able to read.
-    fn write(&self, path: PathBuf, data: Vec<u8>) { let _ = self.0.send(Job::Write { path, data, compress: false }); }
+    /// Writes a battery save uncompressed, which other emulators and tools must be able to read.
+    fn write_save(&self, path: PathBuf, data: Vec<u8>, loaded_state: Option<LoadedState>) {
+        let _ = self.0.send(Job::Save { path, data, loaded_state });
+    }
     /// Writes a save state, zstd-compressed, to wear the storage less (an autosave is written
     /// every 10 s of play): a Pokémon Emerald state shrinks about 11 times, 516 KiB to 45 KiB.
-    fn write_state(&self, path: PathBuf, data: Vec<u8>) { let _ = self.0.send(Job::Write { path, data, compress: true }); }
+    fn write_state(&self, path: PathBuf, data: Vec<u8>, save_crc: Option<u32>) {
+        let _ = self.0.send(Job::State { path, data, save_crc });
+    }
     fn reply(&self, reply: mpsc::Sender<io::Result<()>>) { let _ = self.0.send(Job::Reply(reply)); }
 }
 
@@ -603,6 +639,53 @@ impl Writer {
 /// would be taken for compressed, fail to decompress and not load; mGBA's states don't start
 /// with them.
 const ZSTD_MAGIC: [u8; 4] = zstd::zstd_safe::MAGICNUMBER.to_le_bytes();
+
+/// A save state loaded into a core whose states restore its save memory.
+struct LoadedState {
+    path: PathBuf,
+    /// The crc32 of the save memory the state was made with; None if it doesn't say.
+    save_crc: Option<u32>,
+}
+
+/// Called before the battery save at `path` is first overwritten with `data` after `state` was
+/// loaded. A save on the card that is neither `data` nor the save the state was made with is newer
+/// than the state (the game saved after it was made), so it is renamed to `<name>.newer.srm`
+/// (replacing any earlier one) rather than lost. If the state doesn't record its save's crc32, any
+/// save on the card other than `data` is renamed. A failed rename stops the write.
+fn keep_newer_save(path: &Path, data: &[u8], state: &LoadedState) -> io::Result<()> {
+    let on_card = match std::fs::read(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        r => r?,
+    };
+    let crc = crc32fast::hash(&on_card);
+    if on_card == data || state.save_crc == Some(crc) { return Ok(()); }
+    let newer = path.with_extension("newer.srm");
+    let made_with = state.save_crc.map_or("unknown".into(), |c| format!("{c:08x}"));
+    eprintln!("game: {} (crc32 {crc:08x}) isn't the save the state {} was made with (crc32 {made_with}) and would be overwritten by \
+               the save it restored (crc32 {:08x}): keeping it as {}", path.display(), state.path.display(), crc32fast::hash(data), newer.display());
+    std::fs::rename(path, &newer)?;
+    std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()
+}
+
+/// The start of the skippable frame (zstd's tools pass over it) that follows a save state's zstd
+/// frame: marker, length and the tag "SRAM". The crc32 (little-endian) of the save memory the
+/// state was made with comes after it.
+const SAVE_CRC_HEAD: [u8; 12] = {
+    let [a, b, c, d] = 0x184d_2a5e_u32.to_le_bytes(); // one of zstd's skippable frame markers
+    [a, b, c, d, 8, 0, 0, 0, b'S', b'R', b'A', b'M'] // then the frame's length (8), and the tag
+};
+
+/// Appends the save crc32 frame (`SAVE_CRC_HEAD`) to a compressed state, if there is a crc.
+fn with_save_crc(mut state: Vec<u8>, crc: Option<u32>) -> Vec<u8> {
+    if let Some(crc) = crc { state.extend(SAVE_CRC_HEAD.iter().chain(&crc.to_le_bytes())); }
+    state
+}
+
+/// The save crc32 at the end of a compressed state file, if it has one (see `with_save_crc`).
+fn save_crc_of(file: &[u8]) -> Option<u32> {
+    let (head, crc) = file[file.len().checked_sub(16)?..].split_at(12);
+    (head == SAVE_CRC_HEAD).then(|| u32::from_le_bytes(crc.try_into().unwrap()))
+}
 
 /// Writes `data` to `path` so a power cut leaves either the old file or the new one (FAT has no
 /// journal): to `<path>.tmp`, flushed, renamed over `path`, and the rename itself flushed.

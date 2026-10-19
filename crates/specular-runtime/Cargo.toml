@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+crc32fast = "1"
 libc = "0.2"
 zstd = { version = "0.13", default-features = false }
 specular-core = { path = "../specular-core" }
@@ -16,5 +17,4 @@ cc = "1"
 [dev-dependencies]
 specular-linux = { path = "../specular-linux" }
 tempfile = "3"
-crc32fast = "1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

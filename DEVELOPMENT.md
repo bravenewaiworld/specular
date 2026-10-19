@@ -8,6 +8,7 @@
   - WiFi and Bluetooth follow a recorded or hand-written scenario (see Wireless traces and scenarios).
   - The installer can be made to fail (`SPECULAR_INSTALL_FAILS`), or to look like a task was left running (`SPECULAR_INSTALL_RUNNING`).
 - **Cores** are loaded from `SPECULAR_CORES`, or else from `cores/` next to the binary.
+- **BIOS files** go in the data folder's `bios/`. PS1 games run without one, on SwanStation's built-in OpenBIOS (some games don't); Famicom Disk System games need `disksys.rom`. The log says which files were looked for.
 - **Keyboard as gamepad:**
   - Arrows: D-pad. X/Z/S/A: A/B/X/Y.
   - Q/W: L1/R1. 1/2: L2/R2.
@@ -39,7 +40,7 @@
   - WiFi against a fake service socket replaying output recorded on a device.
   - Bluetooth parsing.
   - The installer's progress protocol.
-  - The runtime, with a real mGBA core on a generated ROM. This needs a host build of the core (`make test` builds it); without it these tests are skipped.
+  - The runtime, with real cores (mGBA, Nestopia, SwanStation) on generated ROMs, including whether a core's save states restore its save memory. This needs host builds of the cores (`make test` builds them); without them these tests are skipped.
 - **Wireless traces and scenarios.**
   - A wireless trace from a device converts into a scenario (`tools/trace-to-scenario.py`).
   - The desktop build replays a scenario (`SPECULAR_SCENARIO=<file>`): the same events, with the same answers and timing. A WiFi or Bluetooth problem seen on a device can be reproduced on the PC.
@@ -54,7 +55,7 @@
 
 These are cargo examples. Build them for a device and run them there through Crystaline OS: `make specular` puts them in its `build/specular/aarch64-unknown-linux-gnu/release/examples/`, and `tools/run-specular.sh <binary> [args]` runs one.
 
-- **Headless player** (`specular-runtime`'s `play`). Runs a core and a ROM with no UI, optionally paced by vsync. It reports the core's time per frame and can save the last frame.
+- **Headless player** (`specular-runtime`'s `play`). Runs a core and a ROM with no UI, optionally paced by vsync. It reports the core's time per frame and can save the last frame. `-o key=value` sets a core option (use the ones its `CoreDecl` sets, e.g. `-o nestopia_blargg_ntsc_filter=disabled`); `SPECULAR_BIOS` is its `bios/` folder. Every environment call the core makes that Specular refuses is logged once, with its number.
 - **Device measurements** (`devices/brick/examples/s*`). Each measures one part of the stack on a device:
   - Toolchain.
   - Slint on the device's GPU.
