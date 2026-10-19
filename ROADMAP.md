@@ -65,6 +65,7 @@ TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
  - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps; a game without a start level going to 1.2 GHz after two misses; the frame statistics' second line). Left:
    - Steps up have no settling time: a burst of misses (as when something reads the framebuffer) raised Contra three steps in a second, and with no step down it keeps them until the game ends
+ - The 10 s autosave makes PS1 games drop a frame every 10 s: SwanStation's 11.5 MB state takes 13–21 ms of the game's thread to make (a new zeroed buffer, then `serialize`), so the next refresh is missed, and often another a few frames later while it is compressed (docs/runtime.md, Findings). Each such pair also raises the CPU minimum. Options: reuse the state's buffer (2–10 ms of it); tell the CPU minimum that a frame overran for the autosave, not for want of speed; autosave such cores less often, or when the game is paused; compress at a lower priority. NES (0.3–0.5 ms) and GBA (3.4–3.8 ms) autosaves don't overrun
    - Measure what it costs in battery (docs/runtime.md, Open questions)
 
 ### Library and Game Management
