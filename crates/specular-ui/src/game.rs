@@ -9,11 +9,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
 use glow::HasContext;
-use slint::ComponentHandle;
 use specular_core::device::{Device, Output, SoundOut};
+use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
 use specular_core::library::{Game, SystemDecl};
+use specular_core::rumble::RumbleLine;
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
 use crate::sounds::Sounds;
@@ -47,12 +48,12 @@ pub struct Playing {
 pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
-    /// Starts `game` with its system's core and its sound on `output`, on another thread, since
-    /// reading a large ROM or opening a Bluetooth output can take a second or more; then calls
-    /// `started` there with the result. `window` is redrawn whenever a new frame arrives.
-    /// Before opening the game's output, that thread waits for the interface `sounds` to close
-    /// theirs.
-    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &SharedDevice, sounds: &Sounds, output: Output, window: slint::Weak<AppWindow>,
+    /// Starts `game` with its system's core, its sound on `output` and its rumble on `rumble`, on
+    /// another thread, since reading a large ROM or opening a Bluetooth output can take a second or
+    /// more; then calls `started` there with the result. The UI is told of each new frame
+    /// (`Runner::game_frame`) and each in-game save. Before opening the game's output, that thread
+    /// waits for the interface `sounds` to close theirs.
+    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &SharedDevice, sounds: &Sounds, output: Output, rumble: Option<RumbleLine>,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
         let library = cores_dir().join(format!("{}.so", core.library));
@@ -70,16 +71,14 @@ impl Playing {
         };
         if let Err(why) = core.check_bios(&spec.rom, &spec.system_dir) { return started(Err(why)); }
         let frames = Arc::new(FrameSlot::default());
-        // One redraw request at a time: frames arriving while one is pending are drawn by it.
+        // One message to the UI at a time: frames arriving while one is pending are drawn by it.
         let pending = Arc::new(AtomicBool::new(false));
         let on_frame = Box::new(move || {
             if pending.swap(true, Relaxed) { return; }
-            let (window, pending) = (window.clone(), pending.clone());
-            let _ = slint::invoke_from_event_loop(move || {
-                pending.store(false, Relaxed);
-                if let Some(w) = window.upgrade() { w.window().request_redraw(); }
-            });
+            let pending = pending.clone();
+            crate::on_ui(move |r| { pending.store(false, Relaxed); r.game_frame(); });
         });
+        let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
         let (vsync, display_hz) = (device.open_vsync(), device.profile().refresh_hz);
         let state = game.state_path(&data.roms(), "state1");
         let (roms, saves, played, device, sounds) = (data.roms(), data.saves(), game.clone(), device.clone(), sounds.clone());
@@ -87,7 +86,7 @@ impl Playing {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
-            let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame };
+            let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame, rumble, on_save };
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }

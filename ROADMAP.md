@@ -27,7 +27,7 @@ Completed:
  - Everything except the display, backlight, LEDs, volume, sleep and WiFi driver goes through standard Linux interfaces (evdev, power supply, LED class, ALSA, wpa_supplicant, BlueZ), shared by any Linux device
 
 TODO:
- - Rumble from games
+ - Rumble from games (built; to check on the Brick)
  - Menus paced by vsync too (built; to measure on the Brick)
  - Separate volume levels for speaker and headphones (built; to check on the Brick)
 
@@ -92,7 +92,7 @@ Completed:
 Completed:
  - Accent and second accent colours from a palette; they also tint the light bar and the device's LEDs
  - Games as a list or grid
- - Brightness, speaker, headphone and Bluetooth volume, LED brightness, scaling, sleep time
+ - Brightness, speaker, headphone and Bluetooth volume, LED brightness, rumble strength, scaling, sleep time
  - Developer details: developer-only settings and screens
  - Settings are declared once (key, type, default, who sees them); the settings screens are generated from them
  - Settings stored as JSON on the SD card: only values that differ from the default, unknown keys kept, writes safe against power cuts, a damaged file set aside
@@ -123,12 +123,12 @@ Completed:
  - A splash while a game starts: "Powered by" its core, the core's copyright notice and web address (from the credits), over the zooming box art until the game's first frame, for at least 1 s
  - The light bar, and the LEDs showing the accent, take each system's colour on its game list and while its games are played ("Tint by system", on by default)
  - Interface sounds, made in code from the mockup's tick: a quiet tick as the focus moves, short tones as screens open and close and switches turn on and off; none over a game, even paused. The output opens at the first sound and closes when idle. "Interface sounds" turns them off
+ - Pluggable lights and rumble effects, each with a setting: the LEDs and light bar pulse red as the battery becomes low and flash when the game saves; rumble can follow the game's loud sounds (off by default). The light bar mirrors the LEDs, also during effects
 
 TODO:
  - Interface sounds: to check on the Brick (how loud they are, and that the speaker doesn't pop as their output opens and closes)
  - Title screens and screenshots as art
  - Profile FemtoVG's per-frame cost while scrolling (about 47 % of a core on the Brick): text layout cache hits, how many row slots redraw, whether off-screen slots draw
- - Pluggable LED and rumble effects (e.g. the light bar reacting to low battery or a save in game, rumble following sound peaks)
 
 ## V1
 

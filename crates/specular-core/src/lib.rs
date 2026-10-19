@@ -5,6 +5,7 @@
 pub mod app;
 pub mod art;
 pub mod device;
+pub mod effects;
 pub mod input;
 pub mod install;
 pub mod keyboard;
@@ -15,5 +16,6 @@ pub mod model;
 pub mod nav;
 pub mod palette;
 pub mod repeat;
+pub mod rumble;
 pub mod settings;
 pub mod wireless;

@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::Read;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use specular_core::input::{Button, ButtonEvent};
@@ -66,6 +67,42 @@ pub(crate) fn parse_event(buf: &[u8; EVENT_SIZE]) -> (Duration, u16, u16, i32) {
 pub(crate) fn switches(file: &File) -> Option<u32> {
     let mut bits = [0u8; 4];
     (unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGSW_4, bits.as_mut_ptr()) } >= 0).then(|| u32::from_le_bytes(bits))
+}
+
+/// An event device as sysfs describes it, for finding one by what it can do.
+pub(crate) struct EventDevice {
+    /// Its node, e.g. "event3" (under /dev/input).
+    pub node: String,
+    /// Its name, or the node's if it has none.
+    pub name: String,
+    /// The folder holding its `capabilities/`.
+    info: PathBuf,
+}
+
+impl EventDevice {
+    /// Whether its capability bitmap `kind` ("ev", "key", "sw", "ff", …) has bit `bit`.
+    pub fn has(&self, kind: &str, bit: u16) -> bool {
+        std::fs::read_to_string(self.info.join("capabilities").join(kind)).is_ok_and(|caps| has_bit(&caps, bit))
+    }
+}
+
+/// The event devices in `sysfs` (/sys/class/input), in the order the kernel registered them.
+pub(crate) fn event_devices(sysfs: &Path) -> Vec<EventDevice> {
+    let Ok(entries) = std::fs::read_dir(sysfs) else { return Vec::new() };
+    let mut nodes: Vec<String> = entries.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.starts_with("event")).collect();
+    nodes.sort_by_key(|n| n[5..].parse::<u32>().unwrap_or(u32::MAX));
+    nodes.into_iter().map(|node| {
+        let info = sysfs.join(&node).join("device");
+        let name = std::fs::read_to_string(info.join("name")).map_or_else(|_| node.clone(), |n| n.trim().to_string());
+        EventDevice { node, name, info }
+    }).collect()
+}
+
+/// Whether a sysfs capability bitmap has bit `bit`: hex words, the most significant first, each as
+/// wide as the kernel's `long` (64 bits on the 64-bit kernels Specular runs on).
+fn has_bit(bitmap: &str, bit: u16) -> bool {
+    let word = bitmap.split_whitespace().rev().nth(bit as usize / 64);
+    word.and_then(|w| u64::from_str_radix(w, 16).ok()).is_some_and(|w| w & (1 << (bit % 64)) != 0)
 }
 
 fn open_by_name(name: &str) -> Option<File> {
@@ -178,5 +215,18 @@ impl InputDevice {
             (EV_ABS, ABS_RZ) => self.set(Button::R2, value > 127, time, out),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn capability_bitmaps() {
+        use super::has_bit;
+        assert!(has_bit("14", 2)); // the Brick's jack: SW_HEADPHONE_INSERT and SW_MICROPHONE_INSERT
+        assert!(!has_bit("2", 2)); // padbridge's pad: SW_TABLET_MODE only
+        assert!(!has_bit("0", 2));
+        assert!(!has_bit("", 2));
+        assert!(has_bit("1 0\n", 64));
     }
 }

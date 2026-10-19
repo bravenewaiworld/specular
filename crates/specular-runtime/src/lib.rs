@@ -23,9 +23,10 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use specular_core::device::{SoundOut, Vsync};
+use specular_core::device::{Motors, SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
+use specular_core::rumble::RumbleLine;
 
 use crate::core::Core;
 use crate::frontend::Frontend;
@@ -76,6 +77,14 @@ pub struct Outputs {
     pub frames: Arc<FrameSlot>,
     /// Called on the game's thread after each new frame is put in `frames`.
     pub on_frame: Box<dyn Fn() + Send>,
+    /// Where the game's rumble goes (None: the core is offered none). Stilled while the game is
+    /// paused, and when it ends.
+    pub rumble: Option<RumbleLine>,
+    /// Called on the game's thread when the game has saved in-game: its changed battery save was
+    /// queued for writing while it played (not the writes on flush or quit). At once with a core
+    /// that says when its save memory was written (`ENV_SAVE_RAM_WRITTEN`), else at the next check,
+    /// up to 10 s of play later.
+    pub on_save: Box<dyn Fn() + Send>,
 }
 
 /// About the running game.
@@ -109,6 +118,8 @@ struct Runs {
     /// When the core's current run began; None between runs (see `Session::watch`).
     running_since: Option<Instant>,
     sound_queued: Option<Duration>,
+    /// The loudest sample since `Session::take_sound_peak` last took it.
+    sound_peak: u16,
 }
 
 /// A picture from the game, 8-bit RGBA.
@@ -219,6 +230,9 @@ impl Session {
         });
     }
 
+    /// The loudest sample of the game's sound (0–32768, left or right) since the last call.
+    pub fn take_sound_peak(&self) -> u16 { std::mem::take(&mut self.runs.lock().unwrap().sound_peak) }
+
     /// The buttons held now, as `joypad_bit`s.
     pub fn set_buttons(&self, bits: u16) { self.buttons.store(bits, Relaxed); }
 
@@ -321,7 +335,7 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
 fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
         started: mpsc::Sender<Result<GameInfo, String>>) {
-    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame) {
+    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble) {
         Ok(g) => g,
         Err(e) => { let _ = started.send(Err(e)); return; }
     };
@@ -348,7 +362,10 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         };
         if let Some(cmd) = cmd {
             match cmd {
-                Cmd::Pause(p) => paused = p,
+                Cmd::Pause(p) => {
+                    paused = p;
+                    frontend::with(|f| f.pause_rumble(p));
+                }
                 Cmd::Reset => unsafe { (game.core.reset)() },
                 Cmd::SaveState(path, reply) => game.save_state(path, reply),
                 Cmd::LoadState(path, reply) => { let _ = reply.send(game.load_state(&path)); }
@@ -371,12 +388,20 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
             r.recent.push_back(took);
             if r.recent.len() > STATS_FRAMES { r.recent.pop_front(); }
         }
-        let queued = frontend::with(|f| { let q = sound.play(&f.samples); f.samples.clear(); q }).flatten();
-        runs.lock().unwrap().sound_queued = queued;
-        if frontend::with(|f| std::mem::take(&mut f.save_ram_written)) == Some(true) { game.write_save(false); }
+        let (queued, peak) = frontend::with(|f| {
+            let played = (sound.play(&f.samples), sound::peak(&f.samples));
+            f.samples.clear();
+            played
+        }).unwrap_or_default();
+        {
+            let mut r = runs.lock().unwrap();
+            r.sound_queued = queued;
+            r.sound_peak = r.sound_peak.max(peak);
+        }
+        if frontend::with(|f| std::mem::take(&mut f.save_ram_written)) == Some(true) && game.write_save(false) { (out.on_save)(); }
         frames_to_check -= 1;
         if frames_to_check == 0 {
-            game.write_save(false);
+            if game.write_save(false) { (out.on_save)(); }
             game.write_autosave();
             frames_to_check = check_frames;
         }
@@ -408,7 +433,7 @@ struct Game {
 }
 
 impl Game {
-    fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>) -> Result<Self, String> {
+    fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>, rumble: Option<RumbleLine>) -> Result<Self, String> {
         let core = Core::load(&spec.core)?;
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
@@ -433,6 +458,7 @@ impl Game {
             system_dir, save_dir,
             save_ram_written: false,
             refused: Default::default(),
+            rumble, motors: Motors::STILL, paused: false,
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
@@ -472,17 +498,18 @@ impl Game {
     /// Queues the battery save to be written if it changed since last written; with `always`,
     /// even if it didn't (the last write may have failed: the writer's errors aren't seen here).
     /// The size is read each time: some cores (mGBA) only know it once the game has used its
-    /// save memory.
-    fn write_save(&mut self, always: bool) {
+    /// save memory. Returns whether it was queued.
+    fn write_save(&mut self, always: bool) -> bool {
         // A core that only now has save memory gets the file first.
         if self.save_pending {
             if !self.core.save_ram().is_empty() { self.read_save(); }
-            return;
+            return false;
         }
         let ram = self.core.save_ram();
-        if ram.is_empty() || (!always && ram == self.saved.as_slice()) { return; }
+        if ram.is_empty() || (!always && ram == self.saved.as_slice()) { return false; }
         self.saved = ram.to_vec();
         self.writer.write_save(self.save.clone(), self.saved.clone(), self.loaded_state.take());
+        true
     }
 
     /// The crc32 of the save memory as it is now; None if the core has none.

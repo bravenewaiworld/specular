@@ -15,6 +15,7 @@ How Specular is put together: the toolkit, the crates and threads, the boundary 
 - **Game frames always go through the UI's scene** (2026-10-12). On the Brick this costs about 1 ms of CPU per frame more than a direct blit and adds no latency (see [brick.md](brick.md)). Rejected: drawing plain gameplay straight to the screen and handing over to the UI only for menus and transitions (a second drawing path for no gain).
 - **Device-independent** (2026-10-12). A port is a device crate, `devices/<name>`, holding its profile, hardware services and display platform. Device names appear nowhere else. `specular-linux` implements the standard Linux interfaces, so most ports override only their quirks.
 - **Wired headphones are an output with their own volume** (2026-10-18), like Bluetooth: the speaker and headphones each keep their level, and plugging in or out switches at once, also mid-game. The kernel's sound driver switches the speaker itself; a port only says when headphones are plugged in (`HeadphoneJack`, from the evdev switch `SW_HEADPHONE_INSERT` in `specular-linux`). Rejected: one level for both (headphones at the ear want far less than a small speaker at arm's length, so every plug meant re-adjusting); reopening the game's sound when the jack changes (the kernel already routes it, and with no mixing the device is busy while the old stream is open).
+- **Rumble is run by a thread of its own, which is handed only the latest state** (2026-10-18). The game's thread (a game's own rumble) and the UI's (effects) each set their part and never wait; the rumble thread runs the motors at the stronger of the two, scaled by the "Rumble" strength setting, and skips to the latest state when it falls behind. Setting the motors can block: on Linux a force-feedback upload to a gamepad presented by a program (the Brick's padbridge) waits until that program answers. A port gives `Hardware::rumble`; `specular-linux` drives the first gamepad that offers `FF_RUMBLE`, found by its capabilities, as the headphone jack is. Rejected: setting the motors on the game's thread (a frame would wait for padbridge); a queue of changes (it would play out every stale strength after a hold-up); the motor's own device (`regulator-haptic` on the Brick: a device detail, where a gamepad offering rumble is what any Linux handheld or controller has).
 - **No async runtime** (2026-10-12). Plain threads and channels.
 - **Memory: at most 50 MB for Specular itself while a game runs** (2026-10-12). Everything except the core and its game; a ceiling, not a goal. Idle memory matters less, but the design is low-memory throughout, so there is one way of working rather than two.
 - **Startup is not a priority** (2026-10-12). 10–15 s is fine, as long as a good loading screen shows meanwhile.
@@ -32,15 +33,17 @@ How Specular is put together: the toolkit, the crates and threads, the boundary 
 ```
 crates/
   specular-core/     the app (messages in, effects out), screen models, navigation, held-button
-                     repeat, list layout, settings, library, saves, box art identification, device,
-                     wireless and installer interfaces. No Slint, no files or hardware touched by the app.
+                     repeat, list layout, settings, library, saves, box art identification, lights
+                     and rumble effects, device, wireless and installer interfaces. No Slint, no
+                     files or hardware touched by the app.
   specular-runtime/  the libretro runtime (see runtime.md)
   specular-credits/  works out what a binary ships and its licences; run by the device crates'
                      build scripts
   specular-ui/       Slint theme, prefabs and screens; carries out the app's effects; owns the
                      threads; art service; run(device)
-  specular-linux/    standard Linux implementations: evdev, power supply, LED class, ALSA,
-                     wpa_supplicant, BlueZ, framebuffer vsync and frame pacing
+  specular-linux/    standard Linux implementations: evdev (buttons, the jack, rumble), power
+                     supply, LED class, ALSA, wpa_supplicant, BlueZ, framebuffer vsync and frame
+                     pacing
 devices/
   desktop/           Slint's default window, simulated hardware, keyboard as gamepad
   brick/             the TrimUI Brick (see brick.md)
@@ -90,6 +93,7 @@ pub trait Screen {
 | One per radio | WiFi and Bluetooth commands, which can block for seconds |
 | Headphone jack | waits for plugging and unplugging |
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
+| Rumble | runs the motors, at the latest state asked for (`rumble::RumbleLine`) |
 | Installer | the device's installer |
 | Art worker, art loader | finding and storing box art; decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
@@ -130,6 +134,15 @@ pub struct Hardware {
     pub bluetooth: Option<Box<Bluetooth>>,
     pub installer: Option<Box<dyn Installer>>,    // see installer.md
     pub headphones: Option<Box<dyn HeadphoneJack>>,
+    pub rumble: Option<Box<dyn Rumble>>,
+}
+
+/// 0–65535 each, as libretro and Linux take them; a device with one motor runs the stronger.
+pub struct Motors { pub strong: u16, pub weak: u16 }
+
+pub trait Rumble: Send {
+    /// Until the next call (`Motors::STILL` stops). May block: called on the rumble thread.
+    fn set(&mut self, motors: Motors) -> io::Result<()>;
 }
 
 /// Where sound plays. Each has its own volume setting (all Bluetooth devices share one). The
@@ -211,6 +224,7 @@ Msg::LastGameStopped(LaunchRecord)
 | Settings | the `Vec<SettingDecl>` given to `App::new` (see [settings.md](settings.md)) |
 | Systems and emulators | the `Vec<SystemDecl>` given to `App::new`, each naming its `CoreDecl` |
 | Art sources | the ordered `Vec<Box<dyn ArtSource>>` given to the art worker |
+| Lights and rumble effects | the ordered `Vec<Box<dyn effects::Reaction>>` given to `Effects::new` (see [look-and-motion.md](look-and-motion.md)) |
 | Themes | not yet: there is one theme, `crates/specular-ui/ui/theme.slint` |
 
 ## Findings

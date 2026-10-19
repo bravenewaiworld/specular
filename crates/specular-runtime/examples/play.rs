@@ -29,7 +29,7 @@ fn main() -> Result<(), String> {
     let session = Session::start(
         LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), autosave: None, system_dir: bios.into(), options, rom_by_path, states_restore_save: false, record: None },
         Outputs {
-            sound: None, frames: frames.clone(), on_frame: Box::new(|| {}),
+            sound: None, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}),
             vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },
             display_hz: if vsync { 60.2 } else { 60.0 },
         },

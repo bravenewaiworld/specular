@@ -9,7 +9,7 @@ use std::path::Path;
 
 use specular_core::device::HeadphoneJack;
 
-use crate::input::{EV_SW, EV_SYN, EVENT_SIZE, SYN_DROPPED, SYN_REPORT, parse_event, switches};
+use crate::input::{EV_SW, EV_SYN, EVENT_SIZE, SYN_DROPPED, SYN_REPORT, event_devices, parse_event, switches};
 
 const SW_HEADPHONE_INSERT: u16 = 2; // linux/input-event-codes.h
 
@@ -57,27 +57,14 @@ fn follow(sysfs: &Path, dev: &Path, mut plugged: Box<dyn FnMut(bool) + Send>) {
 /// The first event device in `sysfs` whose capabilities include the headphone switch: its name
 /// and the device, opened from `dev`.
 fn find(sysfs: &Path, dev: &Path) -> Option<(String, File)> {
-    let mut nodes: Vec<String> = std::fs::read_dir(sysfs).ok()?.flatten()
-        .filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.starts_with("event")).collect();
-    nodes.sort_by_key(|n| n[5..].parse::<u32>().unwrap_or(u32::MAX));
-    for node in nodes {
-        let info = sysfs.join(&node).join("device");
-        if !std::fs::read_to_string(info.join("capabilities/sw")).is_ok_and(|caps| has_bit(&caps, SW_HEADPHONE_INSERT)) { continue; }
-        let name = std::fs::read_to_string(info.join("name")).map_or_else(|_| node.clone(), |n| n.trim().to_string());
-        let path = dev.join(&node);
+    for d in event_devices(sysfs).into_iter().filter(|d| d.has("sw", SW_HEADPHONE_INSERT)) {
+        let path = dev.join(&d.node);
         match File::open(&path) {
-            Ok(file) => { eprintln!("input: headphone jack: {name} ({})", path.display()); return Some((name, file)); }
-            Err(e) => eprintln!("input: headphone jack {name} ({}): {e}; skipped", path.display()),
+            Ok(file) => { eprintln!("input: headphone jack: {} ({})", d.name, path.display()); return Some((d.name, file)); }
+            Err(e) => eprintln!("input: headphone jack {} ({}): {e}; skipped", d.name, path.display()),
         }
     }
     None
-}
-
-/// Whether a sysfs capability bitmap has bit `bit`: hex words, the most significant first, each as
-/// wide as the kernel's `long` (64 bits on the 64-bit kernels Specular runs on).
-fn has_bit(bitmap: &str, bit: u16) -> bool {
-    let word = bitmap.split_whitespace().rev().nth(bit as usize / 64);
-    word.and_then(|w| u64::from_str_radix(w, 16).ok()).is_some_and(|w| w & (1 << (bit % 64)) != 0)
 }
 
 /// What the jack device's events say.
@@ -110,15 +97,6 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-
-    #[test]
-    fn capability_bitmaps() {
-        assert!(has_bit("14", SW_HEADPHONE_INSERT)); // the Brick's jack: headphone and microphone switches
-        assert!(!has_bit("2", SW_HEADPHONE_INSERT)); // padbridge's pad: SW_TABLET_MODE only
-        assert!(!has_bit("0", SW_HEADPHONE_INSERT));
-        assert!(!has_bit("", SW_HEADPHONE_INSERT));
-        assert!(has_bit("1 0\n", 64));
-    }
 
     #[test]
     fn events_after_a_loss_are_dropped_until_the_next_report() {

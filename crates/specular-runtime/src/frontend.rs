@@ -8,6 +8,9 @@ use std::ffi::{CStr, CString, c_char, c_uint, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
+use specular_core::device::Motors;
+use specular_core::rumble::RumbleLine;
+
 use crate::FrameSlot;
 use crate::core::*;
 
@@ -29,14 +32,32 @@ pub struct Frontend {
     pub save_ram_written: bool,
     /// The environment calls refused so far, each logged once.
     pub refused: HashSet<c_uint>,
+    /// Where the game's rumble goes; None offers the core none.
+    pub rumble: Option<RumbleLine>,
+    /// The rumble the game last asked for. While the game is paused the line is told `STILL`, and
+    /// this is kept to restore on resuming.
+    pub motors: Motors,
+    pub paused: bool,
+}
+
+impl Frontend {
+    /// Pauses or resumes the game's rumble.
+    pub fn pause_rumble(&mut self, paused: bool) {
+        self.paused = paused;
+        if let Some(line) = &self.rumble { line.set_game(if paused { Motors::STILL } else { self.motors }); }
+    }
 }
 
 thread_local! {
     static FRONTEND: RefCell<Option<Frontend>> = const { RefCell::new(None) };
 }
 
-/// Makes `f` the state the callbacks on this thread use (None removes it).
-pub fn install(f: Option<Frontend>) { FRONTEND.with(|s| *s.borrow_mut() = f); }
+/// Makes `f` the state the callbacks on this thread use (None removes it). The rumble of the one
+/// it replaces stops.
+pub fn install(f: Option<Frontend>) {
+    let old = FRONTEND.with(|s| s.replace(f));
+    if let Some(line) = old.and_then(|o| o.rumble) { line.set_game(Motors::STILL); }
+}
 
 /// Runs `f` on the installed state; does nothing without one.
 pub fn with<R>(f: impl FnOnce(&mut Frontend) -> R) -> Option<R> {
@@ -109,6 +130,11 @@ impl Frontend {
                 }
                 ENV_GET_LOG_INTERFACE => { (*(data as *mut LogCallback)).log = crate::log::specular_log; true }
                 ENV_SAVE_RAM_WRITTEN => { self.save_ram_written = true; true }
+                ENV_GET_RUMBLE_INTERFACE if self.rumble.is_some() => {
+                    eprintln!("game: the core uses rumble");
+                    (*(data as *mut RumbleInterface)).set_rumble_state = set_rumble_state;
+                    true
+                }
                 ENV_GET_INPUT_BITMASKS | ENV_SET_INPUT_DESCRIPTORS | ENV_SET_CONTROLLER_INFO | ENV_SET_MEMORY_MAPS
                 | ENV_SET_SUPPORT_ACHIEVEMENTS | ENV_SET_SUPPORT_NO_GAME | ENV_SET_PERFORMANCE_LEVEL
                 | ENV_SET_CORE_OPTIONS_DISPLAY | ENV_SET_MINIMUM_AUDIO_LATENCY | ENV_SET_SYSTEM_AV_INFO
@@ -170,6 +196,21 @@ unsafe extern "C" fn audio_batch(data: *const i16, frames: usize) -> usize {
         f.samples.extend_from_slice(s);
     });
     frames
+}
+
+/// The game's rumble, for the first player only. While paused (a reset or a state loaded from the
+/// menu runs the core then) it is only kept, for resuming.
+unsafe extern "C" fn set_rumble_state(port: c_uint, effect: c_uint, strength: u16) -> bool {
+    with(|f| {
+        let Some(line) = f.rumble.as_ref().filter(|_| port == 0) else { return false };
+        match effect {
+            RUMBLE_STRONG => f.motors.strong = strength,
+            RUMBLE_WEAK => f.motors.weak = strength,
+            _ => return false,
+        }
+        if !f.paused { line.set_game(f.motors); }
+        true
+    }).unwrap_or(false)
 }
 
 /// Buttons are read when the core asks (`input_state`), so as late as possible.

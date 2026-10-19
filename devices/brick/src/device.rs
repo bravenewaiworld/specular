@@ -52,6 +52,8 @@ impl Device for Brick {
             installer: Some(Box::new(crate::install::BrickInstaller)),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
+            // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.
+            rumble: Some(Box::new(specular_linux::rumble::EvdevRumble::new())),
         }
     }
 

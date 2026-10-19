@@ -14,6 +14,11 @@ const MAX_ADJUST: f64 = 0.005;
 /// rate, with no speed correction (see `game_thread`).
 pub const MAX_SPEED_CHANGE: f64 = 0.05;
 
+/// The loudest sample in `samples`, left or right: 0 to 32768.
+pub fn peak(samples: &[[i16; 2]]) -> u16 {
+    samples.iter().map(|[l, r]| l.unsigned_abs().max(r.unsigned_abs())).max().unwrap_or(0)
+}
+
 /// Linear interpolation between consecutive stereo frames, keeping its position across calls.
 #[derive(Default)]
 struct Resampler {
@@ -102,6 +107,13 @@ mod tests {
         Resampler::default().process(&input[..100], 2.0, &mut up);
         assert!((up.len() as i32 - 200).abs() <= 2);
         assert_eq!(up[5], [3, -3]); // halfway between frames 2 and 3, rounded up
+    }
+
+    #[test]
+    fn the_peak_is_the_loudest_sample_either_side() {
+        assert_eq!(peak(&[[10, -300], [200, 5]]), 300);
+        assert_eq!(peak(&[[i16::MIN, 0]]), 32768);
+        assert_eq!(peak(&[]), 0);
     }
 
     struct Queue { queued: usize, written: Vec<[i16; 2]> }

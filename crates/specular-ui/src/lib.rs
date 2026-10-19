@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, VecModel};
 use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
-use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Output, Rgb};
+use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble};
+use specular_core::effects::{self, Effects, Event};
+use specular_core::rumble::RumbleLine;
 use specular_core::library::Game;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
@@ -157,6 +159,8 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         Some(jack) => { std::thread::spawn(move || jack.watch(Box::new(|plugged| post(Msg::Headphones(plugged))))); }
         None => eprintln!("input: this device has no headphone detection; headphones get the speaker's volume"),
     }
+    let rumble = hardware.rumble.take().map(rumble_thread);
+    if rumble.is_none() { eprintln!("rumble: this device has none"); }
     let mut app = App::new(systems.clone(), builtin::settings());
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
@@ -209,6 +213,12 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         tint: Cell::new(None),
         stats_timer: slint::Timer::default(),
         frame_times: RefCell::default(),
+        rumble,
+        effects: RefCell::new(Effects::new(effects::builtin())),
+        effects_timer: slint::Timer::default(),
+        effects_due: Cell::new(None),
+        lights_ready: Cell::new(false),
+        lights_shown: Cell::new(None),
         art_worker,
         art_online: Cell::new(online),
         art_loader,
@@ -265,11 +275,13 @@ fn playable_systems() -> Vec<specular_core::library::SystemDecl> {
 /// Exits if the game's core gets stuck (see `Session::watch`): its thread can't be stopped, so
 /// the only way out is to end Specular, which the service manager then starts again. The battery
 /// save is as the game last wrote it, at most about 10 s old. The launch record, left behind,
-/// says why, for the notice after the restart.
-fn watch_game(p: &game::Playing) {
+/// says why, for the notice after the restart. The rumble stops at once, rather than run on until
+/// Specular has ended.
+fn watch_game(p: &game::Playing, rumble: Option<RumbleLine>) {
     let (path, mut record) = p.record.clone();
     p.session.watch(STUCK_LIMIT, move || {
         eprintln!("game: the core has spent {} s on one frame; it has stopped responding, restarting", STUCK_LIMIT.as_secs());
+        if let Some(line) = rumble { line.set_level(0); } // for good: effects still run until the exit
         record.reason = Some("it stopped responding".into());
         if let Err(e) = record.write(&path) { eprintln!("game: launch record {}: {e}", path.display()); }
         on_ui(|r| r.toast("The game stopped responding. Restarting…"));
@@ -421,6 +433,26 @@ fn installer_thread(installer: Box<dyn specular_core::install::Installer>) -> mp
     tx
 }
 
+/// The rumble's thread: runs the motors as the line says, skipping to the latest state when it
+/// falls behind (setting the motors can block). Each different error is logged once; the first
+/// success after errors logs "working again".
+fn rumble_thread(mut rumble: Box<dyn Rumble>) -> RumbleLine {
+    let line = RumbleLine::default();
+    let wanted = line.clone();
+    let spawned = std::thread::Builder::new().name("rumble".into()).spawn(move || {
+        let (mut motors, mut failing) = (Motors::STILL, None);
+        loop {
+            motors = wanted.next(motors);
+            match rumble.set(motors) {
+                Ok(()) => if failing.take().is_some() { eprintln!("rumble: working again"); },
+                Err(e) => { let e = e.to_string(); if failing.as_ref() != Some(&e) { eprintln!("rumble: {e}"); failing = Some(e); } }
+            }
+        }
+    });
+    if let Err(e) = spawned { eprintln!("rumble: can't start its thread: {e}"); }
+    line
+}
+
 /// A settings file to write.
 struct Save(PathBuf, serde_json::Map<String, serde_json::Value>);
 
@@ -552,6 +584,18 @@ struct Runner {
     stats_timer: slint::Timer,
     /// The UI's animation frames, measured while the frame statistics are on.
     frame_times: RefCell<Option<frames::FrameTimes>>,
+    /// The line to the rumble's thread (None on a device without rumble).
+    rumble: Option<RumbleLine>,
+    /// The lights' and the rumble's effects (see `show_lights`).
+    effects: RefCell<Effects>,
+    /// Fires when an effect next changes: at `effects_due` (on `now()`'s clock; None while stopped).
+    effects_timer: slint::Timer,
+    effects_due: Cell<Option<Duration>>,
+    /// Whether the accents' settings have been applied: until then the lights aren't set (they
+    /// would show the default colours, not the user's).
+    lights_ready: Cell<bool>,
+    /// What the lights were last set to (their colour per accent, and the LEDs' brightness).
+    lights_shown: Cell<Option<([Rgb; 2], i64)>>,
     art_worker: mpsc::Sender<art::ArtCmd>,
     /// Whether the art worker was last told the network is there.
     art_online: Cell<bool>,
@@ -591,6 +635,7 @@ impl Runner {
             Msg::Button(e) if e.button == Button::Power && e.time < self.ignore_power_until.get() => return,
             Msg::Woke => self.ignore_power_until.set(now() + WAKE_GRACE),
             Msg::Library { games, .. } => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
+            Msg::Battery(b) => self.tell_effects(Event::Battery(*b)),
             _ => {}
         }
         let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_));
@@ -629,10 +674,13 @@ impl Runner {
             }
             Effect::Apply { key, value } => self.apply_setting(key, &value),
             Effect::Launch(game) => self.launch(&game),
-            Effect::PauseGame(paused) => self.with_game(|p| { p.pause(paused); Ok("") }),
-            Effect::SaveState => self.with_game(|p| p.session.save_state(&p.state).map(|()| "State saved")),
-            Effect::LoadState => self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") }),
-            Effect::ResetGame => self.with_game(|p| { p.session.reset(); Ok("") }),
+            Effect::PauseGame(paused) => {
+                self.with_game(|p| { p.pause(paused); Ok("") });
+                if paused { self.tell_effects(Event::GameStopped); }
+            }
+            Effect::SaveState => if self.with_game(|p| p.session.save_state(&p.state).map(|()| "State saved")) { self.tell_effects(Event::StateSaved) },
+            Effect::LoadState => { self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") }); }
+            Effect::ResetGame => { self.with_game(|p| { p.session.reset(); Ok("") }); }
             Effect::Notice(text) => self.toast(&text),
             Effect::Mute(muted) => { let _ = self.hardware.send(HwCmd::Muted(muted)); }
             Effect::ShowVolume { level, muted, output } => {
@@ -656,11 +704,13 @@ impl Runner {
                 // (The game's texture is freed, and stops being shown, at the next draw.)
                 if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
+                self.tell_effects(Event::GameStopped);
             }
             Effect::Sleep => {
                 self.ignore_power_until.set(Duration::MAX); // until `Msg::Woke`
                 // A game's battery save is written first: power can fail while asleep.
                 self.with_game(|p| { p.pause(true); p.session.flush().map(|()| "") });
+                self.tell_effects(Event::GameStopped);
                 let _ = self.hardware.send(HwCmd::Sleep);
             }
             // A running game was quit by the `QuitGame` just before this, which writes its saves.
@@ -677,14 +727,15 @@ impl Runner {
     }
 
     /// Runs `f` on the game being played, if any, and shows what it says (nothing for "") or
-    /// its error.
-    fn with_game(&self, f: impl FnOnce(&game::Playing) -> std::io::Result<&'static str>) {
-        let result = match self.playing.borrow().as_ref() { Some(p) => f(p), None => return };
+    /// its error. Returns whether it ran and succeeded.
+    fn with_game(&self, f: impl FnOnce(&game::Playing) -> std::io::Result<&'static str>) -> bool {
+        let result = match self.playing.borrow().as_ref() { Some(p) => f(p), None => return false };
         match result {
             Ok("") => {}
             Ok(done) => self.toast(done),
-            Err(e) => { eprintln!("game: {e}"); self.toast(&format!("That didn't work: {e}")); }
+            Err(e) => { eprintln!("game: {e}"); self.toast(&format!("That didn't work: {e}")); return false; }
         }
+        true
     }
 
     /// Sends sound to `output` from now on: its volume, the next game, and the game being played.
@@ -749,7 +800,10 @@ impl Runner {
             let fps = s.frames.saturating_sub(last);
             last = s.frames;
             let sound = s.sound_queued.map_or("no sound".into(), |q| format!("sound queued {:.0} ms", q.as_secs_f64() * 1e3));
-            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms · {sound}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
+            // (What the motors are told now, the game's and the effects' together.)
+            let rumble = r.rumble.as_ref().map(|l| l.wanted()).filter(|&m| m != Motors::STILL)
+                .map_or(String::new(), |m| format!(" · rumble {} %", m.strong.max(m.weak) as u32 * 100 / 0xffff));
+            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms · {sound}{rumble}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
         });
     }
 
@@ -785,7 +839,7 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
-        game::Playing::start(game, &system, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.window.clone(),
+        game::Playing::start(game, &system, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
             move |r| on_ui(move |me| me.started(launch, r)));
     }
 
@@ -801,7 +855,7 @@ impl Runner {
         }
         match result {
             Ok(p) => {
-                watch_game(&p);
+                watch_game(&p, self.rumble.clone());
                 // The output may have failed to open (the app then picks another), or changed while
                 // the game loaded.
                 let failed = p.sound_failed && *p.output.borrow() == *self.output.borrow();
@@ -820,6 +874,47 @@ impl Runner {
                 post(Msg::GameEnded(Some(e)));
             }
         }
+    }
+
+    /// The game has a new frame: draw it, and, while the game has the buttons (not under its menu),
+    /// give the effects the loudest of its sound since the last.
+    fn game_frame(&self) {
+        if let Some(w) = self.window.upgrade() { w.window().request_redraw(); }
+        if self.app.borrow().input_target() != InputTarget::Game { return; }
+        let Some(peak) = self.playing.borrow().as_ref().map(|p| p.session.take_sound_peak()) else { return };
+        self.tell_effects(Event::Sound(peak));
+    }
+
+    /// Gives `event` to the effects (logging each that starts) and shows what they show now.
+    fn tell_effects(&self, event: Event) {
+        self.effects.borrow_mut().event(event, now(), |name| eprintln!("effects: {name}"));
+        self.show_lights();
+    }
+
+    /// Shows what the lights show now, the accents (the system's tint, if there is one, in place of
+    /// the first) under any effect running, on the LEDs and the on-screen light bar (which shows
+    /// the LED bar's colour, the first accent's), passes the effects' rumble on, and arms the timer
+    /// for the effects' next change.
+    fn show_lights(&self) {
+        let [first, second] = self.accents();
+        let (frame, due) = self.effects.borrow().frame(now(), [self.tint.get().unwrap_or(first), second]);
+        let level = self.app.borrow().ctx().settings.get(builtin::LED_BRIGHTNESS, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
+        let shown = Some((frame.lights, level));
+        if self.lights_ready.get() && self.lights_shown.replace(shown) != shown {
+            let Rgb(r, g, b) = frame.light(Accent::First);
+            if let Some(w) = self.window.upgrade() { w.global::<Theme>().set_tint(slint::Color::from_rgb_u8(r, g, b)); }
+            let scale = |c: u8| (c as i64 * level / builtin::LED_BRIGHTNESS_MAX) as u8;
+            let leds = self.profile.leds.iter().map(|&led| { let Rgb(r, g, b) = frame.light(led); Rgb(scale(r), scale(g), scale(b)) });
+            let _ = self.hardware.send(HwCmd::Lights(leds.collect()));
+        }
+        if let Some(line) = &self.rumble { line.set_effects(frame.rumble); }
+        if self.effects_due.replace(due) == due { return; }
+        let Some(due) = due else { return self.effects_timer.stop() };
+        self.effects_timer.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), || {
+            let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+            r.effects_due.set(None); // so the same deadline, if it comes again, re-arms the timer
+            r.show_lights();
+        });
     }
 
     /// Before each frame is drawn: the game's newest frame goes into its texture.
@@ -847,6 +942,7 @@ impl Runner {
     /// Carries out the settings the device acts on; ignores the rest.
     fn apply_setting(&self, key: &'static str, value: &serde_json::Value) {
         let level = value.as_i64().unwrap_or(0);
+        self.effects.borrow_mut().apply(key, value);
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
             builtin::VOLUME | builtin::HEADPHONE_VOLUME | builtin::BLUETOOTH_VOLUME => HwCmd::Volume { setting: key, level: level as u8 },
@@ -855,45 +951,39 @@ impl Runner {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
                 return;
             }
-            // The theme and the LEDs each depend on several settings, so they read them back from
-            // the settings (already updated) rather than taking `value`.
-            builtin::ACCENT | builtin::SECOND_ACCENT | builtin::LED_BRIGHTNESS => { self.show_theme(); self.show_lights(); return; }
+            builtin::RUMBLE => { if let Some(line) = &self.rumble { line.set_level(level as u8); } return; }
+            // The theme and the lights each depend on several settings, so they are read back from
+            // the settings (already updated) rather than taken from `value`.
+            builtin::ACCENT | builtin::SECOND_ACCENT | builtin::LED_BRIGHTNESS => {
+                self.show_theme();
+                self.lights_ready.set(true);
+                self.show_lights();
+                return;
+            }
+            // An effect turned off stops showing.
+            builtin::LOW_BATTERY_LIGHTS | builtin::SAVE_FLASH | builtin::RUMBLE_FOLLOWS_SOUND => { self.show_lights(); return; }
             _ => return,
         };
         let _ = self.hardware.send(cmd);
     }
 
     /// The accent and second accent, as the settings resolve them.
-    fn accents(&self) -> (Rgb, Rgb) {
+    fn accents(&self) -> [Rgb; 2] {
         let app = self.app.borrow();
         let s = &app.ctx().settings;
         let first = s.colour(builtin::ACCENT, &Layer::Global).unwrap_or_default();
-        (first, s.colour(builtin::SECOND_ACCENT, &Layer::Global).unwrap_or(first))
+        [first, s.colour(builtin::SECOND_ACCENT, &Layer::Global).unwrap_or(first)]
     }
 
-    /// Sets the theme's colours: the light bar's is the tint, if there is one.
+    /// Sets the theme's colours, but for the light bar's tint, which `show_lights` sets with the LEDs.
     fn show_theme(&self) {
         let Some(w) = self.window.upgrade() else { return };
-        let (first, second) = self.accents();
+        let [first, second] = self.accents();
         let colour = |Rgb(r, g, b): Rgb| slint::Color::from_rgb_u8(r, g, b);
         let theme = w.global::<Theme>();
         theme.set_accent(colour(first));
-        theme.set_tint(colour(self.tint.get().unwrap_or(first)));
         theme.set_focus(colour(second));
         theme.set_warning(colour(palette::WARNING));
-    }
-
-    /// Sets the LEDs to the accents at the LED brightness, with the tint, if there is one, in place
-    /// of the first accent.
-    fn show_lights(&self) {
-        let (first, second) = self.accents();
-        let first = self.tint.get().unwrap_or(first);
-        let level = self.app.borrow().ctx().settings.get(builtin::LED_BRIGHTNESS, &Layer::Global).and_then(|(v, _)| v.as_i64()).unwrap_or(0);
-        let scale = |c: u8| (c as i64 * level / builtin::LED_BRIGHTNESS_MAX) as u8;
-        let _ = self.hardware.send(HwCmd::Lights(self.profile.leds.iter().map(|led| {
-            let Rgb(r, g, b) = match led { Accent::First => first, Accent::Second => second };
-            Rgb(scale(r), scale(g), scale(b))
-        }).collect()));
     }
 
     /// Arms `timer` to give the app a `Tick` at `due`, or stops it if nothing is due. Re-armed
@@ -972,7 +1062,7 @@ impl Runner {
         let (held, playing, tint) = (self.repeating.get(), app.playing().is_some(), app.tint());
         drop(app);
         // Recoloured only when the tint changes (LED writes can be slow).
-        if tint != self.tint.replace(tint) { self.show_theme(); self.show_lights(); }
+        if tint != self.tint.replace(tint) { self.show_lights(); }
         // While a game is played the library is hidden and its menu has no art, so no art is
         // loaded (see `launch`).
         if !playing { self.update_art(&w, &view, focus, &layout.drawn, held); }

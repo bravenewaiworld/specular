@@ -14,6 +14,7 @@ pub const ENV_GET_VARIABLE: c_uint = 15;
 pub const ENV_SET_VARIABLES: c_uint = 16;
 pub const ENV_GET_VARIABLE_UPDATE: c_uint = 17;
 pub const ENV_SET_SUPPORT_NO_GAME: c_uint = 18;
+pub const ENV_GET_RUMBLE_INTERFACE: c_uint = 23;
 pub const ENV_GET_LOG_INTERFACE: c_uint = 27;
 pub const ENV_GET_SAVE_DIRECTORY: c_uint = 31;
 pub const ENV_SET_SYSTEM_AV_INFO: c_uint = 32;
@@ -38,6 +39,10 @@ pub const DEVICE_JOYPAD: c_uint = 1;
 /// Asks for every joypad button at once, as a bit mask.
 pub const DEVICE_ID_JOYPAD_MASK: c_uint = 256;
 pub const MEMORY_SAVE_RAM: c_uint = 0;
+
+/// `retro_rumble_effect`: which motor `set_rumble_state` sets.
+pub const RUMBLE_STRONG: c_uint = 0;
+pub const RUMBLE_WEAK: c_uint = 1;
 
 pub const PIXEL_0RGB1555: c_uint = 0;
 pub const PIXEL_XRGB8888: c_uint = 1;
@@ -84,6 +89,9 @@ pub struct Variable { pub key: *const c_char, pub value: *const c_char }
 
 #[repr(C)]
 pub struct Message { pub msg: *const c_char, pub frames: c_uint }
+
+#[repr(C)]
+pub struct RumbleInterface { pub set_rumble_state: unsafe extern "C" fn(c_uint, c_uint, u16) -> bool }
 
 #[repr(C)]
 pub struct LogCallback { pub log: unsafe extern "C" fn(c_uint, *const c_char, ...) }

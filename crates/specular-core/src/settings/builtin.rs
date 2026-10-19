@@ -32,6 +32,18 @@ pub const WIFI_KEEP_ON: &str = "dev.wifi_keep_on";
 pub const LED_BRIGHTNESS: &str = "lights.brightness";
 /// The LEDs' brightness steps (0 = off).
 pub const LED_BRIGHTNESS_MAX: i64 = 5;
+/// The LEDs and the on-screen light bar pulse in the warning colour as the battery becomes low
+/// (`effects::LowBattery`).
+pub const LOW_BATTERY_LIGHTS: &str = "lights.low_battery";
+/// The LEDs and the on-screen light bar flash as a game saves (`effects::SaveFlash`).
+pub const SAVE_FLASH: &str = "lights.save_flash";
+/// How strongly the device rumbles: in `RUMBLE_MAX`ths of what the game or an effect asks (0 =
+/// never; see `rumble::RumbleLine`).
+pub const RUMBLE: &str = "rumble.strength";
+/// The rumble strength's top step: as strongly as asked.
+pub const RUMBLE_MAX: i64 = 5;
+/// The device rumbles with the game's loud sounds (`effects::FollowSound`).
+pub const RUMBLE_FOLLOWS_SOUND: &str = "rumble.follow_sound";
 /// The accent (a palette id): the on-screen light bar, toggles and unfocused gauges, and the LEDs
 /// the device profile marks `Accent::First`.
 pub const ACCENT: &str = "appearance.accent";
@@ -80,6 +92,19 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "How bright the device's lights are, from 0 (off) to 5 (brightest).",
             kind: SettingKind::Int { min: 0, max: LED_BRIGHTNESS_MAX, step: 1, unit: "" }, default: json!(3),
             visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: LOW_BATTERY_LIGHTS, section: "Lights", label: "Low battery warning",
+            help: "Whether the device's lights, and the bar along the top of the screen, pulse red for a moment as the battery becomes low.",
+            kind: SettingKind::Bool, default: json!(true), visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: SAVE_FLASH, section: "Lights", label: "Flash when the game saves",
+            help: "Whether the device's lights, and the bar along the top of the screen, flash for a moment when the game saves, or a save state is made.",
+            kind: SettingKind::Bool, default: json!(true), visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: RUMBLE, section: "Rumble", label: "Strength",
+            help: "How strongly the device rumbles when a game makes it, from 0 (never) to 5 (as strongly as the game asks).",
+            kind: SettingKind::Int { min: 0, max: RUMBLE_MAX, step: 1, unit: "" }, default: json!(RUMBLE_MAX),
+            visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: RUMBLE_FOLLOWS_SOUND, section: "Rumble", label: "Follow the sound",
+            help: "Whether the device also rumbles with the game's loud sounds, such as explosions and drums, even in games that don't rumble.",
+            kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: ACCENT, section: "Appearance", label: "Accent",
             help: "The main accent colour, by name. It colours the glowing bar along the top of the screen, switches, gauges that aren't selected, and some of the device's lights.",
             kind: SettingKind::Colour { same_as: None }, default: json!("teal"),

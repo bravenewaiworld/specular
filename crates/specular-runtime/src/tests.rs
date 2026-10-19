@@ -42,7 +42,7 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None },
         Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(),
-                  on_frame: Box::new(move || *c.lock().unwrap() += 1) },
+                  on_frame: Box::new(move || *c.lock().unwrap() += 1), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     assert_eq!((session.info().width, session.info().height), (240, 160));
     assert!((session.info().fps - 59.7275).abs() < 0.01, "{}", session.info().fps);
@@ -73,7 +73,7 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
 fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) };
+    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
     let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None };
     assert!(Session::start(spec(dir.path().join("none.so")), out()).is_err());
     if let Some(core) = mgba() { assert!(Session::start(spec(core), out()).err().unwrap().contains("none.gba")); }
@@ -101,7 +101,12 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
     let (save, autosave) = (dir.path().join("writes.srm"), dir.path().join(".states/writes.autosave"));
     let spec = || LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: save.clone(), autosave: Some(autosave.clone()),
                                system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None };
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) };
+    let saves = Arc::new(Mutex::new(0usize));
+    let out = || {
+        let saves = saves.clone();
+        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None,
+                  on_save: Box::new(move || *saves.lock().unwrap() += 1) }
+    };
     let session = Session::start(spec(), out()).unwrap();
     // mGBA makes the ENV_SAVE_RAM_WRITTEN call 15 frames (a quarter of a second) after the game's
     // last write: long before CHECK_INTERVAL.
@@ -110,6 +115,7 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
     assert_eq!((srm.len(), srm[0]), (32 << 10, 0x42)); // detected as SRAM
     assert!(!autosave.exists());
     session.quit().unwrap();
+    assert_eq!(*saves.lock().unwrap(), 1); // the game saved; writing it again on quitting isn't saving
     let state = std::fs::read(&autosave).expect("the autosave written on quitting");
     assert!(!state.is_empty());
     // Started again, it resumes; an autosave the core can't load leaves it starting afresh.
@@ -117,6 +123,39 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
     std::fs::write(&autosave, b"not a state").unwrap();
     Session::start(spec(), out()).unwrap().quit().unwrap();
     assert_ne!(std::fs::read(&autosave).unwrap(), b"not a state"); // replaced on quitting
+}
+
+#[test]
+fn the_games_rumble_stops_while_it_is_paused_and_when_it_ends() {
+    use specular_core::device::Motors;
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    // Drill Dozer's game code, for which mGBA gives the cartridge rumble (on GPIO pin 3), and code
+    // that turns it on.
+    let mut rumbles = rom(&[0xe3a0_0408 /* mov r0, #0x08000000 */, 0xe280_00c4 /* add r0, r0, #0xc4 (GPIO data) */,
+                            0xe3a0_1008 /* mov r1, #8 */, 0xe1c0_10b2 /* strh r1, [r0, #2] (direction: pin 3 out) */,
+                            0xe1c0_10b0 /* strh r1, [r0] (pin 3 on) */, 0xeaff_fffe /* b . */]);
+    rumbles[0xac..0xb0].copy_from_slice(b"V49E");
+    let rom_path = dir.path().join("rumbles.gba");
+    std::fs::write(&rom_path, rumbles).unwrap();
+    let line = RumbleLine::default();
+    line.set_level(specular_core::settings::builtin::RUMBLE_MAX as u8);
+    let session = Session::start(
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("rumbles.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None },
+        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: Some(line.clone()), on_save: Box::new(|| {}) },
+    ).unwrap();
+    let full = Motors { strong: 0xffff, weak: 0xffff };
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(line.wanted(), full);
+    session.pause(true);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(line.wanted(), Motors::STILL);
+    session.pause(false);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(line.wanted(), full);
+    session.quit().unwrap();
+    assert_eq!(line.wanted(), Motors::STILL);
 }
 
 /// A zip of these files, deflated.
@@ -147,7 +186,7 @@ fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs()
     let record = LaunchRecord::new("mGBA", &core, &game);
     let spec = |rom: PathBuf| LaunchSpec { core: core.clone(), rom, save: dir.path().join("game.srm"), autosave: None, system_dir: dir.path().into(),
                                            options: vec![], rom_by_path: true, states_restore_save: false, record: Some((record_path.clone(), record.clone())) };
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::new(FrameSlot::default()), on_frame: Box::new(|| {}) };
+    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::new(FrameSlot::default()), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
     let write = |name: &str, data: &[u8]| { let p = dir.path().join(name); std::fs::write(&p, data).unwrap(); p };
     // mGBA is given the unzipped ROM's path, which has no extension: it tells a GBA ROM by its contents.
     let game = write("game.zip", &zip(&[("readme.txt", b"hello"), ("game.gba", &rom(&[0xeaff_fffe /* b . */]))]));
@@ -204,7 +243,7 @@ fn the_sound_moves_to_a_new_output_between_frames() {
     let (first, second) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let session = Session::start(
         LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None },
-        Outputs { sound: Some(Box::new(Count(first.clone()))), vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) },
+        Outputs { sound: Some(Box::new(Count(first.clone()))), vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(200)); // frames reach the first output
     session.set_sound(Some(Box::new(Count(second.clone()))));
@@ -260,7 +299,7 @@ fn runs_an_nes_game_with_frames_sound_and_its_battery_save() {
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(),
                      options: vec![("nestopia_blargg_ntsc_filter".into(), "disabled".into())], rom_by_path: false, states_restore_save: true, record: None },
-        Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}) },
+        Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(300));
     let f = frames.take().expect("a frame");
@@ -298,7 +337,7 @@ fn runs_a_ps1_game_without_a_bios() {
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().join("bios"),
                      options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], rom_by_path: false, states_restore_save: true, record: None },
-        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}) },
+        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     let f = frames.take().expect("a frame");
@@ -317,7 +356,7 @@ fn a_newer_battery_save_is_kept(core: PathBuf, rom_name: &str, rom: Vec<u8>, opt
     let (save, state, newer) = (dir.path().join("game.srm"), dir.path().join("game.state1"), dir.path().join("game.newer.srm"));
     let spec = || LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: save.clone(), autosave: None, system_dir: dir.path().into(),
         options: options.iter().map(|&(k, v)| (k.into(), v.into())).collect(), rom_by_path: false, states_restore_save: true, record: None };
-    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}) };
+    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
     let run = |load: Option<&Path>, save_to: Option<&Path>| {
         let session = Session::start(spec(), out()).unwrap();
         std::thread::sleep(Duration::from_millis(200));

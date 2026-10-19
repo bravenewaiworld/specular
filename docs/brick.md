@@ -14,6 +14,7 @@ The TrimUI Brick port (`devices/brick`): how Specular draws on the Brick's displ
 - **The LEDs are limited to about 40/255** (2026-10-12), as TrimUI's firmware does: they are very bright at full power.
 - **Volume steps are 2 dB apart, the top one at 0 dB** (2026-10-13). Louder only clips.
 - **Headphones are detected through the codec's jack input device, and the kernel switches the speaker** (2026-10-18). Specular only sets the DAC volume to the level of the output playing. Rejected: the card's "Headphone Jack" control (the same state, but following it needs ALSA's control API and event subscription, where evdev is already read); switching the speaker from Specular (the driver already does it).
+- **Rumble goes through padbridge's gamepad, like any game's** (2026-10-18). Rejected: the motor's own device, `regulator-haptic` (it would skip what padbridge does for every other program, and tie Specular to the Brick's motor).
 - **Long or detached runs on the device go over SSH, not adb** (2026-10-12). The stock adbd kills a session's processes when the session exits.
 
 ## Design
@@ -43,6 +44,7 @@ Buttons come from two evdev devices: padbridge's virtual pad (`TRIMUI Player1`),
 | LEDs | LED class (`specular-linux`), capped as above |
 | Volume | the codec's digital "DAC volume" through `amixer` (0.75 dB per step, 159 = 0 dB), shared by the speaker and the headphone jack: set to the level of whichever plays. Bluetooth volume through bluez-alsa |
 | Headphone jack | the input device `audiocodec sunxi Audio Jack` (`SW_HEADPHONE_INSERT`, `specular-linux`); the codec driver turns the speaker off while headphones are in |
+| Rumble | force feedback (`FF_RUMBLE`) on padbridge's pad, `TRIMUI Player1`, the first gamepad offering it (`specular-linux`); padbridge passes it on to the motor |
 | Sound | ALSA `default`; Bluetooth through bluez-alsa |
 | Vsync | `FBIO_WAITFORVSYNC` on `/dev/fb0`; without it, a timer paces games and the swap the menus |
 | Sleep | `/usr/bin/sleepnow`, which also stops WiFi around sleep (its driver can't suspend while connected) |
@@ -84,7 +86,15 @@ Unless noted, measured with the CPU at the 600–816 MHz the `ondemand` governor
 - (2026-10-18, inferred) Headphones already in at boot are only known if the codec raises its jack-in interrupt when detection is switched on; otherwise the kernel, and so Specular, take the jack as empty until it is next plugged in. After resume the driver reports "empty" unless that interrupt comes within 10 ms (`sunxi_hs_init_work` with `RESUME_IRQ`). Specular follows whatever the kernel reports, so its level always matches the kernel's routing. Source: `sun50iw10-sndcodec.c` (`sunxi_card_dev_probe`, `sunxi_card_resume`).
 - (2026-10-18, inferred) On TrimUI's stock kernel the jack detection is inverted (device tree `hp_detect_case` 0, which Crystaline OS corrects to 1), so there the headphones' and speaker's levels would be swapped. Not handled. Source: Crystaline OS `docs/audio.md`, `system/board/brick/dt-tweaks.sh`.
 
+- (2026-10-18, upstream) padbridge's pad offers `FF_RUMBLE` (16 effects) and passes each upload, erase, play and stop on to the motor's device, `regulator-haptic`, which it opens on the first request. Since 2026-10-18 the pad always offers rumble, even with the motor missing when padbridge starts (uploads then fail with `EIO` until it is found; it is looked for once a second); before, it offered rumble only if the motor was there at start. An upload waits until padbridge answers, with no time limit. Source: Crystaline OS's `userspace/padbridge/padbridge.c` (`handle_rumble`, `motor`), `docs/leds-and-rumble.md`.
+- (2026-10-18, upstream) The motor's strength is its supply voltage: 2.0 V + 1.5 V × magnitude / 65536, from the strong motor's magnitude, or the weak one's if the strong is 0; magnitude 0 turns it off. So any strength above 0 runs it at 2.0 V or more. Source: Crystaline OS's `docs/leds-and-rumble.md`.
+- (2026-10-18, upstream) Each LED brightness write sends a frame down the chain, and Specular writes 42 (3 per LED) for each change of the LEDs; a frame is followed by a 300 µs gap. Source: Crystaline OS's `docs/leds-and-rumble.md`.
+- (2026-10-18, inferred) Specular's rumble effect is erased by the kernel when Specular's file on the pad closes, however Specular ends, which stops it (an erase plays the effect at 0 first), and padbridge passes the erase on to the motor. The EV_FF events Specular writes to the pad also reach its readers, including Specular's own button reader, which ignores them. Source: Linux `drivers/input/ff-core.c` (`erase_effect`), `drivers/input/input.c` (`input_get_disposition`).
+
 ## Open questions
+
+- Does rumble work as built (2026-10-18)? On the Brick: the log's `rumble: TRIMUI Player1 (/dev/input/eventN)` at start-up; `game: the core uses rumble` and the motor running in a game with rumble (Drill Dozer, Pokémon Pinball, WarioWare: Twisted!); the motor stopping when the menu opens, on sleep and on quitting; the "Rumble" strength changing it; and, with "Follow the sound" on, short rumbles on explosions and drums but not steady music. With frame statistics on, the line over the game shows the rumble's strength. Also: how often mGBA's per-frame strengths make Specular upload (each upload sets the motor's voltage over I2C), and whether padbridge restarting mid-game is recovered (`rumble: … is gone`, then found again on the next rumble).
+- Do the lights' effects look right on the LEDs: the low-battery pulse (three half-second pulses as the battery reaches 15 %), and the flash on saving (0.3 s white)? `effects:` lines in the log say when each starts.
 
 - Do animations get exactly one frame per refresh, at 16.6 ms from start to screen, paced by the vsync (built 2026-10-18, not yet measured)? And does a game keep its 60.2 fps and latency with a toast or the volume gauge animating over it? The frame statistics and `s1_slint --vsync` answer it (see DEVELOPMENT.md); `s5_scanout vsync 0` measured the same pacing without Slint.
 - Does the jack work as the kernel source suggests? On the Brick: the log's `input: headphone jack: audiocodec sunxi Audio Jack` at start-up, `input: headphones plugged in`/`unplugged` and `sound: output Headphones` when plugging, mid-game too; the speaker silent with headphones in; the gauge showing the headphones mark; each output keeping its level.

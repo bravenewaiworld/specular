@@ -137,6 +137,27 @@ pub trait SoundOut: Send {
     fn capacity(&self) -> usize;
 }
 
+/// How strongly a rumble's two motors run, 0 (still) to 65535 each, as libretro and Linux's force
+/// feedback take them: the strong (low-frequency) motor and the weak (high-frequency) one. A device
+/// with one motor runs it at the stronger of the two.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Motors { pub strong: u16, pub weak: u16 }
+
+impl Motors {
+    pub const STILL: Motors = Motors { strong: 0, weak: 0 };
+
+    /// The stronger of the two, motor by motor.
+    pub fn max(self, o: Motors) -> Motors { Motors { strong: self.strong.max(o.strong), weak: self.weak.max(o.weak) } }
+}
+
+/// The rumble motors.
+pub trait Rumble: Send {
+    /// Runs the motors at `motors` until the next call (`Motors::STILL` stops them). May block for
+    /// a while (on Linux a program presenting the gamepad may have to answer first), so the UI
+    /// crate calls it on a thread of its own (see `rumble::RumbleLine`).
+    fn set(&mut self, motors: Motors) -> io::Result<()>;
+}
+
 /// The display's refresh, for pacing a game's frames, and the UI's where the device's Slint
 /// platform uses it.
 pub trait Vsync: Send {
@@ -158,6 +179,8 @@ pub struct Hardware {
     pub installer: Option<Box<dyn crate::install::Installer>>,
     /// None on devices that can't tell when headphones are plugged in.
     pub headphones: Option<Box<dyn HeadphoneJack>>,
+    /// None on devices without a rumble motor.
+    pub rumble: Option<Box<dyn Rumble>>,
 }
 
 /// A device: what it is, and its hardware.
@@ -176,11 +199,11 @@ pub trait Device {
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
 }
 
-/// Simulated hardware, for the desktop build: it prints what it is asked to do, its battery
-/// drains from 80 % by 1 % a minute, it has no headphone jack (a desktop key simulates one, see
-/// `specular_ui::run`), and its radios follow a scenario (`wireless::scenario`): the
-/// file named by $SPECULAR_SCENARIO, `{"wifi": <script>, "bluetooth": <script>}`, else a built-in
-/// one with a few networks and devices.
+/// Simulated hardware, for the desktop build: it prints what it is asked to do (rumble too), its
+/// battery drains by 1 % a minute from 80 % (or $SPECULAR_BATTERY %) down to 5 %, it has no
+/// headphone jack (a desktop key simulates one, see `specular_ui::run`), and its radios follow a
+/// scenario (`wireless::scenario`): the file named by $SPECULAR_SCENARIO, `{"wifi": <script>,
+/// "bluetooth": <script>}`, else a built-in one with a few networks and devices.
 pub mod simulated {
     use std::time::Instant;
 
@@ -193,8 +216,9 @@ pub mod simulated {
 
     impl Power for Sim {
         fn battery(&self) -> io::Result<Battery> {
-            let drained = (self.0.elapsed().as_secs() / 60).min(75) as u8;
-            Ok(Battery { percent: Some(80 - drained), charging: false, plugged: false })
+            let start = std::env::var("SPECULAR_BATTERY").ok().and_then(|s| s.parse().ok()).unwrap_or(80u8).clamp(5, 100);
+            let drained = (self.0.elapsed().as_secs() / 60).min(100) as u8;
+            Ok(Battery { percent: Some(start.saturating_sub(drained).max(5)), charging: false, plugged: false })
         }
         fn sleep(&self) -> io::Result<()> { eprintln!("simulated: sleep"); std::thread::sleep(Duration::from_millis(500)); Ok(()) }
         fn shutdown(&self) -> io::Result<()> { eprintln!("simulated: shut down"); Ok(()) }
@@ -210,6 +234,9 @@ pub mod simulated {
     impl Audio for Sim {
         fn set_volume(&self, output: &Output, level: u8) -> io::Result<()> { eprintln!("simulated: {output:?} volume {level}"); Ok(()) }
     }
+    impl Rumble for Sim {
+        fn set(&mut self, m: Motors) -> io::Result<()> { eprintln!("simulated: rumble strong {} weak {}", m.strong, m.weak); Ok(()) }
+    }
 
     pub fn hardware() -> Hardware {
         let t = Instant::now();
@@ -220,6 +247,7 @@ pub mod simulated {
             bluetooth: Some(Box::new(Traced::new("bluetooth", radio(&script, "bluetooth")))),
             installer: Some(Box::new(crate::install::Simulated)),
             headphones: None,
+            rumble: Some(Box::new(Sim(t))),
         }
     }
 

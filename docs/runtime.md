@@ -23,6 +23,7 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 - **mGBA gets only the ROM's path, and maps the file** (2026-10-13). Rejected: handing it the contents, as libretro allows (it copies them, and copies a GBA ROM again on the first write to its cartridge area, as Pokémon games' clock does: 64 MB for a 32 MB ROM).
 - **A zipped ROM is unzipped into memory, and the core given its `/proc/self/fd/<n>` path** (2026-10-18). A memfd holds it, so nothing is written to the card and mGBA still maps the file (its pages are shared, not copied). Only for a core that can't open zips (none among its `valid_extensions`, and no `block_extract`), as libretro has frontends do; the file inside is the first with one of the core's extensions. A ROM that would leave less than 64 MB of memory available (`MemAvailable`) is refused. Saves stay named after the zip. Rejected: building mGBA with zip support (every core would need its own, and our mapping patch works on files); unzipping to a file on the card (writes, and a leftover file after a crash); a temporary file under `/tmp` (tmpfs: the same memory, plus a file to clean up).
 - **Cores' log messages go into Specular's log, through a C shim** (2026-10-18). libretro's log callback is C-variadic, which Rust 1.98 can't define on stable, so `src/log.c` (built with `cc`) formats the message and hands it to Rust. Lines read `core: <core> <level>: <message>`. Debug messages are dropped before they are formatted, and at most 30 are written a second, the rest counted and the count logged, so a core logging every frame costs little and can't flood the log. Rejected: nightly Rust (`c_variadic`); a log thread (writing a line to stderr is cheap, and the cap bounds how many).
+- **Games rumble through libretro's rumble interface, for the first player** (2026-10-18). The core's strong and weak motor strengths go to the rumble thread (see [architecture.md](architecture.md)). The game's rumble is stilled while it is paused (its menu, sleep) and restored on resuming (what the core asks meanwhile, resetting or loading a state from the menu, is kept for then), and stilled when it ends, by the frontend being removed, which also covers a core that fails to load. A crash or the watchdog ending Specular closes its rumble device, and the kernel stops the effect then. Rejected: leaving the rumble on over the menu (a held strength would buzz until the game resumes).
 - **A watchdog ends Specular if a core spends 6 s on one frame** (2026-10-13). A stuck core's thread can't be stopped; the service manager restarts Specular. The battery save is then as the game last wrote it, at most about 10 s old.
 
 ## Design
@@ -49,11 +50,14 @@ pub struct Outputs {
     pub display_hz: f64,
     pub frames: Arc<FrameSlot>,
     pub on_frame: Box<dyn Fn() + Send>,  // called on the game's thread after each new frame
+    pub rumble: Option<RumbleLine>,      // None: the core is offered no rumble
+    pub on_save: Box<dyn Fn() + Send>,   // the game saved in-game (for the effects)
 }
 impl Session {
     pub fn start(spec: LaunchSpec, out: Outputs) -> Result<Session, String>;
     pub fn watch(&self, limit: Duration, stuck: impl FnOnce() + Send + 'static);
     pub fn set_buttons(&self, bits: u16);
+    pub fn take_sound_peak(&self) -> u16;     // the loudest sample since the last call, for the effects
     pub fn pause(&self, paused: bool);
     pub fn set_sound(&self, out: Option<Box<dyn SoundOut>>);  // open it beforehand: opening can block
     pub fn save_state(&self, path: &Path) -> io::Result<()>;
@@ -146,6 +150,7 @@ mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-w
 - (2026-10-14, device) Making a 516 KB mGBA state (pokehns) takes 3.5–4.7 ms of the game's thread with patch `0003`, 6–7 ms without; no frame was late either way. Source: Brick measurements.
 - (2026-10-14, device) zstd level 1 shrinks that state to about 45 KB, in about 6 ms on the writer's thread; decompressing at launch takes about 4 ms. Source: Brick measurements.
 - (2026-10-18, desktop) mGBA plays a ROM given as `/proc/self/fd/<n>`, a path without an extension: it tells GB, GBC and GBA games apart by their contents. Source: `crates/specular-runtime/src/tests.rs`.
+- (2026-10-18, upstream) mGBA asks for the rumble interface only when a game first rumbles, then sets both motors to the same strength each frame: the share of the frame the cartridge's rumble pin was on. A GBA cartridge has rumble only if mGBA knows the game (by its code, e.g. Drill Dozer's `V49E`); GB and GBC cartridges by their type in the header (MBC5 with rumble). Source: mGBA's `src/platform/libretro/libretro.c` (`_setRumble`), `src/core/interface.c` (`mRumbleIntegrator`), `src/gba/overrides.c`; `crates/specular-runtime/src/tests.rs` plays the first.
 - (2026-10-13, upstream) mGBA detects Pokémon Emerald hacks itself (128 KiB flash and the cartridge clock). Source: mGBA.
 - (2026-10-13, upstream) libretro keeps the ROM contents it hands a core valid only until loading returns, unless the core asks for longer with `SET_CONTENT_INFO_OVERRIDE` (Specular refuses it). So cores copy what they need, and Specular frees its copy once the core has loaded. Source: libretro.h.
 - (2026-10-13, upstream) The usual NES, SNES and Mega Drive cores are non-commercial (snes9x, Genesis Plus GX, PicoDrive) or possibly GPLv2-only (FCEUmm, and PCSX ReARMed for PS1). GPLv3-compatible candidates: bsnes, BlastEm, QuickNES or Nestopia, and SwanStation. Source: the cores' licences.
