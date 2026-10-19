@@ -3,7 +3,7 @@
 //! a handheld's buttons as a standard gamepad, e.g. the Brick's padbridge, can start after
 //! Specular or restart). The mute switch is reported as the button `Mute`, held while it is on.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
@@ -62,6 +62,16 @@ pub(crate) fn parse_event(buf: &[u8; EVENT_SIZE]) -> (Duration, u16, u16, i32) {
     (time, u16::from_ne_bytes([buf[16], buf[17]]), u16::from_ne_bytes([buf[18], buf[19]]), i32::from_ne_bytes(buf[20..24].try_into().unwrap()))
 }
 
+/// A `struct input_event` of this type, code and value, at time 0 (a device written to ignores
+/// the time).
+pub(crate) fn make_event(kind: u16, code: u16, value: i32) -> [u8; EVENT_SIZE] {
+    let mut buf = [0u8; EVENT_SIZE];
+    buf[16..18].copy_from_slice(&kind.to_ne_bytes());
+    buf[18..20].copy_from_slice(&code.to_ne_bytes());
+    buf[20..24].copy_from_slice(&value.to_ne_bytes());
+    buf
+}
+
 /// The positions of an input device's first 32 switches (bit n is switch n), or None if they
 /// can't be read.
 pub(crate) fn switches(file: &File) -> Option<u32> {
@@ -69,12 +79,16 @@ pub(crate) fn switches(file: &File) -> Option<u32> {
     (unsafe { libc::ioctl(file.as_raw_fd(), EVIOCGSW_4, bits.as_mut_ptr()) } >= 0).then(|| u32::from_le_bytes(bits))
 }
 
-/// An event device as sysfs describes it, for finding one by what it can do.
+/// Where the kernel describes its input devices, and where their nodes are.
+pub(crate) const SYSFS: &str = "/sys/class/input";
+pub(crate) const DEV: &str = "/dev/input";
+
+/// An event device as sysfs describes it, for finding one by its name or what it can do.
 pub(crate) struct EventDevice {
-    /// Its node, e.g. "event3" (under /dev/input).
-    pub node: String,
+    /// Its node, e.g. "event3" (under `DEV`).
+    node: String,
     /// Its name, or the node's if it has none.
-    pub name: String,
+    name: String,
     /// The folder holding its `capabilities/`.
     info: PathBuf,
 }
@@ -86,8 +100,22 @@ impl EventDevice {
     }
 }
 
-/// The event devices in `sysfs` (/sys/class/input), in the order the kernel registered them.
-pub(crate) fn event_devices(sysfs: &Path) -> Vec<EventDevice> {
+/// The first event device in `sysfs` that `wanted` accepts and that opens (from `dev`, with
+/// `options`): its name and file. Logs it, or each that doesn't open (and is skipped), as `what`
+/// (the log line's start, e.g. "rumble").
+pub(crate) fn open_first(sysfs: &Path, dev: &Path, options: &OpenOptions, what: &str, wanted: impl Fn(&EventDevice) -> bool) -> Option<(String, File)> {
+    for d in event_devices(sysfs).into_iter().filter(wanted) {
+        let path = dev.join(&d.node);
+        match options.open(&path) {
+            Ok(file) => { eprintln!("{what}: {} ({})", d.name, path.display()); return Some((d.name, file)); }
+            Err(e) => eprintln!("{what}: {} ({}): {e}; skipped", d.name, path.display()),
+        }
+    }
+    None
+}
+
+/// The event devices in `sysfs` (`SYSFS`), in the order the kernel registered them.
+fn event_devices(sysfs: &Path) -> Vec<EventDevice> {
     let Ok(entries) = std::fs::read_dir(sysfs) else { return Vec::new() };
     let mut nodes: Vec<String> = entries.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.starts_with("event")).collect();
     nodes.sort_by_key(|n| n[5..].parse::<u32>().unwrap_or(u32::MAX));
@@ -106,21 +134,16 @@ fn has_bit(bitmap: &str, bit: u16) -> bool {
 }
 
 fn open_by_name(name: &str) -> Option<File> {
-    for entry in std::fs::read_dir("/sys/class/input").ok()?.flatten() {
-        let node = entry.file_name();
-        let Some(node) = node.to_str().filter(|n| n.starts_with("event")) else { continue };
-        if !std::fs::read_to_string(entry.path().join("device/name")).is_ok_and(|s| s.trim() == name) { continue; }
-        let file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(format!("/dev/input/{node}")).ok()?;
-        // Timestamp events on CLOCK_MONOTONIC (as `clock` reads it) instead of wall-clock time,
-        // which button repeats and latency are measured against. Without it, skip the device.
-        if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSCLOCKID, &libc::CLOCK_MONOTONIC) } < 0 {
-            eprintln!("input: {name}: can't use CLOCK_MONOTONIC timestamps; skipped");
-            return None;
-        }
-        eprintln!("input: {name} open");
-        return Some(file);
+    let d = event_devices(Path::new(SYSFS)).into_iter().find(|d| d.name == name)?;
+    let file = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(Path::new(DEV).join(&d.node)).ok()?;
+    // Timestamp events on CLOCK_MONOTONIC (as `clock` reads it) instead of wall-clock time,
+    // which button repeats and latency are measured against. Without it, skip the device.
+    if unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSCLOCKID, &libc::CLOCK_MONOTONIC) } < 0 {
+        eprintln!("input: {name}: can't use CLOCK_MONOTONIC timestamps; skipped");
+        return None;
     }
-    None
+    eprintln!("input: {name} open");
+    Some(file)
 }
 
 impl Input {

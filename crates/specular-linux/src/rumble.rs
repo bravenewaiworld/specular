@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use specular_core::device::{Motors, Rumble};
 
-use crate::input::{EVENT_SIZE, event_devices};
+use crate::input::{DEV, SYSFS, make_event, open_first};
 
 // linux/input-event-codes.h
 const EV_FF: u16 = 0x15;
@@ -61,7 +61,7 @@ struct Pad { name: String, file: File, effect: i16, playing: bool }
 impl EvdevRumble {
     /// Looks for the gamepad now, logging what it finds; one missing (or gone) is looked for again
     /// when something next rumbles.
-    pub fn new() -> Self { Self::at(Path::new("/sys/class/input"), Path::new("/dev/input")) }
+    pub fn new() -> Self { Self::at(Path::new(SYSFS), Path::new(DEV)) }
 
     fn at(sysfs: &Path, dev: &Path) -> Self {
         let mut r = Self { sysfs: sysfs.into(), dev: dev.into(), pad: None, next_look: Instant::now(), missing: false };
@@ -73,19 +73,11 @@ impl EvdevRumble {
     fn look(&mut self) {
         if Instant::now() < self.next_look { return; }
         self.next_look = Instant::now() + LOOK_AGAIN;
-        for d in event_devices(&self.sysfs).into_iter().filter(|d| d.has("ff", FF_RUMBLE) && d.has("key", BTN_GAMEPAD)) {
-            let path = self.dev.join(&d.node);
-            match File::options().write(true).open(&path) {
-                Ok(file) => {
-                    eprintln!("rumble: {} ({})", d.name, path.display());
-                    self.pad = Some(Pad { name: d.name, file, effect: -1, playing: false });
-                    self.missing = false;
-                    return;
-                }
-                Err(e) => eprintln!("rumble: {} ({}): {e}; skipped", d.name, path.display()),
-            }
-        }
-        if !std::mem::replace(&mut self.missing, true) {
+        let pad = open_first(&self.sysfs, &self.dev, File::options().write(true), "rumble", |d| d.has("ff", FF_RUMBLE) && d.has("key", BTN_GAMEPAD));
+        if let Some((name, file)) = pad {
+            self.pad = Some(Pad { name, file, effect: -1, playing: false });
+            self.missing = false;
+        } else if !std::mem::replace(&mut self.missing, true) {
             eprintln!("rumble: no gamepad offers it (FF_RUMBLE) yet; looking again when something next rumbles");
         }
     }
@@ -124,12 +116,7 @@ impl Pad {
 
     /// Plays the effect (`count` times; it lasts until stopped) or stops it (0).
     fn play(&mut self, count: i32) -> io::Result<()> {
-        // A `struct input_event`: its time (16 bytes, unused here), then type, code and value.
-        let mut event = [0u8; EVENT_SIZE];
-        event[16..18].copy_from_slice(&EV_FF.to_ne_bytes());
-        event[18..20].copy_from_slice(&(self.effect as u16).to_ne_bytes());
-        event[20..24].copy_from_slice(&count.to_ne_bytes());
-        self.file.write_all(&event)
+        self.file.write_all(&make_event(EV_FF, self.effect as u16, count))
     }
 }
 

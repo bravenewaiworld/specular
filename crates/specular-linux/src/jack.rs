@@ -9,7 +9,7 @@ use std::path::Path;
 
 use specular_core::device::HeadphoneJack;
 
-use crate::input::{EV_SW, EV_SYN, EVENT_SIZE, SYN_DROPPED, SYN_REPORT, event_devices, parse_event, switches};
+use crate::input::{DEV, EV_SW, EV_SYN, EVENT_SIZE, SYN_DROPPED, SYN_REPORT, SYSFS, open_first, parse_event, switches};
 
 const SW_HEADPHONE_INSERT: u16 = 2; // linux/input-event-codes.h
 
@@ -18,15 +18,16 @@ pub struct EvdevJack;
 
 impl HeadphoneJack for EvdevJack {
     fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>) {
-        follow(Path::new("/sys/class/input"), Path::new("/dev/input"), plugged);
+        follow(Path::new(SYSFS), Path::new(DEV), plugged);
     }
 }
 
-/// Follows the first input device in `sysfs` (/sys/class/input) with a headphone switch, opened
-/// from `dev` (/dev/input), until it fails. Calls `plugged` with the first state read, then only
+/// Follows the first input device in `sysfs` (`SYSFS`) with a headphone switch, opened from `dev`
+/// (`DEV`), until it fails. Calls `plugged` with the first state read, then only
 /// when the state differs from the last one reported.
 fn follow(sysfs: &Path, dev: &Path, mut plugged: Box<dyn FnMut(bool) + Send>) {
-    let Some((name, mut file)) = find(sysfs, dev) else {
+    let jack = open_first(sysfs, dev, File::options().read(true), "input: headphone jack", |d| d.has("sw", SW_HEADPHONE_INSERT));
+    let Some((name, mut file)) = jack else {
         eprintln!("input: no headphone jack found (no input device has SW_HEADPHONE_INSERT); headphones get the speaker's volume");
         return;
     };
@@ -52,19 +53,6 @@ fn follow(sysfs: &Path, dev: &Path, mut plugged: Box<dyn FnMut(bool) + Send>) {
             None => {}
         }
     }
-}
-
-/// The first event device in `sysfs` whose capabilities include the headphone switch: its name
-/// and the device, opened from `dev`.
-fn find(sysfs: &Path, dev: &Path) -> Option<(String, File)> {
-    for d in event_devices(sysfs).into_iter().filter(|d| d.has("sw", SW_HEADPHONE_INSERT)) {
-        let path = dev.join(&d.node);
-        match File::open(&path) {
-            Ok(file) => { eprintln!("input: headphone jack: {} ({})", d.name, path.display()); return Some((d.name, file)); }
-            Err(e) => eprintln!("input: headphone jack {} ({}): {e}; skipped", d.name, path.display()),
-        }
-    }
-    None
 }
 
 /// What the jack device's events say.
@@ -97,6 +85,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::input::make_event;
 
     #[test]
     fn events_after_a_loss_are_dropped_until_the_next_report() {
@@ -110,11 +99,6 @@ mod tests {
         assert_eq!(j.event(EV_SW, SW_HEADPHONE_INSERT, 0), Some(Seen::Plugged(false)));
     }
 
-    /// A `struct input_event` as the kernel writes it.
-    fn event(kind: u16, code: u16, value: i32) -> Vec<u8> {
-        [&[0u8; 16][..], &kind.to_ne_bytes(), &code.to_ne_bytes(), &value.to_ne_bytes()].concat()
-    }
-
     #[test]
     fn follows_the_device_with_a_headphone_switch_and_reports_changes() {
         let (sysfs, dev) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -125,7 +109,7 @@ mod tests {
         }
         // A plain file stands in for the device: its state can't be read, and its end is where
         // the device fails.
-        let events: Vec<u8> = [1, 1, 0, 1].iter().flat_map(|&v| [event(EV_SW, SW_HEADPHONE_INSERT, v), event(EV_SYN, SYN_REPORT, 0)].concat()).collect();
+        let events: Vec<u8> = [1, 1, 0, 1].iter().flat_map(|&v| [make_event(EV_SW, SW_HEADPHONE_INSERT, v), make_event(EV_SYN, SYN_REPORT, 0)].concat()).collect();
         std::fs::write(dev.path().join("event10"), events).unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s = seen.clone();
