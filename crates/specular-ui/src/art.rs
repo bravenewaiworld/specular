@@ -116,12 +116,12 @@ const RETRY_MISSING: Duration = Duration::from_secs(30 * 24 * 3600);
 /// trying again.
 const RETRY_LATER: Duration = Duration::from_secs(60);
 
-/// Starts the worker, `online` or not (see `ArtCmd::Online`). It calls `stored` (on its own
-/// thread) with a game's ROM path whenever it downloads a new picture. A game is skipped once it
-/// has a picture of its kind; box art is fetched only when no source has that kind's, and never
-/// for a game with the user's own image (which counts as box art). It calls `need_network(true)` when it has a download
-/// waiting for the network, and `need_network(false)` once it has nothing left to do (or is
-/// paused).
+/// Starts the worker, `online` or not (see `ArtCmd::Online`). It calls `stored` (on its own thread)
+/// with a game's ROM path whenever it downloads a new picture. A game is skipped once it has a
+/// picture of its kind; box art is fetched only when no source has that kind's, and never for a
+/// game with the user's own image (which counts as box art). It calls `need_network(true)` when it
+/// has a download waiting for the network, and `need_network(false)` once it has nothing left to do
+/// (or is paused).
 pub fn worker(roms: PathBuf, cache: PathBuf, systems: Vec<SystemDecl>, sources: Vec<Box<dyn ArtSource>>, online: bool,
               stored: impl Fn(PathBuf) + Send + 'static, need_network: impl Fn(bool) + Send + 'static) -> mpsc::Sender<ArtCmd> {
     let (tx, rx) = mpsc::channel();

@@ -74,8 +74,8 @@ impl Sound {
         let queued_time = std::time::Duration::from_secs_f64(queued as f64 / out.rate() as f64);
         self.buf.clear();
         if queued == 0 {
-            // Starting, on a new output, or after an underrun (the game was paused or slow): fill half the queue
-            // with silence, so jitter doesn't starve it again at once.
+            // Starting, on a new output, or after an underrun (the game was paused or slow): fill
+            // half the queue with silence, so jitter doesn't starve it again at once.
             self.buf.resize(target, [0, 0]);
         }
         let fill = (target as f64 - queued as f64) / target.max(1) as f64;

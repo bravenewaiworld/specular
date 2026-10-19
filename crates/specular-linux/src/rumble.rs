@@ -1,8 +1,8 @@
 //! Rumble through Linux force feedback: an `FF_RUMBLE` effect on the first gamepad that offers it
 //! (on handhelds, a program often presents the buttons as a virtual gamepad and passes its rumble
-//! on to the motor, as the Brick's padbridge does). One effect is uploaded, updated as the strength changes, and played
-//! until stopped. The kernel erases a file's effects when it closes, which stops them, so the
-//! motor stops if Specular ends in any way.
+//! on to the motor, as the Brick's padbridge does). One effect is uploaded, updated as the strength
+//! changes, and played until stopped. The kernel erases a file's effects when it closes, which
+//! stops them, so the motor stops if Specular ends in any way.
 
 use std::fs::File;
 use std::io::{self, Write};

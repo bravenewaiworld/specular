@@ -752,7 +752,8 @@ fn parse_message(text: &str) -> Message {
         "CTRL-EVENT-SCAN-RESULTS" => Message::ScanResults,
         "CTRL-EVENT-TERMINATING" => Message::Terminating,
         _ if text.starts_with("Trying to associate with ") || text.starts_with("SME: Trying to authenticate with ") => {
-            // "... (SSID='name' freq=2432 MHz)"; the name isn't escaped for quotes, so up to the last "' freq=".
+            // "... (SSID='name' freq=2432 MHz)"; the name isn't escaped for quotes, so up to the
+            // last "' freq=".
             let ssid = text.split_once("SSID='").and_then(|(_, s)| s.rsplit_once("' freq=")).map(|(s, _)| decode_ssid(s));
             Message::Trying { ssid }
         }

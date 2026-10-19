@@ -2,10 +2,10 @@
 //!
 //! Each setting is a `SettingDecl`. Its value is looked up from the most specific layer that has
 //! one: a game's file, then its system's, then the global file (for a core's option, the core's
-//! file: see `core_options`), then the declared default. Only overrides are stored, so changing
-//! a default in a new version reaches everyone who never changed it. Keys in a file that no declaration knows (settings of a plugin not loaded, or of a
-//! newer version) are kept untouched. A stored value of the wrong type or out of range is
-//! ignored, as if absent.
+//! file: see `core_options`), then the declared default. Only overrides are stored, so changing a
+//! default in a new version reaches everyone who never changed it. Keys in a file that no
+//! declaration knows (settings of a plugin not loaded, or of a newer version) are kept untouched. A
+//! stored value of the wrong type or out of range is ignored, as if absent.
 
 pub mod builtin;
 pub mod core_options;
@@ -252,8 +252,8 @@ impl Settings {
     }
 
     /// The settings screen for `at`: one row per setting of `core`'s (None: Specular's own) that
-    /// may be set there (`settable_at`) and is visible at `show`, under a header per section, in declaration
-    /// order. Rows that override a less specific layer are marked.
+    /// may be set there (`settable_at`) and is visible at `show`, under a header per section, in
+    /// declaration order. Rows that override a less specific layer are marked.
     pub fn rows(&self, at: &Layer, show: Visibility, core: Option<&str>) -> Vec<Row> {
         let mut rows = Vec::new();
         let mut section = "";

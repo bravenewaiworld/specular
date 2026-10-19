@@ -627,8 +627,9 @@ impl Game {
     fn load_state(&mut self, path: &Path) -> io::Result<()> { self.load_state_data(path, std::fs::read(path)?) }
 
     /// Loads `data`, the save state file at `path` (named in the log): one written by
-    /// `Writer::write_state`, or an uncompressed one (as earlier builds wrote them). If the state was made on another disc than the one in
-    /// (the core's states may not keep it), that disc is put in.
+    /// `Writer::write_state`, or an uncompressed one (as earlier builds wrote them). If the state
+    /// was made on another disc than the one in (the core's states may not keep it), that disc is
+    /// put in.
     fn load_state_data(&mut self, path: &Path, mut data: Vec<u8>) -> io::Result<()> {
         let mut tags = StateTags::default();
         if data.starts_with(&ZSTD_MAGIC) {
@@ -804,7 +805,7 @@ fn keep_newer_save(path: &Path, data: &[u8], state: &LoadedState) -> io::Result<
     eprintln!("game: {} (crc32 {crc:08x}) isn't the save the state {} was made with (crc32 {made_with}) and would be overwritten by \
                the save it restored (crc32 {:08x}): keeping it as {}", path.display(), state.path.display(), crc32fast::hash(data), newer.display());
     std::fs::rename(path, &newer)?;
-    std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()
+    specular_core::settings::store::sync_dir(path.parent().unwrap_or(Path::new(".")))
 }
 
 /// What a save state file holds besides the core's state, after its zstd frame: one zstd

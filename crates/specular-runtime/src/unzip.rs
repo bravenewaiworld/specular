@@ -1,9 +1,9 @@
 //! Zipped ROMs, for cores that can't open zips: the ROM is unpacked into memory (a memfd), so a
-//! core that maps its ROM (mGBA) still can, and nothing is written to the card. The core is given
-//! a path ending in the zip's name with the ROM's extension (`Zelda.zip` holding `Zelda (J).fds`
-//! is `Zelda.fds`), since some cores look at the path: Nestopia takes a game for a Famicom Disk System one only
-//! if its path has `.fds` in it, and names that game's own save file after it. That path is a
-//! symbolic link to the memfd's `/proc/self/fd/<n>`, in a folder of this process's own in a
+//! core that maps its ROM (mGBA) still can, and nothing is written to the card. The core is given a
+//! path ending in the zip's name with the ROM's extension (`Zelda.zip` holding `Zelda (J).fds` is
+//! `Zelda.fds`), since some cores look at the path: Nestopia takes a game for a Famicom Disk System
+//! one only if its path has `.fds` in it, and names that game's own save file after it. That path
+//! is a symbolic link to the memfd's `/proc/self/fd/<n>`, in a folder of this process's own in a
 //! private runtime folder (see `link_dir`), which is in memory too.
 
 use std::fs::File;

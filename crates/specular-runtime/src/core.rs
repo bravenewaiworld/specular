@@ -94,7 +94,8 @@ pub struct AvInfo { pub geometry: Geometry, pub timing: Timing }
 #[repr(C)]
 pub struct Variable { pub key: *const c_char, pub value: *const c_char }
 
-/// The most values a core option has in versions 1 and 2 of libretro's core options interface (the arrays end early with a null value).
+/// The most values a core option has in versions 1 and 2 of libretro's core options interface (the
+/// arrays end early with a null value).
 pub const OPTION_VALUES_MAX: usize = 128;
 
 #[repr(C)]

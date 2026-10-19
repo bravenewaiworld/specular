@@ -173,7 +173,8 @@ impl Input {
     pub fn fds(&self) -> impl Iterator<Item = RawFd> + '_ { self.devices.iter().filter_map(|d| d.file.as_ref().map(|f| f.as_raw_fd())) }
 
     /// Reads everything pending. A device that fails is closed, with its buttons released, and
-    /// `retry` brings it back. (`Mute` isn't released: the switch is still where it was, and `retry` re-reads it.)
+    /// `retry` brings it back. (`Mute` isn't released: the switch is still where it was, and
+    /// `retry` re-reads it.)
     pub fn read(&mut self, out: &mut Vec<ButtonEvent>) {
         for d in &mut self.devices {
             let mut buf = [0u8; EVENT_SIZE];

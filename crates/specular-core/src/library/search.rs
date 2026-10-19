@@ -3,11 +3,11 @@
 use super::Game;
 use super::names::push_folded;
 
-/// The games whose titles match `query`, best first: titles that start with it, then titles with
-/// a word that starts with it (or, for a query of several words, a word starting with each, in
-/// any order), then titles that contain it anywhere, even across words; by title within each. Case, accents, spaces and
-/// punctuation are ignored, so "pokemon fire" finds "Pokémon FireRed" and "spiderman" finds
-/// "Spider-Man". Nothing matches a query without a letter or digit.
+/// The games whose titles match `query`, best first: titles that start with it, then titles with a
+/// word that starts with it (or, for a query of several words, a word starting with each, in any
+/// order), then titles that contain it anywhere, even across words; by title within each. Case,
+/// accents, spaces and punctuation are ignored, so "pokemon fire" finds "Pokémon FireRed" and
+/// "spiderman" finds "Spider-Man". Nothing matches a query without a letter or digit.
 pub fn search<'a>(games: &'a [Game], query: &str) -> Vec<&'a Game> {
     let mut q = Folded::default();
     q.set(query);

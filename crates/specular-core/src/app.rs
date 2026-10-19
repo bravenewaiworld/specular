@@ -283,7 +283,8 @@ pub mod screens {
     pub const RESTORE_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore confirm"));
     pub const TASK: ScreenId = ScreenId(std::borrow::Cow::Borrowed("task"));
     pub const CREDITS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("credits"));
-    /// One game's settings, with its path under `roms/` in its params; also opened from the in-game menu, over the paused game.
+    /// One game's settings, with its path under `roms/` in its params; also opened from the in-game
+    /// menu, over the paused game.
     pub const GAME_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game settings"));
     /// The settings of all of one system's games, with the system's id in its params.
     pub const SYSTEM_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("system settings"));

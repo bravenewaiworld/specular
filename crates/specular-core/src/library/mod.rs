@@ -131,12 +131,12 @@ impl CoreDecl {
     pub fn default_of(&self, key: &str) -> Option<&'static str> { self.defaults.iter().find(|(k, _)| *k == key).map(|(_, v)| *v) }
 }
 
-/// mGBA, for GB, GBC and GBA alike. "Remove Known" skips the busy-wait loops of known games,
-/// which saves battery without changing how they run (TrimUI's own setting too). It is mGBA's
-/// default too; it is Specular's so that a change to mGBA's doesn't change it. It gets only the ROM's path, and our build
-/// (tools/core-patches/mgba) maps that file instead of copying it. Given the contents, mGBA copies
-/// them, and copies a GBA ROM again on the first write to its cartridge area (as Pokémon games'
-/// clock does): 64 MB of memory for a 32 MB ROM.
+/// mGBA, for GB, GBC and GBA alike. "Remove Known" skips the busy-wait loops of known games, which
+/// saves battery without changing how they run (TrimUI's own setting too). It is mGBA's default
+/// too; it is Specular's so that a change to mGBA's doesn't change it. It gets only the ROM's path,
+/// and our build (tools/core-patches/mgba) maps that file instead of copying it. Given the
+/// contents, mGBA copies them, and copies a GBA ROM again on the first write to its cartridge area
+/// (as Pokémon games' clock does): 64 MB of memory for a 32 MB ROM.
 const MGBA: &CoreDecl = &CoreDecl {
     name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
     defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,

@@ -1,6 +1,7 @@
 //! JSON files on the SD card (settings, their schemas, and Specular's own records in `cache/` and
-//! `saves/`), written so a power cut can't destroy them. FAT32 has no journal, so a file is never rewritten in place: the
-//! new content goes to `<file>.tmp`, is flushed, and replaces the file with a rename.
+//! `saves/`), written so a power cut can't destroy them. FAT32 has no journal, so a file is never
+//! rewritten in place: the new content goes to `<file>.tmp`, is flushed, and replaces the file with
+//! a rename.
 
 use std::fs::{self, File};
 use std::io::{self, Write};

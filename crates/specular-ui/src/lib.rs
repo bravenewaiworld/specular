@@ -924,7 +924,8 @@ impl Runner {
         let wanted = self.output.borrow().clone();
         let playing = self.playing.borrow();
         let Some(p) = playing.as_ref() else { return };
-        // Reopening isn't needed, and would fail: the game still holds the ALSA device, which doesn't mix.
+        // Reopening isn't needed, and would fail: the game still holds the ALSA device, which
+        // doesn't mix.
         if p.output.borrow().same_stream(&wanted) { *p.output.borrow_mut() = wanted; return; }
         let device = self.device.clone();
         std::thread::spawn(move || {
