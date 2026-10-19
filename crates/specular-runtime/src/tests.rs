@@ -415,13 +415,18 @@ fn a_save_on_the_card_is_kept_unless_the_state_was_made_with_it_or_it_is_being_w
 }
 
 #[test]
-fn a_state_carries_its_save_crc_after_its_zstd_frame() {
+fn a_state_carries_its_save_crc_and_disc_after_its_zstd_frame() {
     let frame = zstd::bulk::compress(b"state", 1).unwrap();
-    let file = with_save_crc(frame.clone(), Some(0x1234_5678));
-    assert_eq!(save_crc_of(&file), Some(0x1234_5678));
-    assert_eq!(zstd::decode_all(file.as_slice()).unwrap(), b"state"); // zstd skips it
-    assert_eq!(save_crc_of(&frame), None);
-    assert_eq!(with_save_crc(frame.clone(), None), frame);
+    let tags = StateTags { save_crc: Some(0x1234_5678), disc: Some(Disc { index: 1, path: "/roms/ps1/Game (Disc 2).bin".into() }) };
+    let file = with_tags(frame.clone(), &tags);
+    assert_eq!(tags_of(&file), tags);
+    assert_eq!(zstd::decode_all(file.as_slice()).unwrap(), b"state"); // zstd skips them
+    assert_eq!(tags_of(&frame), StateTags::default());
+    assert_eq!(with_tags(frame.clone(), &StateTags::default()), frame);
+    // As earlier builds wrote them: the crc alone, and a tag not known.
+    let crc_only = [&frame[..], &SKIPPABLE, &8u32.to_le_bytes(), b"SRAM", &7u32.to_le_bytes(), &SKIPPABLE, &5u32.to_le_bytes(), b"NEW?x"].concat();
+    assert_eq!(tags_of(&crc_only), StateTags { save_crc: Some(7), disc: None });
+    assert_eq!(tags_of(&crc_only[..crc_only.len() - 3]).save_crc, Some(7)); // cut short
 }
 
 
@@ -520,4 +525,114 @@ fn a_core_added_to_the_card_plays_and_its_options_are_learned_from_its_first_gam
     let learnt = cores.find(card.path(), cache.path(), &builtin_systems()).cores[0];
     assert_eq!(*specular_core::settings::core_options::list(learnt), declared);
     assert!(!user_cores::learn(learnt, cache.path(), &declared).unwrap());
+}
+
+/// A PS1 disc image (`.bin`: raw 2352-byte Mode 2 sectors) that is only an ISO 9660 volume
+/// descriptor: enough for SwanStation to open it, not to boot it.
+fn ps1_disc() -> Vec<u8> {
+    let bcd = |n: usize| (n / 10 * 16 + n % 10) as u8;
+    (0..32).flat_map(|lba| {
+        let mut s = vec![0u8; 2352];
+        s[1..11].fill(0xff); // the sync pattern: 00, ten ff, 00
+        let at = lba + 150; // two seconds of lead-in
+        s[12..16].copy_from_slice(&[bcd(at / 75 / 60), bcd(at / 75 % 60), bcd(at % 75), 2]);
+        if lba == 16 { s[24..30].copy_from_slice(b"\x01CD001"); }
+        s
+    }).collect()
+}
+
+#[test]
+fn a_ps1_game_on_two_discs_changes_disc_and_resumes_on_the_one_it_was_on() {
+    use specular_core::app::Discs;
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = core("swanstation") else { eprintln!("skipped: no host SwanStation build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    for n in [1, 2] { std::fs::write(dir.path().join(format!("Game (Disc {n}).bin")), ps1_disc()).unwrap(); }
+    let rom = dir.path().join("Game.m3u");
+    std::fs::write(&rom, "Game (Disc 1).bin\nGame (Disc 2).bin\n").unwrap();
+    let autosave = dir.path().join(".states/Game.autosave");
+    let spec = || LaunchSpec { core: core.clone(), rom: rom.clone(), save: dir.path().join("Game.srm"), autosave: Some(autosave.clone()),
+        system_dir: dir.path().join("bios"), options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None,
+        rom_by_path: false, states_restore_save: true, record: None };
+    let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
+    let on = |disc| Discs { count: 2, current: Some(disc) };
+    let session = Session::start(spec(), out()).unwrap();
+    assert_eq!(session.discs(), on(0));
+    std::thread::sleep(Duration::from_millis(200));
+    session.change_disc(1).unwrap();
+    assert_eq!(session.discs(), on(1));
+    assert_eq!(session.change_disc(2).unwrap_err().to_string(), "the game has no disc 3");
+    assert_eq!(session.discs(), on(1));
+    std::thread::sleep(Duration::from_millis(200));
+    session.quit().unwrap();
+    // The autosave records the disc, and the game resumes on it.
+    let disc = tags_of(&std::fs::read(&autosave).unwrap()).disc.expect("the disc recorded");
+    assert_eq!((disc.index, disc.path), (1, dir.path().join("Game (Disc 2).bin").to_string_lossy().into_owned()));
+    let session = Session::start(spec(), out()).unwrap();
+    assert_eq!(session.discs(), on(1));
+    // SwanStation's own states keep the disc: one made on the second, without Specular's record
+    // of it, loaded on the first, puts the second back.
+    let state = dir.path().join(".states/Game.state1");
+    session.save_state(&state).unwrap();
+    let file = std::fs::read(&state).unwrap();
+    std::fs::write(&state, &file[..zstd::zstd_safe::find_frame_compressed_size(&file).unwrap()]).unwrap();
+    session.change_disc(0).unwrap();
+    session.load_state(&state).unwrap();
+    assert_eq!(session.discs(), on(1));
+    session.change_disc(0).unwrap();
+    assert_eq!(session.discs(), on(0));
+    session.quit().unwrap();
+    assert_eq!(tags_of(&std::fs::read(&autosave).unwrap()).disc.map(|d| d.index), Some(0));
+}
+
+/// A Famicom Disk System BIOS of our own (Nintendo's is copyrighted): it sets the backdrop red,
+/// shows it and loops. 8 KiB, mapped at $e000.
+fn fds_bios() -> Vec<u8> {
+    let mut code = vec![
+        0x78, 0xd8, 0xa2, 0xff, 0x9a, // sei; cld; ldx #$ff; txs
+        0x2c, 0x02, 0x20, 0x10, 0xfb, 0x2c, 0x02, 0x20, 0x10, 0xfb, // wait for two vblanks
+        0xa9, 0x3f, 0x8d, 0x06, 0x20, 0xa9, 0x00, 0x8d, 0x06, 0x20, // PPU address $3f00: the backdrop
+        0xa9, 0x16, 0x8d, 0x07, 0x20, // red
+        0xa9, 0x00, 0x8d, 0x05, 0x20, 0x8d, 0x05, 0x20, // scroll to 0, 0
+        0xa9, 0x0a, 0x8d, 0x01, 0x20, // show the background
+    ];
+    let lp = 0xe000 + code.len() as u16;
+    code.extend([0x4c, lp as u8, (lp >> 8) as u8, 0x40]); // jmp to itself; rti
+    let [rl, rh] = (lp + 3).to_le_bytes();
+    let mut bios = vec![0u8; 8 << 10];
+    bios[..code.len()].copy_from_slice(&code);
+    bios[0x1ffa..].copy_from_slice(&[rl, rh, 0x00, 0xe0, rl, rh]); // NMI, reset, IRQ
+    bios
+}
+
+#[test]
+fn a_zipped_famicom_disk_system_game_is_given_to_nestopia_by_its_extension() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = core("nestopia") else { eprintln!("skipped: no host Nestopia build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("bios")).unwrap();
+    std::fs::write(dir.path().join("bios/disksys.rom"), fds_bios()).unwrap();
+    // fwNES's format: a 16-byte header, then one side of 65500 bytes, blank.
+    let disk = [&b"FDS\x1a\x01"[..], &[0; 11], &vec![0; 65500]].concat();
+    let rom = dir.path().join("Zelda.zip");
+    std::fs::write(&rom, zip(&[("readme.txt", b"hello"), ("Zelda (Japan).FDS", &disk)])).unwrap();
+    // A folder of links left by a process that ended (no pid reaches pid_max) is removed.
+    let pid_max = std::fs::read_to_string("/proc/sys/kernel/pid_max").unwrap();
+    let (links, ours) = (unzip::runtime_dir(), unzip::runtime_dir().join(std::process::id().to_string()));
+    let left = links.join(pid_max.trim());
+    std::fs::create_dir_all(&left).unwrap();
+    std::os::unix::fs::symlink("/proc/self/fd/3", left.join("Old.fds")).unwrap();
+    let frames = Arc::new(FrameSlot::default());
+    let session = Session::start(
+        LaunchSpec { core, rom, save: dir.path().join("Zelda.srm"), autosave: None, system_dir: dir.path().join("bios"),
+                     options: vec![("nestopia_blargg_ntsc_filter".into(), "disabled".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
+        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
+    ).unwrap();
+    assert!(!left.exists());
+    assert!(ours.join("Zelda.fds").is_symlink());
+    std::thread::sleep(Duration::from_millis(300));
+    let f = frames.take().expect("a frame");
+    assert!(f.rgba.chunks(4).all(|p| p[0] > 100 && p[1] < 100), "our BIOS's red backdrop");
+    session.quit().unwrap();
+    assert!(!ours.exists());
 }

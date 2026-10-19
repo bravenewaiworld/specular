@@ -49,14 +49,14 @@ pub struct Playing {
 pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
-    /// Starts `game` with `core` (`App::playing_core`), given these `options`
+    /// Starts `game` with `core` (`App::playing_core`; `extensions` are its system's), given these `options`
     /// (`App::core_options`), its sound on `output` and its rumble on `rumble`, on another thread,
     /// since reading a large ROM or opening a Bluetooth output can take a second or more; then
     /// calls `started` there with the result. The UI is told of each new frame
     /// (`Runner::game_frame`) and each in-game save. Before opening the game's output, that thread
     /// waits for the interface `sounds` to close theirs. A core the user added has the options it
     /// declares learned, once the game has started (`user_cores::learn`).
-    pub fn start(game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, data: &DataRoot, device: &SharedDevice, sounds: &Sounds,
+    pub fn start(game: &Game, core: &'static CoreDecl, extensions: &[&str], options: Vec<(String, String)>, data: &DataRoot, device: &SharedDevice, sounds: &Sounds,
                  output: Output, rumble: Option<RumbleLine>, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
@@ -74,7 +74,7 @@ impl Playing {
             record: Some(record.clone()),
             states_restore_save: core.states_restore_save,
         };
-        if let Err(why) = core.check_bios(&spec.rom, &spec.system_dir) { return started(Err(why)); }
+        if let Err(why) = core.check_bios(&spec.rom, extensions, &spec.system_dir) { return started(Err(why)); }
         let frames = Arc::new(FrameSlot::default());
         // One message to the UI at a time: frames arriving while one is pending are drawn by it.
         let pending = Arc::new(AtomicBool::new(false));

@@ -1,7 +1,10 @@
-//! Zipped ROMs, for cores that can't open zips: the ROM is unpacked into memory (a memfd) and the
-//! core is given its `/proc/self/fd/<n>` path, so a core that maps its ROM (mGBA) still can, and
-//! nothing is written to the card. The path has no extension, so this suits only cores that
-//! recognise a ROM by its contents (as mGBA does), not by its extension.
+//! Zipped ROMs, for cores that can't open zips: the ROM is unpacked into memory (a memfd), so a
+//! core that maps its ROM (mGBA) still can, and nothing is written to the card. The core is given
+//! a path ending in the zip's name with the ROM's extension (`Zelda.zip` holding `Zelda (J).fds`
+//! is `Zelda.fds`), since some cores look at the path: Nestopia takes a game for a Famicom Disk System one only
+//! if its path has `.fds` in it, and names that game's own save file after it. That path is a
+//! symbolic link to the memfd's `/proc/self/fd/<n>`, in a folder of this process's own in a
+//! private runtime folder (see `link_dir`), which is in memory too.
 
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -15,9 +18,17 @@ use crate::core::SystemInfo;
 /// The memory to leave for everything else: a ROM that would leave less is refused.
 const HEADROOM: u64 = 64 << 20;
 
-/// A ROM unpacked into memory. Dropping this frees it, and `path` (which only works inside this
-/// process) stops working.
-pub struct Unzipped { _file: File, pub path: PathBuf }
+/// A ROM unpacked into memory. Dropping this frees it and removes its link (the process's whole
+/// folder of links: there is one at a time, as one game runs at a time): `path` stops working.
+pub struct Unzipped { _file: File, pub path: PathBuf, linked: bool }
+
+impl Drop for Unzipped {
+    fn drop(&mut self) {
+        if self.linked && let Some(dir) = self.path.parent() && let Err(e) = std::fs::remove_dir_all(dir) {
+            eprintln!("game: removing {}: {e}", dir.display());
+        }
+    }
+}
 
 /// Unzips `rom` if it is a zip and the core doesn't list zips among its extensions, unless the
 /// core sets `block_extract` (libretro's way of asking frontends not to unzip). Otherwise None:
@@ -33,8 +44,8 @@ pub fn if_needed(rom: &Path, info: &SystemInfo) -> Result<Option<Unzipped>, Stri
 fn unzip(path: &Path, extensions: &[String], core: &str) -> Result<Unzipped, String> {
     let fail = |log: String, player: String| { eprintln!("game: unzipping {}: {log}", path.display()); player };
     let entries = zip::entries(path).map_err(|e| fail(e.to_string(), format!("the zip can't be read ({e})")))?;
-    let rom = entries.iter().find(|e| extension(Path::new(&e.name)).is_some_and(|x| extensions.contains(&x)));
-    let Some(rom) = rom else {
+    let found = entries.iter().find_map(|e| Some((e, extension(Path::new(&e.name)).filter(|x| extensions.contains(x))?)));
+    let Some((rom, ext)) = found else {
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         return Err(fail(format!("it holds {names:?}; {core} plays only .{} files", extensions.join(", .")), format!("the zip holds no game {core} plays")));
     };
@@ -50,7 +61,52 @@ fn unzip(path: &Path, extensions: &[String], core: &str) -> Result<Unzipped, Str
     let mut file = unsafe { File::from_raw_fd(fd) };
     zip::unpack(path, rom, &mut file).map_err(|e| fail(format!("{}: {e}", rom.name), format!("the zip is damaged ({e})")))?;
     eprintln!("game: unzipped {} ({} bytes) from {} into memory in {} ms", rom.name, rom.size, path.display(), t.elapsed().as_millis());
-    Ok(Unzipped { path: format!("/proc/self/fd/{}", file.as_raw_fd()).into(), _file: file })
+    let fd_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    let named = path.with_extension(&ext).file_name().map(PathBuf::from).unwrap_or_default();
+    let link = link_dir().and_then(|dir| {
+        let link = dir.join(&named);
+        std::os::unix::fs::symlink(&fd_path, &link).map_err(|e| format!("linking {} to {}: {e}", link.display(), fd_path.display()))?;
+        Ok(link)
+    });
+    let (path, linked) = match link {
+        Ok(link) => { eprintln!("game: giving {core} {} (a link to {})", link.display(), fd_path.display()); (link, true) }
+        // Cores that tell a game by its contents (mGBA) can still play it.
+        Err(e) => { eprintln!("game: {e}; giving {core} {}, without the name {}", fd_path.display(), named.display()); (fd_path, false) }
+    };
+    Ok(Unzipped { path, linked, _file: file })
+}
+
+/// The folder holding each Specular process's folder of links (named by its pid):
+/// `$XDG_RUNTIME_DIR/specular` (in memory, and the
+/// user's own), else `specular-<uid>` in the temporary folder (`/tmp`, in memory on a handheld).
+pub(crate) fn runtime_dir() -> PathBuf {
+    match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(d) => PathBuf::from(d).join("specular"),
+        None => std::env::temp_dir().join(format!("specular-{}", unsafe { libc::getuid() })),
+    }
+}
+
+/// An empty folder for this process's links, `<pid>` in `runtime_dir`. One already there (an
+/// ended process's with the same pid, or one whose removal failed) is removed first: only one
+/// `Unzipped` exists at a time, so nothing in it is in use. So are the folders of processes that
+/// have ended (by crashing, say).
+fn link_dir() -> Result<PathBuf, String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let (base, uid) = (runtime_dir(), unsafe { libc::getuid() });
+    let fail = |what: &str, e: &dyn std::fmt::Display| format!("{what} {}: {e}", base.display());
+    if let Err(e) = std::fs::DirBuilder::new().mode(0o700).create(&base) && e.kind() != std::io::ErrorKind::AlreadyExists { return Err(fail("making", &e)); }
+    // Another user's folder (in a shared /tmp) mustn't be used.
+    let meta = std::fs::symlink_metadata(&base).map_err(|e| fail("reading", &e))?;
+    if !meta.is_dir() || meta.uid() != uid { return Err(fail("using", &"not a folder of this user's own")); }
+    let ours = std::process::id().to_string();
+    for entry in std::fs::read_dir(&base).map_err(|e| fail("reading", &e))?.flatten() {
+        let name = entry.file_name();
+        let ended = name.to_str().is_some_and(|pid| pid.parse::<u32>().is_ok() && !Path::new("/proc").join(pid).exists());
+        if (ended || name == *ours) && let Err(e) = std::fs::remove_dir_all(entry.path()) { eprintln!("game: removing {}: {e}", entry.path().display()); }
+    }
+    let dir = base.join(ours);
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).map_err(|e| fail("making a folder in", &e))?;
+    Ok(dir)
 }
 
 /// The memory available for new allocations without swapping (`MemAvailable`: free memory plus

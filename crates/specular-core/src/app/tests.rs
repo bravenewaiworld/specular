@@ -348,6 +348,49 @@ fn the_game_menu_pauses_and_quits() {
 }
 
 #[test]
+fn the_game_menu_changes_the_disc_of_a_game_on_several() {
+    let mut a = app();
+    let discs = |count, current| Msg::Discs(Discs { count, current });
+    let disc_row = |a: &App| a.view().rows.iter().find(|r| r.label == "Disc").map(|r| r.kind.clone());
+    let choice = |options: &[&str], selected| Some(RowKind::Choice { options: options.iter().map(|o| o.to_string()).collect(), selected, swatch: None });
+    let changed = |disc| vec![Effect::ChangeDisc(disc), Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))];
+    assert_eq!(a.handle(discs(3, Some(0))), vec![]); // no game yet
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10);
+    tap(&mut a, Button::Menu, 20);
+    assert_eq!(disc_row(&a), None); // until its core says
+    a.handle(discs(1, Some(0)));
+    assert_eq!(disc_row(&a), None); // one disc
+    assert_eq!(a.handle(discs(3, Some(0))), vec![Effect::Redraw(None)]);
+    assert_eq!(labels(&a)[..3], ["Resume", "Disc", "Save state"]);
+    assert_eq!(disc_row(&a), choice(&["Disc 1 of 3", "Disc 2 of 3", "Disc 3 of 3"], 0));
+    focus_on(&mut a, "Disc");
+    assert_eq!(tap(&mut a, Button::Left, 30), changed(2)); // wraps to the last
+    a.handle(discs(3, Some(2)));
+    tap(&mut a, Button::Menu, 40);
+    focus_on(&mut a, "Disc");
+    assert_eq!(tap(&mut a, Button::Right, 50), changed(0)); // wraps to the first
+    tap(&mut a, Button::Menu, 60);
+    focus_on(&mut a, "Disc");
+    assert_eq!(tap(&mut a, Button::A, 70), changed(0)); // A as right (no `Msg::Discs` since, so the third is still in)
+    // With none in, right puts the first in, left the last.
+    a.handle(discs(3, None));
+    tap(&mut a, Button::Menu, 80);
+    assert_eq!(disc_row(&a), choice(&["Disc 1 of 3", "Disc 2 of 3", "Disc 3 of 3", "No disc"], 3));
+    focus_on(&mut a, "Disc");
+    assert_eq!(tap(&mut a, Button::Right, 90), changed(0));
+    tap(&mut a, Button::Menu, 100);
+    focus_on(&mut a, "Disc");
+    assert_eq!(tap(&mut a, Button::Left, 110), changed(2));
+    // The next game has no Disc row until its core says.
+    tap(&mut a, Button::Menu, 120);
+    for (i, b) in [Button::Up, Button::A].into_iter().enumerate() { tap(&mut a, b, 130 + i as u64 * 10); } // wraps to "Quit game"
+    tap(&mut a, Button::A, 150);
+    tap(&mut a, Button::Menu, 160);
+    assert_eq!(disc_row(&a), None);
+}
+
+#[test]
 fn a_systems_game_list_and_its_games_take_its_colour() {
     let mut a = app();
     let (indigo, violet) = (crate::palette::find("indigo"), crate::palette::find("violet"));

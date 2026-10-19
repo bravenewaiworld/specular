@@ -156,9 +156,15 @@ fn a_missing_bios_stops_only_the_games_that_need_one() {
     let core = |id: &str| systems.iter().find(|s| s.id == id).unwrap().cores[0];
     let bios = tempfile::tempdir().unwrap();
     let (nes, fds, ps1) = (core("nes"), Path::new("Zelda.fds"), core("ps1"));
-    assert!(nes.check_bios(Path::new("Mario.nes"), bios.path()).is_ok());
-    assert_eq!(nes.check_bios(fds, bios.path()).unwrap_err(), "Famicom Disk System games need disksys.rom in the bios folder");
-    assert!(ps1.check_bios(Path::new("Game.cue"), bios.path()).is_ok()); // OpenBIOS instead
+    let ext = &["nes", "fds"];
+    assert!(nes.check_bios(Path::new("Mario.nes"), ext, bios.path()).is_ok());
+    assert_eq!(nes.check_bios(fds, ext, bios.path()).unwrap_err(), "Famicom Disk System games need disksys.rom in the bios folder");
+    assert!(ps1.check_bios(Path::new("Game.cue"), &["cue"], bios.path()).is_ok()); // OpenBIOS instead
+    // A zip by the game inside it.
+    let zipped = bios.path().join("Zelda.zip");
+    std::fs::write(&zipped, zip_of(&["readme.txt", "Zelda (Japan).FDS"])).unwrap();
+    assert!(nes.check_bios(&zipped, ext, bios.path()).is_err());
     touch(bios.path(), "DISKSYS.ROM", b""); // FAT names in any case
-    assert!(nes.check_bios(fds, bios.path()).is_ok());
+    assert!(nes.check_bios(fds, ext, bios.path()).is_ok());
+    assert!(nes.check_bios(&zipped, ext, bios.path()).is_ok());
 }

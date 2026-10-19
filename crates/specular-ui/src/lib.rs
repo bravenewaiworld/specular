@@ -763,7 +763,11 @@ impl Runner {
                 if paused { self.tell_effects(Event::GameStopped); }
             }
             Effect::SaveState => if self.with_game(|p| p.session.save_state(&p.state).map(|()| "State saved")) { self.tell_effects(Event::StateSaved) },
-            Effect::LoadState => { self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") }); }
+            Effect::LoadState => {
+                self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") });
+                self.tell_discs(); // the state may have been made on another disc
+            }
+            Effect::ChangeDisc(disc) => { self.with_game(|p| p.session.change_disc(disc).map(|()| "Disc changed")); self.tell_discs(); }
             Effect::ResetGame => { self.with_game(|p| { p.session.reset(); Ok("") }); }
             Effect::Notice(text) => self.toast(&text),
             Effect::Mute(muted) => { let _ = self.hardware.send(HwCmd::Muted(muted)); }
@@ -808,6 +812,11 @@ impl Runner {
             Effect::SoundTo(output) => self.set_output(output),
             Effect::Sound(sound) => self.sounds.play(sound),
         }
+    }
+
+    /// Tells the app the running game's discs, as its core says now.
+    fn tell_discs(&self) {
+        if let Some(p) = self.playing.borrow().as_ref() { post(Msg::Discs(p.session.discs())); }
     }
 
     /// Runs `f` on the game being played, if any, and shows what it says (nothing for "") or
@@ -924,7 +933,8 @@ impl Runner {
         self.launches.set(launch);
         let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("there is no emulator for {} games", system.map_or(game.system, |s| s.name)))) };
         let options = self.app.borrow().core_options();
-        game::Playing::start(game, core, options, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
+        let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
+        game::Playing::start(game, core, extensions, options, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
             move |r| on_ui(move |me| me.started(launch, r)));
     }
 
@@ -948,6 +958,7 @@ impl Runner {
                 // Its options may have been changed (in its settings, over its menu) while it loaded.
                 p.session.set_options(self.app.borrow().core_options());
                 *self.playing.borrow_mut() = Some(p);
+                self.tell_discs();
                 self.route_sound();
                 // (Kept until now: the list shows under the flying cover.)
                 self.art.borrow_mut().clear();

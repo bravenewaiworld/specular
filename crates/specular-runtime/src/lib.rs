@@ -10,6 +10,7 @@
 //! display's rate is far from the game's, the core is run by a timer at its own frame rate.
 
 mod core;
+mod discs;
 mod frontend;
 mod log;
 mod options;
@@ -24,13 +25,15 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+use specular_core::app::Discs;
 use specular_core::device::{SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
 use specular_core::rumble::RumbleLine;
 use specular_core::settings::core_options::CoreOptions;
 
-use crate::core::Core;
+use crate::core::{Core, DiskControl};
+use crate::discs::Disc;
 use crate::frontend::Frontend;
 
 /// What to run.
@@ -185,6 +188,8 @@ enum Cmd {
     Sound(Option<Box<dyn SoundOut>>),
     /// Gives the core these option values instead; see `Session::set_options`.
     Options(Vec<(String, String)>),
+    Discs(mpsc::Sender<io::Result<Discs>>),
+    ChangeDisc(usize, mpsc::Sender<io::Result<()>>),
     Quit(mpsc::Sender<io::Result<()>>),
 }
 
@@ -260,6 +265,12 @@ impl Session {
     /// Saves the game's state to `path` (zstd-compressed); `load_state` also takes uncompressed ones.
     pub fn save_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::SaveState(path.into(), r)) }
     pub fn load_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::LoadState(path.into(), r)) }
+    /// The game's discs, as its core says now: none for a core without libretro's disk control
+    /// interface. Ask again after `load_state`, which may change the disc in.
+    pub fn discs(&self) -> Discs { self.ask(Cmd::Discs).unwrap_or_default() }
+    /// Puts disc `index` (from 0) in the drive, as `discs` counts them. On failure the disc that
+    /// was in is put back, if the core can; the error is for the player.
+    pub fn change_disc(&self, index: usize) -> io::Result<()> { self.ask(|r| Cmd::ChangeDisc(index, r)) }
     /// Writes the battery save and the autosave (before sleeping, say), returning once they are
     /// on the card. The error is the first of any write since the last flush or save state,
     /// including the ones made in the background.
@@ -268,7 +279,7 @@ impl Session {
     /// Ends the game: writes its battery save and autosave, and unloads the core.
     pub fn quit(mut self) -> io::Result<()> { self.stop() }
 
-    fn ask(&self, cmd: impl FnOnce(mpsc::Sender<io::Result<()>>) -> Cmd) -> io::Result<()> {
+    fn ask<T>(&self, cmd: impl FnOnce(mpsc::Sender<io::Result<T>>) -> Cmd) -> io::Result<T> {
         let (tx, rx) = mpsc::channel();
         self.cmds.send(cmd(tx)).map_err(|_| io::Error::other("the game has stopped"))?;
         rx.recv().map_err(|_| io::Error::other("the game has stopped"))?
@@ -389,6 +400,8 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                 Cmd::Flush(reply) => game.save_all(Some(reply)),
                 Cmd::Sound(out) => sound.set_out(out),
                 Cmd::Options(options) => game.set_options(options),
+                Cmd::Discs(reply) => { let _ = reply.send(Ok(disks().map(|d| d.discs()).unwrap_or_default())); }
+                Cmd::ChangeDisc(index, reply) => { let _ = reply.send(game.change_disc(index).map_err(io::Error::other)); }
                 Cmd::Quit(reply) => { game.save_all(Some(reply)); return; }
             }
             continue;
@@ -475,6 +488,13 @@ impl Game {
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
+        // The autosave to resume from, read before the game loads: the core must be told then
+        // which disc to start on (the autosave's), as its states may not keep the disc.
+        let resume = spec.autosave.as_deref().filter(|p| p.exists()).map(|p| (p, std::fs::read(p)));
+        let disc = resume.as_ref().and_then(|(_, r)| tags_of(r.as_ref().ok()?).disc);
+        if let Some(d) = disc.as_ref() && let Some(disks) = disks() && disks.start_on(d) {
+            eprintln!("game: {name} asked to start on disc {}, which the autosave was made on", d.index + 1);
+        }
         let game = core::GameInfo { path: rom_path.as_ptr(), data: if rom_data.is_empty() { std::ptr::null() } else { rom_data.as_ptr().cast() },
             size: rom_data.len(), meta: std::ptr::null() };
         if !unsafe { (core.load_game)(&game) } {
@@ -490,12 +510,33 @@ impl Game {
                            states_restore_save: spec.states_restore_save, loaded_state: None,
                            autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
         drop(rom);
+        g.log_discs();
         g.read_save();
-        if let Some(p) = spec.autosave.as_deref().filter(|p| p.exists()) && let Err(e) = g.load_state(p) {
+        if let Some((p, data)) = resume && let Err(e) = data.and_then(|d| g.load_state_data(p, d)) {
             // Starting afresh instead: the next autosave replaces it.
             eprintln!("game: resuming from {}: {e}", p.display());
         }
         Ok(g)
+    }
+
+    /// Logs what the core says about its discs, if it has the disk control interface.
+    fn log_discs(&self) {
+        let Some(disks) = disks() else { return };
+        let Discs { count, current } = disks.discs();
+        let labels: Vec<String> = (0..count).map(|i| format!("{:?}", disks.label(i))).collect();
+        eprintln!("game: {}'s discs: {count} ({}), {}", self.name, labels.join(", "), in_drive(current));
+    }
+
+    /// See `Session::change_disc`.
+    fn change_disc(&mut self, to: usize) -> Result<(), String> {
+        let Some(disks) = disks() else { return Err("the game has only the one disc".into()) };
+        let Discs { count, current } = disks.discs();
+        let r = disks.change(to);
+        match &r {
+            Ok(()) => eprintln!("game: {} changed ({}) to disc {} of {count} ({:?})", self.name, in_drive(current), to + 1, disks.label(to)),
+            Err(e) => eprintln!("game: {} changing ({}) to disc {} of {count}: {e}; {}", self.name, in_drive(current), to + 1, in_drive(disks.discs().current)),
+        }
+        r
     }
 
     /// See `Session::set_options`.
@@ -567,24 +608,31 @@ impl Game {
         if size == 0 || !unsafe { (self.core.serialize)(data.as_mut_ptr().cast(), size) } {
             return Err(io::Error::other("the core could not save its state"));
         }
-        let save_crc = self.save_crc();
-        self.writer.write_state(path, data, save_crc);
+        let tags = StateTags { save_crc: self.save_crc(), disc: disks().and_then(|d| d.current()) };
+        self.writer.write_state(path, data, tags);
         Ok(())
     }
 
-    /// Loads a save state written by `Writer::write_state`, or an uncompressed one (as earlier
-    /// builds wrote them).
-    fn load_state(&mut self, path: &Path) -> io::Result<()> {
-        let mut data = std::fs::read(path)?;
-        let mut save_crc = None;
+    fn load_state(&mut self, path: &Path) -> io::Result<()> { self.load_state_data(path, std::fs::read(path)?) }
+
+    /// Loads `data`, the save state file at `path` (named in the log): one written by
+    /// `Writer::write_state`, or an uncompressed one (as earlier builds wrote them). If the state was made on another disc than the one in
+    /// (the core's states may not keep it), that disc is put in.
+    fn load_state_data(&mut self, path: &Path, mut data: Vec<u8>) -> io::Result<()> {
+        let mut tags = StateTags::default();
         if data.starts_with(&ZSTD_MAGIC) {
-            save_crc = save_crc_of(&data);
+            tags = tags_of(&data);
             data = zstd::decode_all(data.as_slice())?;
         }
         if !unsafe { (self.core.unserialize)(data.as_ptr().cast(), data.len()) } {
             return Err(io::Error::other("the core could not load this state"));
         }
-        if self.states_restore_save { self.loaded_state = Some(LoadedState { path: path.into(), save_crc }); }
+        if let Some(disc) = tags.disc && let Some(disks) = disks() && disks.discs().current != Some(disc.index) {
+            eprintln!("game: {} was made on disc {}", path.display(), disc.index + 1);
+            // A disc that can't be put in leaves the game as the state left it.
+            let _ = self.change_disc(disc.index);
+        }
+        if self.states_restore_save { self.loaded_state = Some(LoadedState { path: path.into(), save_crc: tags.save_crc }); }
         Ok(())
     }
 }
@@ -598,6 +646,13 @@ impl Drop for Game {
         frontend::install(None);
     }
 }
+
+/// A copy of the core's disk control interface, if it gave one: to be called outside
+/// `frontend::with` (see the `discs` module).
+fn disks() -> Option<DiskControl> { frontend::with(|f| f.disks).flatten() }
+
+/// "disc 2 in", or "none in", for the log.
+fn in_drive(current: Option<usize>) -> String { current.map_or("none in".into(), |c| format!("disc {} in", c + 1)) }
 
 /// Logs, once the core has loaded its game (by when it has declared its options), how its options
 /// differ from its list, the values it is given, and those it doesn't take.
@@ -661,8 +716,8 @@ enum Job {
     /// A battery save, written as it is. With `loaded_state`, a different save already on the
     /// card is kept first (see `keep_newer_save`).
     Save { path: PathBuf, data: Vec<u8>, loaded_state: Option<LoadedState> },
-    /// A save state: compressed, then followed by the crc32 of the save memory it was made with.
-    State { path: PathBuf, data: Vec<u8>, save_crc: Option<u32> },
+    /// A save state: compressed, then followed by its tags.
+    State { path: PathBuf, data: Vec<u8>, tags: StateTags },
     /// Sends how the writes since the last reply went: the first error, if any failed.
     Reply(mpsc::Sender<io::Result<()>>),
 }
@@ -679,10 +734,10 @@ impl Writer {
                         let written = kept.and_then(|()| write_atomically(&path, &data));
                         (path, written)
                     }
-                    Job::State { path, data, save_crc } => {
+                    Job::State { path, data, tags } => {
                         // Level 1, the fastest of zstd's usual levels: higher ones shrink a GBA
                         // state only about 4 % more.
-                        let data = zstd::bulk::compress(&data, 1).map(|z| with_save_crc(z, save_crc));
+                        let data = zstd::bulk::compress(&data, 1).map(|z| with_tags(z, &tags));
                         let written = data.and_then(|data| write_atomically(&path, &data));
                         (path, written)
                     }
@@ -703,8 +758,8 @@ impl Writer {
     }
     /// Writes a save state, zstd-compressed, to wear the storage less (an autosave is written
     /// every 10 s of play): a Pokémon Emerald state shrinks about 11 times, 516 KiB to 45 KiB.
-    fn write_state(&self, path: PathBuf, data: Vec<u8>, save_crc: Option<u32>) {
-        let _ = self.0.send(Job::State { path, data, save_crc });
+    fn write_state(&self, path: PathBuf, data: Vec<u8>, tags: StateTags) {
+        let _ = self.0.send(Job::State { path, data, tags });
     }
     fn reply(&self, reply: mpsc::Sender<io::Result<()>>) { let _ = self.0.send(Job::Reply(reply)); }
 }
@@ -741,24 +796,48 @@ fn keep_newer_save(path: &Path, data: &[u8], state: &LoadedState) -> io::Result<
     std::fs::File::open(path.parent().unwrap_or(Path::new(".")))?.sync_all()
 }
 
-/// The start of the skippable frame (zstd's tools pass over it) that follows a save state's zstd
-/// frame: marker, length and the tag "SRAM". The crc32 (little-endian) of the save memory the
-/// state was made with comes after it.
-const SAVE_CRC_HEAD: [u8; 12] = {
-    let [a, b, c, d] = 0x184d_2a5e_u32.to_le_bytes(); // one of zstd's skippable frame markers
-    [a, b, c, d, 8, 0, 0, 0, b'S', b'R', b'A', b'M'] // then the frame's length (8), and the tag
-};
+/// What a save state file holds besides the core's state, after its zstd frame: one zstd
+/// skippable frame per tag (zstd's tools pass over them), made of `SKIPPABLE`, a u32 length of
+/// what follows, a 4-byte tag, then its value. Numbers are little-endian.
+#[derive(Debug, Default, PartialEq)]
+struct StateTags {
+    /// `SRAM`: the crc32 of the save memory the state was made with; None if the core has none.
+    save_crc: Option<u32>,
+    /// `DISC`: the disc in (a u32, from 0), then its image's path; only for a game on several.
+    disc: Option<Disc>,
+}
 
-/// Appends the save crc32 frame (`SAVE_CRC_HEAD`) to a compressed state, if there is a crc.
-fn with_save_crc(mut state: Vec<u8>, crc: Option<u32>) -> Vec<u8> {
-    if let Some(crc) = crc { state.extend(SAVE_CRC_HEAD.iter().chain(&crc.to_le_bytes())); }
+/// One of zstd's skippable frame markers.
+const SKIPPABLE: [u8; 4] = 0x184d_2a5e_u32.to_le_bytes();
+
+/// Appends `tags`' frames to a compressed state.
+fn with_tags(mut state: Vec<u8>, tags: &StateTags) -> Vec<u8> {
+    let mut frame = |tag: &[u8; 4], value: &[u8]| {
+        state.extend([&SKIPPABLE[..], &(4 + value.len() as u32).to_le_bytes(), tag, value].concat());
+    };
+    if let Some(crc) = tags.save_crc { frame(b"SRAM", &crc.to_le_bytes()); }
+    if let Some(d) = &tags.disc { frame(b"DISC", &[&(d.index as u32).to_le_bytes()[..], d.path.as_bytes()].concat()); }
     state
 }
 
-/// The save crc32 at the end of a compressed state file, if it has one (see `with_save_crc`).
-fn save_crc_of(file: &[u8]) -> Option<u32> {
-    let (head, crc) = file[file.len().checked_sub(16)?..].split_at(12);
-    (head == SAVE_CRC_HEAD).then(|| u32::from_le_bytes(crc.try_into().unwrap()))
+/// The tags after a compressed state file's zstd frame (see `StateTags`); tags it doesn't know
+/// are skipped.
+fn tags_of(file: &[u8]) -> StateTags {
+    let mut tags = StateTags::default();
+    let mut rest = zstd::zstd_safe::find_frame_compressed_size(file).ok().and_then(|n| file.get(n..)).unwrap_or_default();
+    while rest.len() >= 12 && rest[..4] == SKIPPABLE {
+        let (len, after) = (u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize, &rest[8..]);
+        let Some(body) = after.get(..len) else { break };
+        let (tag, value) = body.split_at(4.min(len));
+        let first_u32 = || Some(u32::from_le_bytes(value.get(..4)?.try_into().unwrap()));
+        match tag {
+            b"SRAM" => tags.save_crc = first_u32(),
+            b"DISC" => tags.disc = first_u32().map(|i| Disc { index: i as usize, path: String::from_utf8_lossy(&value[4..]).into_owned() }),
+            _ => {}
+        }
+        rest = &after[len..];
+    }
+    tags
 }
 
 /// Writes `data` to `path` so a power cut leaves either the old file or the new one (FAT has no

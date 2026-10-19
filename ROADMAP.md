@@ -51,13 +51,13 @@ Completed:
  - Nestopia for the NES (and the Famicom Disk System, with `disksys.rom`), and SwanStation for the PS1 with its software renderer; PS1 games run without a BIOS, on SwanStation's built-in OpenBIOS. Both built for the PC and the Brick, licences checked, and checked on whether their save states restore the save memory (both do)
  - Battery saves protected from cores whose save states also restore the save memory: each state carries a checksum of the save it was made with, and a newer `.srm` that a loaded state would overwrite is kept as `<name>.newer.srm`
  - A game that needs a BIOS file it doesn't have says which file to put in `bios/`; environment calls a core makes that Specular refuses are logged
+ - PS1 games on several discs (an `.m3u`, or a `.pbp` holding several): the disc changes from the in-game menu, and a game resumes on the disc it was on
+ - Zipped Famicom Disk System games play: an unzipped ROM is given to the core under the zip's name with its own extension, still never written to the card
 
  - Cores added to the SD card (`cores/<name>_libretro.so` with its `.info`, as the libretro buildbot ships them) for the systems Specular has: the SNES and Mega Drive appear once one serves them, and a "Core" setting per system and per game chooses where there are several (Specular's own by default). Their options are learned at their first game, and are settings from then on (relearned when the core is replaced). A core without an `.info`, for no system Specular has, or built for another processor is turned away with why, in the log and (with Developer details) on Settings → Cores. Their splash shows their `.info`'s name, authors and licence; their battery saves are protected as if their states restore save memory
 
 TODO:
  - Speed check of Nestopia and SwanStation on the Brick (measured on a PC only), including whether SwanStation's drawing thread helps there
- - PS1 games on several discs: changing discs (SwanStation's disk control interface is refused today)
- - Zipped Famicom Disk System games (Nestopia tells them apart by the `.fds` in the path, which an unzipped ROM's path lacks)
 
 ### Library and Game Management
 

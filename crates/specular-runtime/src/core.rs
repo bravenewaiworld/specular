@@ -10,6 +10,7 @@ pub const ENV_SET_PERFORMANCE_LEVEL: c_uint = 8;
 pub const ENV_GET_SYSTEM_DIRECTORY: c_uint = 9;
 pub const ENV_SET_PIXEL_FORMAT: c_uint = 10;
 pub const ENV_SET_INPUT_DESCRIPTORS: c_uint = 11;
+pub const ENV_SET_DISK_CONTROL_INTERFACE: c_uint = 13;
 pub const ENV_GET_VARIABLE: c_uint = 15;
 pub const ENV_SET_VARIABLES: c_uint = 16;
 pub const ENV_GET_VARIABLE_UPDATE: c_uint = 17;
@@ -28,6 +29,8 @@ pub const ENV_GET_CORE_OPTIONS_VERSION: c_uint = 52;
 pub const ENV_SET_CORE_OPTIONS: c_uint = 53;
 pub const ENV_SET_CORE_OPTIONS_INTL: c_uint = 54;
 pub const ENV_SET_CORE_OPTIONS_DISPLAY: c_uint = 55;
+pub const ENV_GET_DISK_CONTROL_INTERFACE_VERSION: c_uint = 57;
+pub const ENV_SET_DISK_CONTROL_EXT_INTERFACE: c_uint = 58;
 pub const ENV_SET_MINIMUM_AUDIO_LATENCY: c_uint = 63;
 pub const ENV_SET_CORE_OPTIONS_V2: c_uint = 67;
 pub const ENV_SET_CORE_OPTIONS_V2_INTL: c_uint = 68;
@@ -131,6 +134,30 @@ pub struct Message { pub msg: *const c_char, pub frames: c_uint }
 
 #[repr(C)]
 pub struct RumbleInterface { pub set_rumble_state: unsafe extern "C" fn(c_uint, c_uint, u16) -> bool }
+
+/// libretro's disk control interface (`retro_disk_control_callback`), for games on several discs;
+/// see the `discs` module. Called on the game's thread only, like the rest of the core.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct DiskControlBasic {
+    pub set_eject_state: Option<unsafe extern "C" fn(bool) -> bool>,
+    pub get_eject_state: Option<unsafe extern "C" fn() -> bool>,
+    pub get_image_index: Option<unsafe extern "C" fn() -> c_uint>,
+    pub set_image_index: Option<unsafe extern "C" fn(c_uint) -> bool>,
+    pub get_num_images: Option<unsafe extern "C" fn() -> c_uint>,
+    pub replace_image_index: Option<unsafe extern "C" fn(c_uint, *const GameInfo) -> bool>,
+    pub add_image_index: Option<unsafe extern "C" fn() -> bool>,
+}
+
+/// Its extended version (`retro_disk_control_ext_callback`): the same functions, then these.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct DiskControl {
+    pub basic: DiskControlBasic,
+    pub set_initial_image: Option<unsafe extern "C" fn(c_uint, *const c_char) -> bool>,
+    pub get_image_path: Option<unsafe extern "C" fn(c_uint, *mut c_char, usize) -> bool>,
+    pub get_image_label: Option<unsafe extern "C" fn(c_uint, *mut c_char, usize) -> bool>,
+}
 
 #[repr(C)]
 pub struct LogCallback { pub log: unsafe extern "C" fn(c_uint, *const c_char, ...) }

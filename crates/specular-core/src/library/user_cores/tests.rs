@@ -140,9 +140,9 @@ fn required_firmware_is_checked_before_launch() {
     let dir = cores_dir(&[("mine_libretro.so", &library()), ("mine_libretro.info", info.as_bytes())]);
     let core = UserCores::default().find(dir.path(), dir.path(), &builtin_systems()).cores[0];
     let bios = tempfile::tempdir().unwrap();
-    assert_eq!(core.check_bios(Path::new("Game.cue"), bios.path()).unwrap_err(), "Games played with Mine need scph1001.bin in the bios folder");
+    assert_eq!(core.check_bios(Path::new("Game.cue"), &["cue"], bios.path()).unwrap_err(), "Games played with Mine need scph1001.bin in the bios folder");
     std::fs::write(bios.path().join("scph1001.bin"), b"").unwrap();
-    assert!(core.check_bios(Path::new("Game.cue"), bios.path()).is_ok());
+    assert!(core.check_bios(Path::new("Game.cue"), &["cue"], bios.path()).is_ok());
 }
 
 /// What a core might declare.

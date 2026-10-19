@@ -73,6 +73,18 @@ pub enum Msg {
     InstallOffer(Result<crate::install::Offer, String>),
     /// The progress of the task started with `InstallCmd::Start`.
     InstallProgress(crate::install::Progress),
+    /// The running game's discs, as its core says: sent once it has started, and after a state is
+    /// loaded or a disc changed. Ignored while no game runs.
+    Discs(Discs),
+}
+
+/// A game's discs, for the game menu's Disc row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Discs {
+    /// 0 until the core says, and for a core that can't change discs; the Disc row shows from 2.
+    pub count: usize,
+    /// The disc in the drive (from 0, below `count`); None when none is (its tray is open).
+    pub current: Option<usize>,
 }
 
 /// Something the app wants done, in the order given.
@@ -98,6 +110,8 @@ pub enum Effect {
     /// Save the running game's state, or load the state saved last.
     SaveState,
     LoadState,
+    /// Put this disc (from 0) in the running game's drive.
+    ChangeDisc(usize),
     ResetGame,
     /// End the running game (its battery save is written).
     QuitGame,
@@ -180,6 +194,8 @@ pub struct Ctx {
     pub credits: Credits,
     /// The files in the card's `cores/` that aren't used, and why (see `Msg::Cores`).
     pub turned_away: Vec<library::user_cores::TurnedAway>,
+    /// The running game's discs (`Msg::Discs`); none until its core says.
+    pub discs: Discs,
 }
 
 impl Ctx {
@@ -331,7 +347,7 @@ impl App {
         layers::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
-                   credits: Credits::default(), turned_away: Vec::new() },
+                   credits: Credits::default(), turned_away: Vec::new(), discs: Discs::default() },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -605,6 +621,12 @@ impl App {
             Msg::Headphones(plugged) => { self.headphones = plugged; vec![] } // the output follows (`reconcile_radios`)
             Msg::InstallOffer(offer) => self.install_offer(offer),
             Msg::InstallProgress(p) => self.install_progress(p),
+            Msg::Discs(d) => {
+                if self.playing.is_none() { return vec![]; }
+                self.ctx.discs = d;
+                self.changed();
+                vec![Effect::Redraw(None)]
+            }
         }
     }
 
@@ -676,6 +698,7 @@ impl App {
             }
             Outcome::Launch(game) => {
                 self.playing = Some(game.clone());
+                self.ctx.discs = Discs::default();
                 self.repeater.reset();
                 // The settings that may differ for this game.
                 let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
@@ -769,11 +792,18 @@ impl App {
         e
     }
 
-    /// A press in the in-game menu: B and Menu resume, A does the focused row's action. Every
-    /// action closes the menu, resuming the game unless it was quit.
+    /// A press in the in-game menu: B and Menu resume, A does the focused row's action, and on the
+    /// Disc row, right (or A) and left change to the next or previous disc, wrapping around. Every action closes the menu, resuming the game unless it was quit.
     fn game_menu(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
         let mut e = match (button, row) {
             (Button::B | Button::Menu, _) | (Button::A, Some("resume")) => vec![Effect::PauseGame(false)],
+            (Button::Left | Button::Right | Button::A, Some("disc")) => {
+                let Discs { count, current } = self.ctx.discs;
+                let back = button == Button::Left;
+                // With no disc in, right puts the first in and left the last.
+                let to = current.map_or(if back { count - 1 } else { 0 }, |c| (c + if back { count - 1 } else { 1 }) % count);
+                vec![Effect::ChangeDisc(to), Effect::PauseGame(false)]
+            }
             (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
             (Button::A, Some("load")) => vec![Effect::LoadState, Effect::PauseGame(false)],
             (Button::A, Some("reset")) => vec![Effect::ResetGame, Effect::PauseGame(false)],
@@ -1044,17 +1074,30 @@ impl Screen for PowerMenu {
 struct GameMenu;
 
 impl Screen for GameMenu {
-    fn view(&self, _: &Ctx, _: &ScreenState) -> ScreenView {
+    fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
+        let mut rows = vec![action("resume", "Resume")];
+        rows.extend(disc_row(ctx.discs));
+        rows.extend([action("save", "Save state"), action("load", "Load state"), action("reset", "Restart"),
+                     action("settings", "Game settings"), action("quit", "Quit game")]);
         ScreenView {
-            title: "Paused".into(), layout: Layout::List,
-            rows: vec![action("resume", "Resume"), action("save", "Save state"), action("load", "Load state"),
-                       action("reset", "Restart"), action("settings", "Game settings"), action("quit", "Quit game")],
+            title: "Paused".into(), layout: Layout::List, rows,
             hints: vec![(Button::B, "Resume".into()), (Button::A, "Select".into())],
             entry: None,
         }
     }
 
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
+}
+
+/// The game menu's Disc row, for a game on more than one disc: "Disc 1 of 3", …, and "No disc"
+/// while none is in.
+fn disc_row(discs: Discs) -> Option<Row> {
+    let Discs { count, current } = discs;
+    if count < 2 { return None; }
+    let mut options: Vec<String> = (1..=count).map(|i| format!("Disc {i} of {count}")).collect();
+    if current.is_none() { options.push("No disc".into()); }
+    let selected = current.unwrap_or(count);
+    Some(Row::new("disc", "Disc", RowKind::Choice { options, selected, swatch: None }))
 }
 
 #[cfg(test)]

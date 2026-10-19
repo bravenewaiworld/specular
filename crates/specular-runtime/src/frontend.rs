@@ -37,6 +37,9 @@ pub struct Frontend {
     /// this is kept to restore on resuming.
     pub motors: Motors,
     pub paused: bool,
+    /// The core's disk control interface, if it gave one. Called outside `with`, through a copy
+    /// (`disks()` in lib.rs): the core may make environment calls from it.
+    pub disks: Option<DiskControl>,
 }
 
 impl Frontend {
@@ -53,7 +56,7 @@ impl Default for Frontend {
             buttons: Arc::default(), frames: Arc::default(), on_frame: Box::new(|| {}),
             pixel_format: PIXEL_0RGB1555, // libretro's default
             samples: Vec::new(), options: Options::default(), system_dir: CString::default(), save_dir: CString::default(),
-            save_ram_written: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false,
+            save_ram_written: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false, disks: None,
         }
     }
 }
@@ -135,6 +138,14 @@ impl Frontend {
                 }
                 ENV_GET_LOG_INTERFACE => { (*(data as *mut LogCallback)).log = crate::log::specular_log; true }
                 ENV_SAVE_RAM_WRITTEN => { self.save_ram_written = true; true }
+                // Version 1: the extended interface, with disc labels and the disc to start on.
+                ENV_GET_DISK_CONTROL_INTERFACE_VERSION => { *(data as *mut c_uint) = 1; true }
+                ENV_SET_DISK_CONTROL_INTERFACE => {
+                    let basic = (data as *const DiskControlBasic).as_ref().copied();
+                    self.disks = basic.map(|basic| DiskControl { basic, ..Default::default() });
+                    true
+                }
+                ENV_SET_DISK_CONTROL_EXT_INTERFACE => { self.disks = (data as *const DiskControl).as_ref().copied(); true }
                 ENV_GET_RUMBLE_INTERFACE if self.rumble.is_some() => {
                     eprintln!("game: the core uses rumble");
                     (*(data as *mut RumbleInterface)).set_rumble_state = set_rumble_state;

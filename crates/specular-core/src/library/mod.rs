@@ -99,9 +99,13 @@ pub struct Bios {
 impl CoreDecl {
     /// Checks that `bios_dir` holds a BIOS file the game at `rom` needs, logging what was looked
     /// for when none is there. Err: why the game can't start, for the player. File names are
-    /// matched ignoring case, as FAT cards do.
-    pub fn check_bios(&self, rom: &Path, bios_dir: &Path) -> Result<(), String> {
-        let ext = extension(rom).unwrap_or_default();
+    /// matched ignoring case, as FAT cards do. In a zip, the game is the first file with one of
+    /// `extensions` (its system's, which should be its core's, as the runtime unzips by those).
+    pub fn check_bios(&self, rom: &Path, extensions: &[&str], bios_dir: &Path) -> Result<(), String> {
+        let mut ext = extension(rom).unwrap_or_default();
+        if ext == "zip" {
+            ext = zip::entries(rom).unwrap_or_default().iter().filter_map(|e| extension(Path::new(&e.name))).find(|x| extensions.contains(&x.as_str())).unwrap_or_default();
+        }
         let present: HashSet<String> = std::fs::read_dir(bios_dir).into_iter().flatten().flatten()
             .filter_map(|e| e.file_name().to_str().map(str::to_lowercase)).collect();
         for b in self.bios.iter().filter(|b| b.extensions.is_empty() || b.extensions.contains(&ext.as_str())) {
