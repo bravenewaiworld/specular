@@ -89,6 +89,7 @@ pub enum Msg {
     /// The running game's discs, as its core says: sent once it has started, and after a state is
     /// loaded or a disc changed. Ignored while no game runs.
     Discs(Discs),
+    /// What the device's time zone thread reports (answers to `Effect::TimeZone`).
     TimeZone(ZoneEvent),
 }
 
@@ -744,11 +745,8 @@ impl App {
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
         if let Some(e) = self.install_press(&id, p.button, row) { return e; }
         if id == screens::ZONE_CONSENT { return self.zone_consent(p.button, row); }
-        let picked = row.and_then(|r| r.strip_prefix("zone:")).filter(|_| p.button == Button::A);
-        if let (true, Some(zone)) = ([screens::ZONE_AREAS, screens::ZONE_CITIES].contains(&id), picked) {
-            let zone = zone.to_string();
-            return self.pick_zone(zone);
-        }
+        if [screens::ZONE_AREAS, screens::ZONE_CITIES].contains(&id) && p.button == Button::A
+            && let Some(zone) = row.and_then(|r| r.strip_prefix("zone:")) { return self.pick_zone(zone); }
         // (A, B and Menu never repeat.) Over a paused game, Menu resumes it.
         if p.button == Button::Menu && self.nav.contains(&screens::GAME_MENU) { return self.resume(); }
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
@@ -1108,13 +1106,14 @@ impl Screen for SettingsScreen {
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         if p.button == Button::B { return Outcome::Back; }
-        if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p).or_else(|| timezone::settings_press(row, p))) { return open; }
+        if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
         if p.button == Button::A && let Some(row) = focused {
             match row.id.0.as_str() {
                 "open:icons" => return Outcome::Push(ScreenState::new(screens::ICONS, None)),
                 "open:cores" => return Outcome::Push(ScreenState::new(screens::CORES, None)),
                 "open:credits" => return Outcome::Push(ScreenState::new(screens::CREDITS, None)),
                 "open:file transfer" => return Outcome::Push(ScreenState::new(screens::FILE_TRANSFER, None)),
+                "open:time zone" => return Outcome::Push(ScreenState::new(screens::TIME_ZONE, None)),
                 _ => {}
             }
         }

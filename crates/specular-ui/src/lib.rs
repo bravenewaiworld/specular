@@ -2,9 +2,9 @@
 //! slow work happens off the UI thread: files on an I/O thread (and the library scan on its
 //! own), hardware (with file transfer and SSH) on a hardware thread, each radio on a thread of
 //! its own (`radio_thread`), the time zone on its own (`timezone`), box art on the art service's
-//! threads (`art`), interface sounds on a thread of their own
-//! (`sounds`), and opening a game's sound outputs on short-lived threads; their results come back
-//! as messages to the app, or as calls on the UI thread.
+//! threads (`art`), interface sounds on a thread of their own (`sounds`), and opening a game's
+//! sound outputs on short-lived threads; their results come back as messages to the app, or as
+//! calls on the UI thread.
 
 mod art;
 mod frames;
@@ -44,6 +44,9 @@ use specular_core::wireless::wifi::WifiLink;
 slint::include_modules!();
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// How Specular names itself to web servers (box art, the time zone lookup).
+const USER_AGENT: &str = concat!("Specular/", env!("CARGO_PKG_VERSION"), " (retro game launcher)");
 
 /// Installs a device's Slint platform (how it draws and how its buttons arrive). It is given the
 /// callback for button events, which the platform must call on the UI thread.

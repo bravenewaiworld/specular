@@ -21,7 +21,7 @@ use crate::input::{Button, Press};
 use crate::model::{Layout, Row, RowId, RowKind, ScreenId, ScreenView};
 use crate::nav::ScreenState;
 use crate::settings::{Layer, builtin};
-use crate::timezone::{ZoneCmd, ZoneEvent, label};
+use crate::timezone::{ZoneCmd, ZoneEvent};
 use crate::wireless::wifi::WifiLink;
 
 /// What the app knows of the device's time zone.
@@ -46,14 +46,21 @@ fn lookup_allowed(ctx: &Ctx) -> bool { ctx.settings.on(builtin::TIME_ZONE_LOOKUP
 /// Sets a global setting the app itself chose a valid value for.
 fn set(ctx: &mut Ctx, key: &str, value: serde_json::Value) { let _ = ctx.settings.set(key, &Layer::Global, value); }
 
+/// The zone in effect, if the device has said.
+fn current(ctx: &Ctx) -> Option<&str> { ctx.time_zone.as_ref()?.zone.as_deref() }
+/// The zones to choose from.
+fn zones(ctx: &Ctx) -> &[String] { ctx.time_zone.as_ref().map_or(&[], |t| &t.zones) }
+
 /// A zone's area: "Europe" for "Europe/Paris"; None for a zone without one ("UTC").
 fn area(zone: &str) -> Option<&str> { zone.split_once('/').map(|(a, _)| a) }
+
+/// A zone (or area) as the user sees it: "America/New York" for "America/New_York".
+fn label(zone: &str) -> String { zone.replace('_', " ") }
 
 /// The picker's first screen, with the focus on the zone in effect's area.
 fn areas(ctx: &Ctx) -> ScreenState {
     let mut s = ScreenState::new(screens::ZONE_AREAS, None);
-    let zone = ctx.time_zone.as_ref().and_then(|t| t.zone.as_deref());
-    s.focus = zone.map(|z| RowId(area(z).map_or(format!("zone:{z}"), |a| format!("area:{a}"))));
+    s.focus = current(ctx).map(|z| RowId(area(z).map_or(format!("zone:{z}"), |a| format!("area:{a}"))));
     s
 }
 
@@ -76,7 +83,7 @@ impl App {
         let auto = automatic(&self.ctx) && lookup_allowed(&self.ctx);
         let Some(tz) = &mut self.ctx.time_zone else { return vec![] };
         match e {
-            ZoneEvent::Started { zone, zones } => { tz.zone = zone; tz.zones = zones; }
+            ZoneEvent::Started { zone, zones } => *tz = TimeZoneState { zone, zones },
             ZoneEvent::Set { zone, result: Ok(()) } => tz.zone = Some(zone),
             // The user may have picked a zone by hand since the lookup was sent.
             ZoneEvent::LookedUp(Ok(zone)) if auto && tz.zone.as_ref() != Some(&zone) => return vec![Effect::TimeZone(ZoneCmd::Set(zone))],
@@ -92,17 +99,18 @@ impl App {
     /// choosing Automatic again looks it up again).
     pub(super) fn reconcile_time_zone(&mut self) -> Vec<Effect> {
         if !self.settings_loaded || self.ctx.time_zone.is_none() { return vec![]; }
-        let wanted = self.connection().filter(|_| automatic(&self.ctx));
+        let auto = automatic(&self.ctx);
+        let wanted = self.connection().filter(|_| auto);
         if wanted.is_none() { self.zone_looked_up_for = None; }
         if lookup_allowed(&self.ctx) {
-            if wanted.is_none() || self.zone_looked_up_for == wanted { return vec![]; }
+            if self.zone_looked_up_for == wanted { return vec![]; }
             self.zone_looked_up_for = wanted;
             return vec![Effect::TimeZone(ZoneCmd::LookUp)];
         }
         // (While the question is open it is the top screen, so it isn't put twice.)
         let top = &self.nav.top().id;
         let browsing = [screens::HOME, screens::GAMES, screens::SETTINGS, screens::WIFI, screens::BLUETOOTH].contains(top);
-        let due = automatic(&self.ctx) && ((wanted.is_some() && browsing) || *top == screens::TIME_ZONE);
+        let due = auto && ((wanted.is_some() && browsing) || *top == screens::TIME_ZONE);
         if !due || self.playing.is_some() { return vec![]; }
         self.go(|nav| Some(nav.push(ScreenState::new(screens::ZONE_CONSENT, None))))
     }
@@ -110,39 +118,35 @@ impl App {
     /// A press on the question: Allow makes the zone automatic; "Choose it myself" makes it manual
     /// and opens the picker; B makes it manual. Each answer is kept.
     pub(super) fn zone_consent(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
-        let allow = match (button, row) {
-            (Button::A, Some("allow")) => true,
-            (Button::A, Some("manual")) | (Button::B, _) => false,
+        let (allow, pick) = match (button, row) {
+            (Button::A, Some("allow")) => (true, false),
+            (Button::A, Some("manual")) => (false, true),
+            (Button::B, _) => (false, false),
             _ => return vec![],
         };
         set(&mut self.ctx, builtin::TIME_ZONE_LOOKUP, allow.into());
         set(&mut self.ctx, builtin::TIME_ZONE, if allow { "auto" } else { "manual" }.into());
         let mut e = vec![Effect::SaveSettings(Layer::Global)];
-        let picker = (row == Some("manual") && button == Button::A).then(|| areas(&self.ctx));
-        e.extend(self.go(|nav| { let t = nav.pop(); match picker { Some(s) => Some(nav.push(s)), None => t } }));
+        let picker = pick.then(|| areas(&self.ctx));
+        e.extend(self.go(|nav| { let t = nav.pop(); picker.map(|s| nav.push(s)).or(t) }));
         e
     }
 
     /// A zone picked (from the areas, for a zone without one such as UTC, or from an area's
     /// zones): it becomes the zone, by hand, and the picker closes.
-    pub(super) fn pick_zone(&mut self, zone: String) -> Vec<Effect> {
+    pub(super) fn pick_zone(&mut self, zone: &str) -> Vec<Effect> {
         set(&mut self.ctx, builtin::TIME_ZONE, "manual".into());
-        let mut e = vec![Effect::SaveSettings(Layer::Global), Effect::TimeZone(ZoneCmd::Set(zone))];
+        let mut e = vec![Effect::SaveSettings(Layer::Global), Effect::TimeZone(ZoneCmd::Set(zone.into()))];
         e.extend(self.go(|nav| nav.close(&screens::ZONE_AREAS)));
         e
     }
 }
 
-/// Settings' Time section: the zone in effect, opening the Time zone screen.
+/// Settings' Time section: the zone in effect, opening the Time zone screen ("open:time zone").
 pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
-    let Some(tz) = &ctx.time_zone else { return vec![] };
+    if ctx.time_zone.is_none() { return vec![]; }
     vec![Row::new("section:Time", "Time", RowKind::Header),
-         Row::new("open:time zone", "Time zone", RowKind::Action { value: tz.zone.as_deref().map(label) })]
-}
-
-/// A press on a row of `settings_rows`: A opens the Time zone screen.
-pub(super) fn settings_press(row: &Row, p: Press) -> Option<Outcome> {
-    (p.button == Button::A && row.id.0 == "open:time zone").then(|| Outcome::Push(ScreenState::new(screens::TIME_ZONE, None)))
+         Row::new("open:time zone", "Time zone", RowKind::Action { value: current(ctx).map(label) })]
 }
 
 /// The Time zone screen: Automatic or Manual, and the zone in effect, which opens the picker.
@@ -154,8 +158,7 @@ impl Screen for TimeZoneScreen {
         if automatic(ctx) {
             rows.push(Row::note("note:auto", if lookup_allowed(ctx) { "Found from your network's address (by ipinfo.io) each time Wi-Fi connects" } else { "Waiting for your permission to look it up" }));
         }
-        let zone = ctx.time_zone.as_ref().and_then(|t| t.zone.as_deref()).map(label);
-        rows.push(Row::new("zone", "Zone", RowKind::Action { value: Some(zone.unwrap_or_else(|| "Unknown".into())) }));
+        rows.push(Row::new("zone", "Zone", RowKind::Action { value: Some(current(ctx).map_or("Unknown".into(), label)) }));
         ScreenView::list("Time zone", rows)
     }
 
@@ -181,7 +184,7 @@ struct AreasScreen;
 
 impl Screen for AreasScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
-        let zones = ctx.time_zone.as_ref().map_or(&[][..], |t| &t.zones);
+        let zones = zones(ctx);
         let mut rows: Vec<Row> = zones.iter().filter(|z| area(z).is_none()).map(|z| action(&format!("zone:{z}"), &label(z))).collect();
         let mut seen = vec![];
         for a in zones.iter().filter_map(|z| area(z)) {
@@ -196,7 +199,7 @@ impl Screen for AreasScreen {
             (Button::B, _) => Outcome::Back,
             (Button::A, Some(a)) => {
                 let mut s = ScreenState::new(screens::ZONE_CITIES, Some(a.into()));
-                s.focus = ctx.time_zone.as_ref().and_then(|t| t.zone.as_ref()).map(|z| RowId(format!("zone:{z}")));
+                s.focus = current(ctx).map(|z| RowId(format!("zone:{z}")));
                 Outcome::Push(s)
             }
             _ => Outcome::None,
@@ -211,12 +214,11 @@ struct CitiesScreen;
 impl Screen for CitiesScreen {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let a = state.params.as_deref().unwrap_or_default();
-        let tz = ctx.time_zone.as_ref();
-        let rows = tz.map_or(&[][..], |t| &t.zones).iter().filter(|z| area(z) == Some(a)).map(|z| {
+        let rows = zones(ctx).iter().filter(|z| area(z) == Some(a)).map(|z| {
             // "Argentina / Buenos Aires" for America/Argentina/Buenos_Aires.
             let name = label(&z[a.len() + 1..]).replace('/', " / ");
-            let current = tz.and_then(|t| t.zone.as_ref()) == Some(z);
-            Row::new(format!("zone:{z}"), name, RowKind::Text { detail: current.then(|| "Current".into()) })
+            let detail = (current(ctx) == Some(z.as_str())).then(|| "Current".into());
+            Row::new(format!("zone:{z}"), name, RowKind::Text { detail })
         }).collect();
         ScreenView {
             title: label(a), layout: Layout::List, rows,

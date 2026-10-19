@@ -1,7 +1,7 @@
 //! The time zone local times (the clock) are shown in. The device keeps the zone, across restarts
 //! (the Brick's brick-timezone); its clocks stay in UTC, so a change moves only what is shown.
 //! Specular chooses it: by hand, or automatically by asking a lookup service for the network's
-//! zone (see app::timezone and docs/settings.md).
+//! zone (see app::timezone and docs/time-zone.md).
 
 /// The device's time zone. Calls may be slow (they run a program), so the UI crate makes them on
 /// a thread of its own.
@@ -46,9 +46,6 @@ pub fn zone_name(answer: &str) -> Result<String, String> {
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_+-/".contains(&b));
     if plausible { Ok(name.to_string()) } else { Err(format!("not a time zone name: {answer:?}")) }
 }
-
-/// A zone as the user sees it: "America/New York" for "America/New_York".
-pub fn label(zone: &str) -> String { zone.replace('_', " ") }
 
 /// A stand-in for the desktop build: the zone is kept in memory (UTC at start) and given to the
 /// process as $TZ, and the zones are the PC's (`ZONEINFO`), listed as the Brick lists them. Needs

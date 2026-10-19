@@ -64,7 +64,7 @@ impl LibretroThumbnails {
     pub fn new() -> Self {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
-            .user_agent(concat!("Specular/", env!("CARGO_PKG_VERSION"), " (retro game launcher)"))
+            .user_agent(crate::USER_AGENT)
             .build();
         Self { agent: config.into() }
     }

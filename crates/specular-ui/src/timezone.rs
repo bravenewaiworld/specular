@@ -26,7 +26,7 @@ pub fn thread(mut zone: Box<dyn TimeZone>) -> mpsc::Sender<ZoneCmd> {
         post(Msg::TimeZone(ZoneEvent::Started { zone: current, zones }));
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(LOOKUP_TIMEOUT))
-            .user_agent(concat!("Specular/", env!("CARGO_PKG_VERSION"), " (retro game launcher)"))
+            .user_agent(crate::USER_AGENT)
             .build().into();
         for cmd in rx {
             let event = match cmd {
@@ -54,8 +54,8 @@ fn look_up(agent: &ureq::Agent) -> Result<String, String> {
     let answer = match std::env::var("SPECULAR_TIMEZONE_LOOKUP") {
         Ok(answer) => { eprintln!("timezone: lookup: $SPECULAR_TIMEZONE_LOOKUP answered {answer:?}"); answer }
         Err(_) => {
-            let mut response = agent.get(LOOKUP_URL).call().map_err(|e| format!("{LOOKUP_URL}: {e}"))?;
-            let body = response.body_mut().with_config().limit(1024).read_to_string().map_err(|e| format!("{LOOKUP_URL}: {e}"))?;
+            let body = agent.get(LOOKUP_URL).call().and_then(|mut r| r.body_mut().with_config().limit(1024).read_to_string())
+                .map_err(|e| format!("{LOOKUP_URL}: {e}"))?;
             eprintln!("timezone: lookup: {LOOKUP_URL} answered {body:?}");
             body
         }
