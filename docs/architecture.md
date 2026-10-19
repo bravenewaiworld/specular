@@ -225,7 +225,7 @@ Msg::LastGameStopped(LaunchRecord)
 | Settings | the `Vec<SettingDecl>` given to `App::new`: Specular's and its cores' options (`settings::declarations`; see [settings.md](settings.md)) |
 | Systems and emulators | the `Vec<SystemDecl>` given to `App::new`, each naming its `CoreDecl`s; the cores the user adds to the card (`library::user_cores`; see [runtime.md](runtime.md)) join them through `Msg::Cores`, which replaces the systems and the settings |
 | Art sources | the ordered `Vec<Box<dyn ArtSource>>` given to the art worker |
-| Lights and rumble effects | the ordered `Vec<Box<dyn effects::Reaction>>` given to `Effects::new` (see [look-and-motion.md](look-and-motion.md)) |
+| Lights and rumble effects | the ordered `Vec<Box<dyn effects::Effect>>` given to `Effects::new` (see [look-and-motion.md](look-and-motion.md)) |
 | Themes | not yet: there is one theme, `crates/specular-ui/ui/theme.slint` |
 
 ## Findings

@@ -1,5 +1,5 @@
 //! Effects: brief reactions of the lights and the rumble to events (the battery becoming low, the
-//! game saving, its sound), drawn over the accent colours. Each is a `Reaction`; `Effects` runs an
+//! game saving, its sound), drawn over the accent colours. Each is an `Effect`; `Effects` runs an
 //! ordered list of them (the built-ins, `builtin`; plugins will add their own), each turned on by
 //! a setting. Effects only react: between events nothing runs, and nothing is redrawn.
 //!
@@ -46,7 +46,7 @@ impl Frame {
 }
 
 /// A brief reaction of the lights or the rumble to events.
-pub trait Reaction {
+pub trait Effect {
     /// Its name, for the log.
     fn name(&self) -> &'static str;
     /// The Bool setting that turns it on. While off it gets no events and draws nothing.
@@ -62,10 +62,10 @@ pub trait Reaction {
 
 /// The effects, in drawing order (a later one's lights cover an earlier one's), each on or off by
 /// its setting. All are off until their settings are applied.
-pub struct Effects { list: Vec<(Box<dyn Reaction>, bool)> }
+pub struct Effects { list: Vec<(Box<dyn Effect>, bool)> }
 
 impl Effects {
-    pub fn new(list: Vec<Box<dyn Reaction>>) -> Self { Self { list: list.into_iter().map(|e| (e, false)).collect() } }
+    pub fn new(list: Vec<Box<dyn Effect>>) -> Self { Self { list: list.into_iter().map(|e| (e, false)).collect() } }
 
     /// Turns on or off each effect whose setting is `key`; other keys are ignored.
     pub fn apply(&mut self, key: &str, value: &serde_json::Value) {
@@ -89,7 +89,7 @@ impl Effects {
 }
 
 /// The built-in effects, in drawing order.
-pub fn builtin() -> Vec<Box<dyn Reaction>> {
+pub fn builtin() -> Vec<Box<dyn Effect>> {
     vec![Box::new(LowBattery::default()), Box::new(SaveFlash::default()), Box::new(FollowSound::default())]
 }
 
@@ -105,7 +105,7 @@ impl LowBattery {
     const HALF: Duration = Duration::from_millis(500);
 }
 
-impl Reaction for LowBattery {
+impl Effect for LowBattery {
     fn name(&self) -> &'static str { "low battery" }
     fn setting(&self) -> &'static str { builtin::LOW_BATTERY_LIGHTS }
 
@@ -135,7 +135,7 @@ impl SaveFlash {
     const WHITE: Rgb = Rgb(255, 255, 255);
 }
 
-impl Reaction for SaveFlash {
+impl Effect for SaveFlash {
     fn name(&self) -> &'static str { "save flash" }
     fn setting(&self) -> &'static str { builtin::SAVE_FLASH }
 
@@ -172,7 +172,7 @@ impl FollowSound {
     const KICK: Duration = Duration::from_millis(100);
 }
 
-impl Reaction for FollowSound {
+impl Effect for FollowSound {
     fn name(&self) -> &'static str { "rumble following the sound" }
     fn setting(&self) -> &'static str { builtin::RUMBLE_FOLLOWS_SOUND }
 

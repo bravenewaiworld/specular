@@ -25,7 +25,7 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 - **Interface sounds are a few short tones, made in code from the mockup's tick** (2026-10-18). A quiet tick as the focus moves or a value steps; two tones rising as a screen opens, and falling as one closes; one tone above or below the tick as a switch turns on or off. Other actions (joining a network, say) make none. "Interface sounds" turns them off. They play on the current output at its volume, and not at all while muted or at volume 0. Rejected: shipping sound files (a decoder and files to install, for tones a few lines of code make); one sound for everything, as in the mockup (opening and going back would sound alike); a sound as a game starts (the game would have to wait for the interface sounds' output, maybe a slow Bluetooth one, to open and close before opening its own; the zoom into the game says it started).
 - **No interface sounds over a game, even paused in its menu** (2026-10-18). The game has the sound output, and an ALSA device that doesn't mix can't be opened twice. Rejected: mixing them into the paused game's stream (the paused game's thread would have to keep writing sound, only for the sake of a few ticks).
 - **A held direction ticks at most every 60 ms** (2026-10-18), about 15 times a second, so the 30 moves a second of a long hold don't buzz. Rejected: shorter ticks as the repeats speed up (at 30 a second they still run together).
-- **LED, light bar and rumble reactions are pluggable effects** (2026-10-18), registered like the other extension points (see [architecture.md](architecture.md)): an ordered list of `Reaction`s, each reacting to events (a battery reading, the game saving in-game, a save state made, the game's sound, the game stopping) and drawing over the accents for a moment, later ones over earlier ones. Effects only react to events and end by themselves, so between them nothing runs and an idle screen still draws nothing. Rejected: effects that run on a clock (a breathing light bar), which would break "Nothing moves unless you asked it to".
+- **LED, light bar and rumble reactions are pluggable effects** (2026-10-18), registered like the other extension points (see [architecture.md](architecture.md)): an ordered list of `Effect`s, each reacting to events (a battery reading, the game saving in-game, a save state made, the game's sound, the game stopping) and drawing over the accents for a moment, later ones over earlier ones. Effects only react to events and end by themselves, so between them nothing runs and an idle screen still draws nothing. Rejected: effects that run on a clock (a breathing light bar), which would break "Nothing moves unless you asked it to".
 - **Effects colour the lights by accent, not LED by LED** (2026-10-18): one colour for the LEDs of each accent, and the on-screen light bar shows the first accent's, as the LED bar does. One place works out what the lights show (`Runner::show_lights`: the accents, the system's colour in place of the first when there is one, then the effects over them) and sets both, so the light bar mirrors the LEDs on any device, also one without LEDs (the desktop). Rejected: a colour per LED (no effect needs one, and the screen has no counterpart for most LEDs); effects setting the LEDs and the theme separately (they could disagree).
 - **The built-in effects: a low-battery pulse, a flash on saving, and rumble following the sound** (2026-10-18). As the battery becomes low (unplugged at 15 % or less, also at start-up), every light pulses three times between the warning colour and the accents (half a second each); the LEDs switch, and the light bar fades, its colour changing over 350 ms. When the game saves in-game or a save state is made, the lights flash white for 0.3 s. Rumble following the sound rumbles for 0.1 s on a frame whose loudest sample is at least -12 dBFS and 1.5 times the recent average (each frame moves the average an eighth of the way), so sudden sounds rumble and steady loud music settles. Rejected: pulsing for as long as the battery is low, or on every reading (constant motion; the status bar's battery already shows it); a smooth fade on the LEDs (each LED update is 42 sysfs writes on the Brick); a fixed loudness threshold (loud music would rumble without end); the autosave flashing (it is every 10 s).
 - **Each built-in effect has a user setting; rumble following the sound is off by default** (2026-10-18). "Low battery warning" and "Flash when the game saves" under Lights (on), "Follow the sound" under Rumble (off). People disagree on lights blinking at night and on rumble they didn't ask a game for, which is what user settings are for; the sound-following rumble is a novelty, so it is offered rather than imposed. Rejected: developer settings (these are matters of taste, not debugging).
@@ -112,7 +112,7 @@ pub enum Event { Battery(Battery), GameSaved, StateSaved, Sound(u16 /* frame's p
 
 pub struct Frame { pub lights: [Rgb; 2] /* by Accent */, pub rumble: Motors }
 
-pub trait Reaction {
+pub trait Effect {
     fn name(&self) -> &'static str;                               // for the log
     fn setting(&self) -> &'static str;                            // the Bool setting turning it on
     fn event(&mut self, event: Event, now: Duration) -> bool;     // true: it starts (logged)
@@ -120,12 +120,12 @@ pub trait Reaction {
 }
 
 impl Effects {
-    pub fn new(list: Vec<Box<dyn Reaction>>) -> Self;               // all off until their settings apply
+    pub fn new(list: Vec<Box<dyn Effect>>) -> Self;               // all off until their settings apply
     pub fn apply(&mut self, key: &str, value: &Value);
     pub fn event(&mut self, event: Event, now: Duration, started: impl FnMut(&'static str));
     pub fn frame(&self, now: Duration, accents: [Rgb; 2]) -> (Frame, Option<Duration>);
 }
-pub fn builtin() -> Vec<Box<dyn Reaction>>;  // LowBattery, SaveFlash, FollowSound
+pub fn builtin() -> Vec<Box<dyn Effect>>;  // LowBattery, SaveFlash, FollowSound
 ```
 
 A battery reading comes every 10 s; the game's thread reports an in-game save (`Outputs::on_save`) and keeps the loudest sample of its sound, which the UI takes with each game frame it receives (`Session::take_sound_peak`), so following the sound costs no extra wake-ups. A timer wakes the UI at the effects' next change and stops when none runs. The LEDs are only written when what they show changes.

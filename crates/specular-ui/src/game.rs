@@ -14,11 +14,9 @@ use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
 use specular_core::library::{CoreDecl, Game, user_cores};
-use specular_core::rumble::RumbleLine;
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
-use crate::sounds::Sounds;
-use crate::{AppWindow, DataRoot};
+use crate::{AppWindow, Runner};
 
 /// Where Specular's own cores are installed: `$SPECULAR_CORES`, else `cores/` next to Specular's
 /// binary.
@@ -49,15 +47,15 @@ pub struct Playing {
 pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
-    /// Starts `game` with `core` (`App::playing_core`; `extensions` are its system's), given these `options`
-    /// (`App::core_options`), its sound on `output` and its rumble on `rumble`, on another thread,
-    /// since reading a large ROM or opening a Bluetooth output can take a second or more; then
-    /// calls `started` there with the result. The UI is told of each new frame
-    /// (`Runner::game_frame`) and each in-game save. Before opening the game's output, that thread
-    /// waits for the interface `sounds` to close theirs. A core the user added has the options it
-    /// declares learned, once the game has started (`user_cores::learn`).
-    pub fn start(game: &Game, core: &'static CoreDecl, extensions: &[&str], options: Vec<(String, String)>, data: &DataRoot, device: &SharedDevice, sounds: &Sounds,
-                 output: Output, rumble: Option<RumbleLine>, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
+    /// Starts `game` with `core` (`App::playing_core`), given these `options` (`App::core_options`),
+    /// with `r`'s card, device, sound output and rumble, on another thread, since reading a large
+    /// ROM or opening a Bluetooth output can take a second or more; then calls `started` there
+    /// with the result. The UI is told of each new frame (`Runner::game_frame`) and each in-game
+    /// save. Before opening the game's output, that thread waits for the interface sounds to close
+    /// theirs. A core the user added has the options it declares learned, once the game has
+    /// started (`user_cores::learn`).
+    pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
+        let (data, output, rumble) = (&r.data, r.output.borrow().clone(), r.rumble.clone());
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
         let spec = LaunchSpec {
@@ -74,7 +72,6 @@ impl Playing {
             record: Some(record.clone()),
             states_restore_save: core.states_restore_save,
         };
-        if let Err(why) = core.check_bios(&spec.rom, extensions, &spec.system_dir) { return started(Err(why)); }
         let frames = Arc::new(FrameSlot::default());
         // One message to the UI at a time: frames arriving while one is pending are drawn by it.
         let pending = Arc::new(AtomicBool::new(false));
@@ -84,9 +81,9 @@ impl Playing {
             crate::on_ui(move |r| { pending.store(false, Relaxed); r.game_frame(); });
         });
         let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
-        let (vsync, display_hz) = (device.open_vsync(), device.profile().refresh_hz);
+        let (vsync, display_hz) = (r.device.open_vsync(), r.profile.refresh_hz);
         let state = game.state_path(&data.roms(), "state1");
-        let (roms, saves, learned, played, device, sounds) = (data.roms(), data.saves(), data.learned_options(), game.clone(), device.clone(), sounds.clone());
+        let (roms, saves, learned, played, device, sounds) = (data.roms(), data.saves(), data.learned_options(), game.clone(), r.device.clone(), r.sounds.clone());
         std::thread::spawn(move || {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);

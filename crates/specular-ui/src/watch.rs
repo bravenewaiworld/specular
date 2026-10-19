@@ -18,9 +18,9 @@ const EVENTS: u32 = libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM | li
     | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
 
 /// An inotify instance; `watch` adds the folders, `wait_for_change` waits for their changes.
-pub struct RomsWatch(OwnedFd);
+pub struct CardWatch(OwnedFd);
 
-impl RomsWatch {
+impl CardWatch {
     /// A watch with no folders yet.
     pub fn new() -> std::io::Result<Self> {
         let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
@@ -30,10 +30,10 @@ impl RomsWatch {
 
     /// Watches `roms` and the folders the scan follows under it, and the folder holding it, so a
     /// `roms/` made later is noticed too (and so is any of `folders` beside it, such as `cores/`;
-    /// one elsewhere must exist to be watched); and each of `folders` (not the folders in them). Call it again after each change, for new folders: adding a
-    /// folder already watched keeps its one watch, and the kernel drops the watch of a deleted
-    /// folder. Folders that can't be watched (missing ones, or past the kernel's limit on
-    /// watches) are skipped.
+    /// one elsewhere must exist to be watched); and each of `folders` (not the folders in them).
+    /// Call it again after each change, for new folders: adding a folder already watched keeps its
+    /// one watch, and the kernel drops the watch of a deleted folder. Folders that can't be
+    /// watched (missing ones, or past the kernel's limit on watches) are skipped.
     pub fn watch(&self, roms: &Path, folders: &[&Path]) {
         if let Some(parent) = roms.parent() { self.add(parent, libc::IN_CREATE | libc::IN_MOVED_TO); }
         self.add_tree(roms, 0);

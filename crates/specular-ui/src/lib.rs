@@ -257,7 +257,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     window.set_hints(runner.hints.clone().into());
     window.set_status_icons(runner.status_icons.clone().into());
     window.window().set_rendering_notifier(|state, api| {
-        let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+        let Some(r) = self::runner() else { return };
         match state {
             slint::RenderingState::BeforeRendering => r.before_render(api),
             slint::RenderingState::AfterRendering => r.after_render(),
@@ -349,11 +349,22 @@ thread_local! {
     static RUNNER: RefCell<Option<Rc<Runner>>> = RefCell::default();
 }
 
+/// The running UI (on the UI thread; None on others, and once it has stopped).
+fn runner() -> Option<Rc<Runner>> { RUNNER.with(|r| r.borrow().clone()) }
+
 /// Runs `f` with the running UI on the UI thread, from any thread.
 fn on_ui(f: impl FnOnce(&Rc<Runner>) + Send + 'static) {
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(r) = RUNNER.with(|r| r.borrow().clone()) { f(&r); }
-    });
+    let _ = slint::invoke_from_event_loop(move || if let Some(r) = runner() { f(&r) });
+}
+
+/// Arms `timer` to run `f` with the running UI after `delay`, replacing what it was armed for.
+fn after(timer: &slint::Timer, delay: Duration, f: impl Fn(&Rc<Runner>) + 'static) {
+    timer.start(slint::TimerMode::SingleShot, delay, move || if let Some(r) = runner() { f(&r) });
+}
+
+/// `after`, at `due` (on `now()`'s clock); stops `timer` if nothing is due.
+fn at(timer: &slint::Timer, due: Option<Duration>, f: impl Fn(&Rc<Runner>) + 'static) {
+    match due { Some(due) => after(timer, due.saturating_sub(now()), f), None => timer.stop() }
 }
 
 /// Delivers a message to the app on the UI thread, from any thread.
@@ -455,7 +466,7 @@ fn installer_thread(installer: Box<dyn specular_core::install::Installer>) -> mp
             }
         }
     });
-    if let Err(e) = spawned { eprintln!("installer: can't start its thread: {e}"); }
+    if let Err(e) = spawned { eprintln!("install: can't start the installer's thread: {e}"); }
     tx
 }
 
@@ -508,7 +519,7 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         // The cores and the library: looked for now, and again whenever the files on the card change.
         std::thread::spawn(move || {
             let (roms, saves, cores_dir, learned) = (data.roms(), data.saves(), data.cores(), data.learned_options());
-            let watch = watch::RomsWatch::new().map_err(|e| eprintln!("library: can't watch for new games: {e}")).ok();
+            let watch = watch::CardWatch::new().map_err(|e| eprintln!("library: can't watch for new games or cores: {e}")).ok();
             // The games whose settings files are loaded, and the files found to be for no game.
             let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
             let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
@@ -767,12 +778,13 @@ impl Runner {
         if needs_clock { self.tick_clock(); }
         self.tell_art_online();
         self.tell_art_kinds();
+        // Each of the app's deadlines gets a `Tick`, the timers re-armed after every message as the
+        // deadlines change.
         let app = self.app.borrow();
-        let (repeat, sleep, wifi) = (app.next_deadline(), app.sleep_deadline(), app.wifi_deadline());
-        drop(app);
-        self.tick_at(&self.repeat, repeat);
-        self.tick_at(&self.sleep_timer, sleep);
-        self.tick_at(&self.wifi_timer, wifi);
+        let tick = |r: &Rc<Runner>| r.handle(Msg::Tick(now()));
+        for (timer, due) in [(&self.repeat, app.next_deadline()), (&self.sleep_timer, app.sleep_deadline()), (&self.wifi_timer, app.wifi_deadline())] {
+            at(timer, due, tick);
+        }
     }
 
     /// Tells the art worker whether WiFi is connected, when that changes: it downloads only then.
@@ -822,16 +834,12 @@ impl Runner {
                 w.set_volume_text(level.to_string().into());
                 w.set_volume_muted(muted);
                 w.set_volume_mark(match output { Output::Speaker => IconKind::None, Output::Headphones => IconKind::Headphones, Output::Bluetooth(_) => IconKind::Bluetooth });
-                w.set_volume_shown(true);
-                let weak = self.window.clone();
-                self.volume_timer.start(slint::TimerMode::SingleShot, VOLUME_TIME, move || { if let Some(w) = weak.upgrade() { w.set_volume_shown(false); } });
+                self.show_for(&self.volume_timer, VOLUME_TIME, AppWindow::set_volume_shown);
             }
             Effect::ShowLetter(letter) => {
                 let Some(w) = self.window.upgrade() else { return };
                 w.set_letter(letter.to_string().into());
-                w.set_letter_shown(true);
-                let weak = self.window.clone();
-                self.letter_timer.start(slint::TimerMode::SingleShot, LETTER_TIME, move || { if let Some(w) = weak.upgrade() { w.set_letter_shown(false); } });
+                self.show_for(&self.letter_timer, LETTER_TIME, AppWindow::set_letter_shown);
             }
             Effect::QuitGame => {
                 // (The game's texture is freed, and stops being shown, at the next draw.)
@@ -950,7 +958,7 @@ impl Runner {
         if !on { self.stats_timer.stop(); return; }
         let mut last = 0;
         self.stats_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
-            let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+            let Some(r) = runner() else { return };
             let Some(w) = r.window.upgrade() else { return };
             // (Setting the same text doesn't redraw, so an idle screen stays idle.)
             if let Some(f) = r.frame_times.borrow().as_ref() { w.set_ui_stats(f.summary().into()); }
@@ -970,9 +978,15 @@ impl Runner {
     fn toast(&self, text: &str) {
         let Some(w) = self.window.upgrade() else { return };
         w.set_toast(text.into());
-        w.set_toast_shown(true);
-        let weak = self.window.clone();
-        self.toast_timer.start(slint::TimerMode::SingleShot, TOAST_TIME, move || { if let Some(w) = weak.upgrade() { w.set_toast_shown(false); } });
+        self.show_for(&self.toast_timer, TOAST_TIME, AppWindow::set_toast_shown);
+    }
+
+    /// Shows something for `time` (from now, or from its last showing): `shown(true)` now, then
+    /// `shown(false)` on `timer`.
+    fn show_for(&self, timer: &slint::Timer, time: Duration, shown: fn(&AppWindow, bool)) {
+        let Some(w) = self.window.upgrade() else { return };
+        shown(&w, true);
+        after(timer, time, move |r| if let Some(w) = r.window.upgrade() { shown(&w, false) });
     }
 
     /// Starts `game`: its cover flies to where the game will be while it loads (once the redraw
@@ -998,10 +1012,10 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("there is no emulator for {} games", system.map_or(game.system, |s| s.name)))) };
-        let options = self.app.borrow().core_options();
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
-        game::Playing::start(game, core, extensions, options, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
-            move |r| on_ui(move |me| me.started(launch, r)));
+        if let Err(why) = core.check_bios(&self.data.roms().join(&game.path), extensions, &self.data.bios()) { return self.started(launch, Err(why)); }
+        let options = self.app.borrow().core_options();
+        game::Playing::start(self, game, core, options, move |r| on_ui(move |me| me.started(launch, r)));
     }
 
     /// Launch number `launch` (see `launches`) is running, or couldn't start.
@@ -1073,9 +1087,7 @@ impl Runner {
         }
         if let Some(line) = &self.rumble { line.set_effects(frame.rumble); }
         if self.effects_due.replace(due) == due { return; }
-        let Some(due) = due else { return self.effects_timer.stop() };
-        self.effects_timer.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), || {
-            let Some(r) = RUNNER.with(|r| r.borrow().clone()) else { return };
+        at(&self.effects_timer, due, |r| {
             r.effects_due.set(None); // so the same deadline, if it comes again, re-arms the timer
             r.show_lights();
         });
@@ -1091,8 +1103,7 @@ impl Runner {
             let first = now() - launched;
             let wait = SPLASH_TIME.saturating_sub(first);
             eprintln!("game: first frame {} ms after the launch; the splash hides it {} ms more", first.as_millis(), wait.as_millis());
-            let weak = self.window.clone();
-            self.splash_timer.start(slint::TimerMode::SingleShot, wait, move || { if let Some(w) = weak.upgrade() { w.set_game_revealed(true); } });
+            after(&self.splash_timer, wait, |r| if let Some(w) = r.window.upgrade() { w.set_game_revealed(true) });
         }
     }
 
@@ -1152,16 +1163,6 @@ impl Runner {
         theme.set_accent(colour(first));
         theme.set_focus(colour(second));
         theme.set_warning(colour(palette::WARNING));
-    }
-
-    /// Arms `timer` to give the app a `Tick` at `due`, or stops it if nothing is due. Re-armed
-    /// after every message, as the app's deadlines change.
-    fn tick_at(self: &Rc<Self>, timer: &slint::Timer, due: Option<Duration>) {
-        let Some(due) = due else { timer.stop(); return };
-        let me = Rc::downgrade(self);
-        timer.start(slint::TimerMode::SingleShot, due.saturating_sub(now()), move || {
-            if let Some(r) = me.upgrade() { r.handle(Msg::Tick(now())); }
-        });
     }
 
     /// Shows the app's current screen; `t` animates a change of screen.
@@ -1263,10 +1264,7 @@ impl Runner {
                 let focused = rom(focus);
                 if focused != *self.picture.borrow() {
                     if held {
-                        self.picture_timer.start(slint::TimerMode::SingleShot, PICTURE_DELAY, move || {
-                            let focused = focused.clone();
-                            on_ui(move |r| { *r.picture.borrow_mut() = focused; r.refresh(None); });
-                        });
+                        after(&self.picture_timer, PICTURE_DELAY, move |r| { *r.picture.borrow_mut() = focused.clone(); r.refresh(None); });
                     } else {
                         self.picture_timer.stop();
                         *self.picture.borrow_mut() = focused;
@@ -1362,8 +1360,7 @@ impl Runner {
             w.set_clock(format!("{h:02}:{m:02}").into());
             next = Duration::from_secs(60 - s as u64);
         }
-        let me = Rc::downgrade(self);
-        self.clock.start(slint::TimerMode::SingleShot, next, move || { if let Some(r) = me.upgrade() { r.tick_clock(); } });
+        after(&self.clock, next, |r| r.tick_clock());
     }
 }
 
