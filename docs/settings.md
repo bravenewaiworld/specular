@@ -1,6 +1,6 @@
 # Settings
 
-Status: In progress · Updated: 2026-10-18
+Status: Implemented · Updated: 2026-10-18
 
 How settings are declared, shown, layered and stored on the SD card, how cores' options become settings, how their files change format over time, and how the card is laid out. The UI shows only the few settings people genuinely disagree on; everything else is still reachable, documented, in plain files on the card.
 
@@ -9,9 +9,9 @@ How settings are declared, shown, layered and stored on the SD card, how cores' 
 - **Settings are declared once** (2026-10-12): a key, type, default, label, section and who sees it. The settings screens are generated from the declarations, so a setting needs no hand-written UI.
 - **A setting is shown only where people genuinely disagree** (2026-10-12). Everything else has a good default or is detected automatically. Internals (frame time, GPU, memory, file paths) appear only when "Developer details" is on; battery, storage and WiFi are shown in plain words.
 - **Layers: built-in default < global < per system < per game** (2026-10-12). Each setting says how specific it may be (brightness is global only; scaling may differ per game).
-- **Only values that differ from the default are stored** (2026-10-12), so changing a default in a new version reaches everyone who never changed it. Unknown keys (a plugin not loaded, a newer version's settings) are kept untouched. A stored value of the wrong type or out of range is ignored, as if absent.
+- **Only values that differ from the default are stored** (2026-10-12), so changing a default in a new version reaches everyone who never changed it. Unknown keys (a plugin not loaded, a newer version's settings) are kept untouched. A stored value of the wrong type or out of range is ignored, as if absent. Rejected: filling every default into the files (a later default change couldn't be told apart from a user's choice); the schemas carry the defaults instead.
 - **Writes survive a power cut on FAT32** (2026-10-12). FAT32 has no journal, so a file is never rewritten in place: write a temporary file, fsync it, rename it over the original, then fsync the folder.
-- **Settings live in a versioned folder: `{sd card}/config/v0/<name>.json`** (2026-10-18). Every configuration (Specular's own interface, each system, each core, each game) is a file there, so everything not in the UI can still be changed. The `.json` holds only the user's overrides. Next to the files, Specular writes fully documented JSON Schemas carrying every setting and its default (and, once there are any, values Specular works out by itself), so users can see what they can set and to what. Defaults stay out of the `.json` so that a changed default still reaches everyone who never overrode it. Rejected: filling every default into the `.json` (a later default change couldn't be told apart from a user's choice). Each future format change gets a new `vN/` folder, migrated from the previous one.
+- **Settings live in a versioned folder: `{sd card}/config/v0/<name>.json`** (2026-10-18). Every configuration (Specular's own interface, each system, each core, each game) is a file there, so everything not in the UI can still be changed. The `.json` holds only the user's overrides. Next to the files, Specular writes fully documented JSON Schemas carrying every setting and its default (and, once there are any, values Specular works out by itself), so users can see what they can set and to what. Each future format change gets a new `vN/` folder, migrated from the previous one.
 - **A system's games share one schema, `games/<system id>.schema.json`** (2026-10-18), as a game's settings depend only on its system (and so its core). Rejected: one beside each game's file (a second file for every game with settings), and one for every game in the library (thousands of identical files to write and keep current).
 - **Schemas are generated, read-only and rewritten only when they change** (2026-10-18). They are built from the declarations at every start, so they can't drift from the code; each says it is generated, that edits to it are ignored and that it may be overwritten. The read-only mark (on FAT32, the read-only attribute) is a hint: Specular still replaces the file, and a card that refuses the mark is only logged. Comparing before writing spares the card a write per schema per start. Each setting's description comes from its declaration's `help`, written for people editing the files by hand.
 - **Each settings file names its schema in a `"$schema"` key** (2026-10-18; the project owner's choice), the schema's path relative to the file, so editors such as VS Code find it with no setup. Specular writes it on every save and drops it on reading: it is neither a setting nor an unknown key to keep. Rejected: leaving editors to match files to schemas by name (each user would have to set that up, per editor).
@@ -26,7 +26,7 @@ How settings are declared, shown, layered and stored on the SD card, how cores' 
 - **The options of cores the user adds are learned when one first plays a game** (2026-10-18; the project owner's choice). What the core declares as it loads its first game is kept in `cache/cores/<core>.json`, with its library's size and modification time; from then on its options are settings like the built-in cores' (declarations, a schema in `cores/<core>.schema.json`, the same lookup). Until then it runs with its own defaults. A core replaced (another size or time) is learned again, as is one that declares otherwise than it was learned with. Rejected: asking each core when it is found (its code would run then: see the options of the cores Specular builds, above); no settings for user cores' options (only their defaults, or a file Specular doesn't document).
 - **An option key two cores share is one setting, the first core's** (2026-10-18). Cores derived from one another can declare the same keys; a key names one setting, so the second core's is left out of the declarations, and it is given the first's value (which it may refuse, keeping its default, as the launch logs). Specular's cores come first. Rejected: a setting per core for a shared key (keys are settings' identity in every file).
 - **A system with several cores has a "Core" setting, per system and per game** (2026-10-18). Its key is `core.<system id>`, its values the cores' ids, its default the system's first core (Specular's own, if it has one); it is a user setting, in the system's and its games' settings, and takes effect when a game next starts. A system with one core has none. A value naming a core that is gone is ignored, as any invalid value is. Rejected: a key shared by all systems (a key names one setting, and each system has its own cores); per system only (a game may run better on another core).
-- **A core's option is looked up in the game's file, the system's, then the core's file, then its default** (2026-10-18). The global file plays no part: `cores/<core>.json` stands where it does for Specular's own settings. The values Specular chose before options were settings (mGBA's idle loop removal, Nestopia's NTSC filter off, SwanStation's software renderer) are Specular's defaults for those options, and their schemas say so. A core is given only the values set in a layer or given a default by Specular; its other options keep its own defaults. Rejected: giving it every option's value (the defaults of the core built for this PC would override those of the device's build).
+- **A core's option is looked up in the game's file, the system's, then the core's file, then its default** (2026-10-18). The global file plays no part: `cores/<core>.json` stands where it does for Specular's own settings. Specular's own choices (mGBA's idle loop removal, Nestopia's NTSC filter off, SwanStation's software renderer) are its defaults for those options (`CoreDecl::defaults`), and their schemas say so. A core is given only the values set in a layer or given a default by Specular; its other options keep its own defaults. Rejected: giving it every option's value (the defaults of the core built for this PC would override those of the device's build).
 
 ## Design
 
@@ -66,7 +66,7 @@ pub fn declarations(systems: &[SystemDecl]) -> Vec<SettingDecl>;   // Specular's
 pub fn core_key(system: &str) -> String;                           // "core.gba"
 pub fn core_of(settings: &Settings, system: &SystemDecl, at: &Layer) -> Option<&'static CoreDecl>;  // as "Core" chooses
 pub fn ignored(decls: &[SettingDecl], layer: &Layer, values: &Map<String, Value>) -> Vec<String>;
-pub fn games_with_settings(config: &Path) -> Vec<String>;          // from the files under games/
+pub fn games_with_settings(config: &Path) -> BTreeSet<String>;     // from the files under games/
 ```
 
 A value is looked up from the most specific layer that has a valid one, down to the default: the game's, the system's, then the global layer for Specular's settings or the core's (`Layer::Core`, whose scope is `Global`) for its options. Setting a value equal to what the layer would inherit removes the override. Settings rows mark values that override a less specific layer. Specular's own declarations are in `specular_core::settings::builtin`.
@@ -108,14 +108,9 @@ pub fn list(core: &'static CoreDecl) -> &'static CoreOptions;      // parsed fro
 pub fn decls(core: &'static CoreDecl) -> &'static [SettingDecl];
 pub fn values(settings: &Settings, core: &'static CoreDecl, at: &Layer) -> Vec<(String, String)>;  // for LaunchSpec::options
 pub mod mgba { pub const LIST: &str; pub const IDLE_OPTIMIZATION: &str; pub mod idle_optimization { pub const REMOVE_KNOWN: &str; /* … */ } /* … */ }
-
-pub struct CoreDecl {                                   // library: how Specular runs a core
-    pub options: &'static str,                          // its list, e.g. mgba::LIST
-    pub defaults: &'static [(&'static str, &'static str)],  // Specular's, e.g. (mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)
-    /* name, library, rom_by_path, states_restore_save, bios */
-}
-impl CoreDecl { pub fn id(&self) -> &'static str; }    // "mgba": its library's name less "_libretro"
 ```
+
+A `CoreDecl` (see [runtime.md](runtime.md)) names its list (`options: mgba::LIST`) and gives Specular's defaults with the constants (`(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)`).
 
 Each option is a developer setting under a section named after the core and its category ("mGBA: Performance"), settable per system and per game, its values as a choice labelled as the core labels them. Its `help`, for the schema, is the core's info text, then the values' labels if they have any, then the core's own default where Specular's differs. A setting declaration takes `'static` text, so each core's list is parsed once and kept for the run, its declarations borrowing from it. `crates/specular-core/build.rs` writes a module of constants per `data/cores/*.json`: each key, less the core's prefix, and each value, in upper case (`DONT_REMOVE`, `V15` for "15", `MINUS_1` for "-1"); one that would clash with another is left out, with a build warning.
 
@@ -156,7 +151,7 @@ A file Specular writes starts with `"$schema"`, the path to its schema from the 
 }
 ```
 
-The schemas (JSON Schema draft 2020-12) are made by `settings::schema::all` from the declarations: per setting valid in that file, its section and label as `title`, its `help` as `description`, its type and allowed values, and its `default`. The I/O thread writes them at start-up, after loading the settings, and not into an empty data folder (without its card, that is the bare mount point). A schema that can't be written is logged and doesn't stop settings from loading or saving.
+The schemas (JSON Schema draft 2020-12) are made by `settings::schema::all` from the declarations: per setting valid in that file, its section and label as `title`, its `help` as `description`, its type and allowed values, and its `default`. The scan thread writes them once it has looked for the cores on the card, and again whenever those change, and not into an empty data folder (without its card, that is the bare mount point). A schema that can't be written is logged and doesn't stop settings from loading or saving.
 
 Reading a file: a missing file is an empty layer. If the file is missing or not valid JSON, a valid `<file>.tmp` left by a cut-off write is used instead. An empty file counts as an empty object (someone may have emptied it by hand). A file that isn't a JSON object is moved aside to `<file>.bad`, so the user can look at it, and the layer starts empty. Writing an empty layer removes the file (and any stale `.tmp`). The same safe store is used for Specular's own records in `cache/` and `saves/`.
 
@@ -188,4 +183,4 @@ Before v0, settings were in `configs/`, laid out as v0 less the schemas and `cor
 | `saves/` | Battery saves (`.srm`), mirroring `roms/` and named after the ROM: `roms/gba/Golden Sun.gba` → `saves/gba/Golden Sun.srm`. Also `saves/.specular-saves.json`, which lets saves follow renamed ROMs (see [runtime.md](runtime.md)). |
 | `cores/` | Cores the user adds: `<name>_libretro.so` beside its `<name>_libretro.info` (see [runtime.md](runtime.md)) |
 | `config/v0/` | Settings, as above |
-| `cache/` | Things Specular can rebuild, safe to delete: `cache/art/<kind>/` (box art, title screens, screenshots and where each game was left off, each mirroring `roms/`), `cache/identify/` (what is known about each ROM), `cache/cores/` (the options learned of the cores the user added) |
+| `cache/` | Things Specular can rebuild, safe to delete: `cache/art/<kind>/` (box art, title screens, screenshots and where each game was left off, each mirroring `roms/`), `cache/identify/` (what is known about each ROM), `cache/cores/` (the options learned of the cores the user added), and `cache/launch.json` while a game runs (see [architecture.md](architecture.md)) |

@@ -80,7 +80,7 @@ After every message, the app works out what the radios and sound output should b
 
 - **WiFi on Auto** is on while something needs it, then for 60 s more, so needs that come and go don't keep restarting the radio. A need made while WiFi isn't connected lapses after 30 s unless it connects by then, so a place with no known network doesn't keep the radio on; once connected, a need holds until dropped.
 - **Bluetooth search** runs only while the Bluetooth screen is open: it costs power, and slows WiFi, which may share the antenna. It starts after powering on and stops before powering off.
-- **Sound output** is the first connected Bluetooth device taking sound, else headphones in the jack, else the speaker (see [architecture.md](architecture.md)). An output that failed to open isn't tried again until its device disconnects, so a reconnection tries it afresh.
+- **Sound output** follows the order in [architecture.md](architecture.md) (Bluetooth, then the jack, then the speaker). An output that failed to open isn't tried again until its device disconnects, so a reconnection tries it afresh.
 
 ### The trace
 

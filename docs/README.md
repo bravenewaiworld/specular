@@ -4,11 +4,11 @@ Why Specular works the way it does: decisions, designs and research, one doc per
 
 | Doc | Covers |
 |---|---|
-| [architecture.md](architecture.md) | Stack, crates, threads, the device boundary, extension points, memory and licence |
-| [look-and-motion.md](look-and-motion.md) | The Light Bar look, theme, motion, prefabs, sounds, fonts |
-| [runtime.md](runtime.md) | The libretro runtime: frame pacing, sound, saves and states, cores |
-| [library-and-box-art.md](library-and-box-art.md) | Scanning, systems, game identification, box art |
-| [settings.md](settings.md) | Setting declarations, the config files on the SD card, migrations, the SD card layout |
+| [architecture.md](architecture.md) | Stack, crates, threads, the device boundary, extension points, credits, the launch record, memory and licence |
+| [look-and-motion.md](look-and-motion.md) | The Light Bar look, theme, motion, prefabs, sounds, lights and rumble effects, fonts |
+| [runtime.md](runtime.md) | The libretro runtime: frame pacing, sound, saves and states, discs, rumble, cores (Specular's and those added to the card) |
+| [library-and-box-art.md](library-and-box-art.md) | Scanning, systems, search, game identification, box art and other pictures |
+| [settings.md](settings.md) | Setting declarations, game and system settings, core options, the config files on the SD card, migrations, the SD card layout |
 | [wireless.md](wireless.md) | WiFi and Bluetooth screens and services, traces and scenarios |
 | [installer.md](installer.md) | Installing the system to internal storage, from Settings |
 | [brick.md](brick.md) | The TrimUI Brick port: display platform, hardware services, measurements |
