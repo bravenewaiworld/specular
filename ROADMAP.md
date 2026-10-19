@@ -63,7 +63,10 @@ Completed:
 
 TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
- - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps). Still to check there: the step down (Symphony of the Night from 2.0 to 1.8 GHz after 10 s on time, perhaps on to 1.6 GHz, and still at full speed; Metal Gear Solid staying at 2.0), a game without a start level going to 1.2 GHz after two misses, and the frame statistics' second line. Also: measure what it costs in battery (docs/runtime.md, Open questions)
+ - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps; the step down, as Contra came back from 1.6 GHz to the default in 10 s steps; a game without a start level going to 1.2 GHz after two misses; the frame statistics' second line). Left:
+   - Symphony of the Night never steps down from 2.0 GHz in Specular, though it would fit at 1.8: it misses a single refresh every few seconds even at 2.0 GHz with 5 ms to spare (not for want of CPU; it doesn't headless), and each miss restarts the 10 s on time. Find why the game thread misses there, or let a lone miss not restart the 10 s
+   - Steps up have no settling time: a burst of misses (as when something reads the framebuffer) raised Contra three steps in a second
+   - Measure what it costs in battery (docs/runtime.md, Open questions)
 
 ### Library and Game Management
 
