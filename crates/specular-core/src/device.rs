@@ -124,7 +124,8 @@ pub trait HeadphoneJack: Send {
     fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>);
 }
 
-/// Where a game's sound goes: a queue of 16-bit stereo frames, played at a fixed rate.
+/// Where a game's or the interface's sound goes: a queue of 16-bit stereo frames, played at a
+/// fixed rate.
 pub trait SoundOut: Send {
     /// Frames played per second.
     fn rate(&self) -> u32;
@@ -165,7 +166,9 @@ pub trait Device {
     /// The hardware services. Called once; they then move to the UI crate's hardware thread.
     fn hardware(&self) -> Hardware;
     /// Opens a sound output for a game (each game opens its own and closes it when it ends, and
-    /// opens another when the output changes while it plays, unless `Output::same_stream`).
+    /// opens another when the output changes while it plays, unless `Output::same_stream`); also
+    /// for the interface sounds. Specular never has two open at once (the interface sounds close
+    /// theirs before a game opens one), so an implementation needn't support that.
     fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>>;
     /// The display's refresh, if the device can wait for it; without, games are paced by a
     /// timer at their own frame rate. Each call opens a separate one: give each waiting thread its

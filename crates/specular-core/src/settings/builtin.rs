@@ -18,6 +18,8 @@ pub const VOLUME_MAX: i64 = 20;
 pub const HEADPHONE_VOLUME: &str = "sound.headphone_volume";
 /// The volume of Bluetooth headphones and speakers (all of them share it), 0 to `VOLUME_MAX`.
 pub const BLUETOOTH_VOLUME: &str = "sound.bluetooth_volume";
+/// Whether the interface makes its sounds (`app::Sound`).
+pub const INTERFACE_SOUNDS: &str = "sound.interface_sounds";
 /// WiFi: "on", "off", or "auto" (on only while something needs it: see `app::WifiNeed`). Shown
 /// on the Wi-Fi screen.
 pub const WIFI: &str = "wireless.wifi";
@@ -71,6 +73,9 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "The volume of Bluetooth headphones and speakers (all of them share it), from 0 (silent) to 20. The volume keys change it while sound goes to one.",
             kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(10),
             visibility: Visibility::User, deepest: Scope::Global },
+        SettingDecl { key: INTERFACE_SOUNDS, section: "Sound", label: "Interface sounds",
+            help: "Plays a quiet tick as the selection moves, and short tones as screens open and close and switches turn on and off. They are never played over a game, even while it is paused.",
+            kind: SettingKind::Bool, default: json!(true), visibility: Visibility::User, deepest: Scope::Global },
         SettingDecl { key: LED_BRIGHTNESS, section: "Lights", label: "Brightness",
             help: "How bright the device's lights are, from 0 (off) to 5 (brightest).",
             kind: SettingKind::Int { min: 0, max: LED_BRIGHTNESS_MAX, step: 1, unit: "" }, default: json!(3),

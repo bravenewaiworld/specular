@@ -5,7 +5,7 @@ Why Specular works the way it does: decisions, designs and research, one doc per
 | Doc | Covers |
 |---|---|
 | [architecture.md](architecture.md) | Stack, crates, threads, the device boundary, extension points, memory and licence |
-| [look-and-motion.md](look-and-motion.md) | The Light Bar look, theme, motion, prefabs, fonts |
+| [look-and-motion.md](look-and-motion.md) | The Light Bar look, theme, motion, prefabs, sounds, fonts |
 | [runtime.md](runtime.md) | The libretro runtime: frame pacing, sound, saves and states, cores |
 | [library-and-box-art.md](library-and-box-art.md) | Scanning, systems, game identification, box art |
 | [settings.md](settings.md) | Setting declarations, the config files on the SD card, migrations, the SD card layout |

@@ -16,6 +16,7 @@ use specular_core::launch::{self, LaunchRecord};
 use specular_core::library::{Game, SystemDecl};
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
+use crate::sounds::Sounds;
 use crate::{AppWindow, DataRoot};
 
 /// Where cores are installed: `$SPECULAR_CORES`, else `cores/` next to Specular's binary.
@@ -49,7 +50,9 @@ impl Playing {
     /// Starts `game` with its system's core and its sound on `output`, on another thread, since
     /// reading a large ROM or opening a Bluetooth output can take a second or more; then calls
     /// `started` there with the result. `window` is redrawn whenever a new frame arrives.
-    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &SharedDevice, output: Output, window: slint::Weak<AppWindow>,
+    /// Before opening the game's output, that thread waits for the interface `sounds` to close
+    /// theirs.
+    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &SharedDevice, sounds: &Sounds, output: Output, window: slint::Weak<AppWindow>,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
         let library = cores_dir().join(format!("{}.so", core.library));
@@ -77,8 +80,9 @@ impl Playing {
         });
         let (vsync, display_hz) = (device.open_vsync(), device.profile().refresh_hz);
         let state = game.state_path(&data.roms(), "state1");
-        let (roms, saves, played, device) = (data.roms(), data.saves(), game.clone(), device.clone());
+        let (roms, saves, played, device, sounds) = (data.roms(), data.saves(), game.clone(), device.clone(), sounds.clone());
         std::thread::spawn(move || {
+            sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
             let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame };

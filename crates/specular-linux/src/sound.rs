@@ -1,6 +1,6 @@
-//! Game sound through ALSA's standard library, libasound.so.2, loaded when a game starts (as the
-//! GPU libraries are), so Specular doesn't link to it and runs without it (silently). Bluetooth
-//! headphones and speakers play through bluez-alsa's ALSA plugin.
+//! Sound through ALSA's standard library, libasound.so.2, loaded each time an output opens (a
+//! game's or the interface sounds'), like the GPU libraries, so Specular doesn't link to it and
+//! runs without it (silently). Bluetooth headphones and speakers play through bluez-alsa's ALSA plugin.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::io;

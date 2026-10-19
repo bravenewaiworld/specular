@@ -89,13 +89,14 @@ pub trait Screen {
 | Hardware | the device's hardware services; reads the battery every 10 s |
 | One per radio | WiFi and Bluetooth commands, which can block for seconds |
 | Headphone jack | waits for plugging and unplugging |
+| Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
 | Installer | the device's installer |
 | Art worker, art loader | finding and storing box art; decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
 | Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written |
 | Vsync | in a display platform that paces animations by the display (the Brick's): after an animation's frame is presented, waits for the vsync that shows it and wakes the UI |
 
-Opening a sound output can block, so it happens on short-lived threads.
+Opening a sound output can block, so a game's opens on short-lived threads, and the interface sounds' output on the Sounds thread.
 
 ### The device boundary
 

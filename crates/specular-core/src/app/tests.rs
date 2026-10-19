@@ -9,8 +9,18 @@ fn game(system: &'static str, title: &str) -> Game {
     Game { system, path: format!("{system}/{title}.rom").into(), title: title.into(), sort_key: title.to_lowercase() }
 }
 
-fn app() -> App {
-    let mut app = App::new(builtin_systems(), crate::settings::builtin::settings());
+/// Specular's settings with interface sounds off by default, so that only the sounds' own tests
+/// see them.
+fn quiet() -> Vec<SettingDecl> {
+    let mut decls = crate::settings::builtin::settings();
+    decls.iter_mut().find(|d| d.key == builtin::INTERFACE_SOUNDS).unwrap().default = json!(false);
+    decls
+}
+
+fn app() -> App { app_with(quiet()) }
+
+fn app_with(settings: Vec<SettingDecl>) -> App {
+    let mut app = App::new(builtin_systems(), settings);
     app.handle(Msg::Library { games: vec![game("gba", "Golden Sun"), game("gba", "Mother 3"), game("snes", "Super Metroid")], card_found: true });
     app
 }
@@ -184,7 +194,7 @@ fn the_press_that_woke_the_device_is_neither_a_tap_nor_a_hold() {
 #[test]
 #[ignore]
 fn time_focus_moves_in_a_long_list() {
-    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let mut a = App::new(builtin_systems(), quiet());
     a.handle(Msg::Library { games: (0..3000).map(|i| game("snes", &format!("Game {i:04}"))).collect(), card_found: true });
     tap(&mut a, Button::A, 0);
     let t = std::time::Instant::now();
@@ -198,7 +208,7 @@ fn time_focus_moves_in_a_long_list() {
 
 #[test]
 fn y_switches_games_to_a_grid_where_left_and_right_move() {
-    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let mut a = App::new(builtin_systems(), quiet());
     a.handle(Msg::Library { games: (0..7).map(|i| game("gba", &format!("Game {i}"))).collect(), card_found: true });
     a.set_grid_columns(3);
     tap(&mut a, Button::A, 0);
@@ -220,7 +230,7 @@ fn y_switches_games_to_a_grid_where_left_and_right_move() {
 
 #[test]
 fn search_finds_games_in_every_system_best_first_and_plays_them() {
-    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let mut a = App::new(builtin_systems(), quiet());
     a.handle(Msg::Library { games: vec![game("gba", "Metroid Fusion"), game("gba", "Mother 3"), game("snes", "Super Metroid")], card_found: true });
     tap(&mut a, Button::Down, 0);
     tap(&mut a, Button::Down, 0);
@@ -273,7 +283,7 @@ fn x_searches_from_a_game_list_and_no_matches_say_so() {
 
 #[test]
 fn l2_and_r2_jump_between_first_letters() {
-    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let mut a = App::new(builtin_systems(), quiet());
     let titles = ["1942", "Advance Wars", "Asterix", "Boktai", "Castlevania", "Contra", "The Legend of Zelda"];
     a.handle(Msg::Library { games: titles.iter().map(|t| game("gba", t)).collect(), card_found: true });
     tap(&mut a, Button::A, 0);
@@ -443,7 +453,7 @@ fn a_running_game_is_not_idle_but_its_menu_is() {
 
 #[test]
 fn home_says_where_games_go_when_there_are_none() {
-    let mut a = App::new(builtin_systems(), crate::settings::builtin::settings());
+    let mut a = App::new(builtin_systems(), quiet());
     let labels = |a: &App| a.view().rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
     assert!(labels(&a).contains(&"Looking for games…".to_string()));
     a.handle(Msg::Library { games: vec![], card_found: true });
@@ -976,4 +986,66 @@ mod install {
         assert!(rows.iter().any(|r| r.label == "Erases everything on the internal storage, including what the unfinished install left."));
         assert!(rows.iter().any(|r| r.label == "Back up the internal storage first" && r.kind == RowKind::Toggle { on: false }));
     }
+}
+
+/// The sounds among `effects`.
+fn sounds(effects: Vec<Effect>) -> Vec<Sound> {
+    effects.into_iter().filter_map(|e| match e { Effect::Sound(s) => Some(s), _ => None }).collect()
+}
+
+#[test]
+fn moves_tick_and_screens_sound_as_they_open_and_close_but_never_over_a_game() {
+    let mut a = app_with(crate::settings::builtin::settings());
+    assert_eq!(sounds(tap(&mut a, Button::Down, 0)), [Sound::Move]);
+    assert_eq!(sounds(tap(&mut a, Button::Up, 100)), [Sound::Move]);
+    assert_eq!(sounds(tap(&mut a, Button::A, 200)), [Sound::Open]);
+    assert_eq!(sounds(tap(&mut a, Button::B, 300)), [Sound::Back]);
+    assert_eq!(sounds(tap(&mut a, Button::B, 400)), []); // home stays
+    tap(&mut a, Button::A, 500);
+    assert_eq!(sounds(tap(&mut a, Button::A, 600)), []); // the game starts
+    // The game has the sound output, also while paused in its menu, and as it is quit from there.
+    assert_eq!(sounds(tap(&mut a, Button::Menu, 700)), []);
+    for t in 0..4 { assert_eq!(sounds(tap(&mut a, Button::Down, 800 + 100 * t)), []); }
+    assert_eq!(focused(&a), "Quit game");
+    assert_eq!(sounds(tap(&mut a, Button::A, 1300)), []);
+    assert_eq!(a.playing(), None);
+    assert_eq!(sounds(tap(&mut a, Button::B, 1400)), [Sound::Back]);
+}
+
+#[test]
+fn ticks_closer_than_the_gap_are_dropped() {
+    let mut a = app_with(crate::settings::builtin::settings());
+    assert_eq!(sounds(tap(&mut a, Button::Down, 0)), [Sound::Move]);
+    assert_eq!(sounds(tap(&mut a, Button::Down, TICK_GAP.as_millis() as u64 - 1)), []);
+    assert_eq!(focused(&a), "Search"); // the focus still moved
+    assert_eq!(sounds(tap(&mut a, Button::Down, TICK_GAP.as_millis() as u64)), [Sound::Move]);
+}
+
+#[test]
+fn switches_sound_their_new_state_and_values_tick() {
+    let mut a = app_with(crate::settings::builtin::settings());
+    tap(&mut a, Button::Up, 0);
+    tap(&mut a, Button::A, 0);
+    assert_eq!(focused(&a), "Brightness");
+    assert_eq!(sounds(tap(&mut a, Button::Right, 1000)), [Sound::Move]);
+    while focused(&a) != "Developer details" { tap(&mut a, Button::Down, 1000); }
+    assert_eq!(sounds(tap(&mut a, Button::A, 2000)), [Sound::Toggle(true)]);
+    assert_eq!(sounds(tap(&mut a, Button::A, 3000)), [Sound::Toggle(false)]);
+    // Switching the sounds off is silent; switching them back on is heard.
+    while focused(&a) != "Interface sounds" { tap(&mut a, Button::Up, 3000); }
+    assert_eq!(sounds(tap(&mut a, Button::A, 4000)), []);
+    assert_eq!(sounds(tap(&mut a, Button::Down, 5000)), []);
+    assert_eq!(sounds(tap(&mut a, Button::Up, 6000)), []);
+    assert_eq!(sounds(tap(&mut a, Button::A, 7000)), [Sound::Toggle(true)]);
+}
+
+#[test]
+fn no_sounds_while_muted_or_at_volume_zero() {
+    let mut a = app_with(crate::settings::builtin::settings());
+    event(&mut a, Button::Mute, true, 0);
+    assert_eq!(sounds(tap(&mut a, Button::Down, 100)), []);
+    event(&mut a, Button::Mute, false, 200);
+    assert_eq!(sounds(tap(&mut a, Button::Down, 300)), [Sound::Move]);
+    a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::from_iter([("sound.volume".into(), json!(0))])));
+    assert_eq!(sounds(tap(&mut a, Button::Down, 400)), []);
 }

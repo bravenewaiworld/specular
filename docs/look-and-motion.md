@@ -2,7 +2,7 @@
 
 Status: In progress · Updated: 2026-10-18
 
-How Specular looks, moves and feels under the thumbs: the Light Bar look, the theme and its device-relative sizes, the motion rules, the prefab components every screen is drawn with, and the fonts. Specular should feel like part of the device it runs on: quiet, exact and quick. The interactive reference is `design/mockup.html`; `crates/specular-ui/ui/theme.slint` holds the actual values.
+How Specular looks, moves and feels under the thumbs: the Light Bar look, the theme and its device-relative sizes, the motion rules, the prefab components every screen is drawn with, the sounds, and the fonts. Specular should feel like part of the device it runs on: quiet, exact and quick. The interactive reference is `design/mockup.html`; `crates/specular-ui/ui/theme.slint` holds the actual values.
 
 ## Decisions
 
@@ -21,7 +21,9 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 - **No fonts for non-Latin scripts are bundled** (2026-10-18). CJK fonts cost 15 MB or more, so Specular uses any font files in `{sd card}/fonts/` as fallbacks, and users who need one add it there.
 - **The card's fonts are named one by one, after the emoji font, at start-up** (2026-10-18). Specular puts each TrueType or OpenType file directly in `{sd card}/fonts/` on `$SLINT_FONT_PATH`, after Noto Emoji, and logs which it uses and which it skips, and why. Fonts added later are used from the next start. Rejected: putting the folder itself on `$SLINT_FONT_PATH` (Slint would read whole every file in it, font or not, and say nothing of those it can't use); looking in folders inside it (Slint doesn't either); the card's fonts before Noto Emoji (a CJK font's own symbols would replace its emoji).
 - **L2 and R2 jump between first letters in game lists and grids, and show the letter** (2026-10-18). The letter shows large, on a raised square over the middle of the list, for 0.7 s after the last jump, like the volume gauge after the last change. Held, they repeat like directions; at either end a fresh press wraps and a held one stops, as in lists. Rejected: a strip of letters down the side (always on screen, for something used now and then), L1 and R1 (they already jump by a screen).
-- **Sounds are designed later** (2026-10-18), starting from the mockup's quiet tick on each move.
+- **Interface sounds are a few short tones, made in code from the mockup's tick** (2026-10-18). A quiet tick as the focus moves or a value steps; two tones rising as a screen opens, and falling as one closes; one tone above or below the tick as a switch turns on or off. Other actions (joining a network, say) make none. "Interface sounds" turns them off. They play on the current output at its volume, and not at all while muted or at volume 0. Rejected: shipping sound files (a decoder and files to install, for tones a few lines of code make); one sound for everything, as in the mockup (opening and going back would sound alike); a sound as a game starts (the game would have to wait for the interface sounds' output, maybe a slow Bluetooth one, to open and close before opening its own; the zoom into the game says it started).
+- **No interface sounds over a game, even paused in its menu** (2026-10-18). The game has the sound output, and an ALSA device that doesn't mix can't be opened twice. Rejected: mixing them into the paused game's stream (the paused game's thread would have to keep writing sound, only for the sake of a few ticks).
+- **A held direction ticks at most every 60 ms** (2026-10-18), about 15 times a second, so the 30 moves a second of a long hold don't buzz. Rejected: shorter ticks as the repeats speed up (at 30 a second they still run together).
 - **In-game LED, light bar and rumble reactions are pluggable effects** (2026-10-18), registered like the other extension points (see [architecture.md](architecture.md)).
 
 ## Design
@@ -79,6 +81,19 @@ Buttons are abstract (A, B, X, Y, L1, R1, L2, R2, Start, Select, Menu, the d-pad
 - **L1 / R1:** jump by about 80 % of a screen.
 - **L2 / R2:** in a list of games sorted by title, jump to the first game of the previous or next letter (from the middle of the M's, back to the first L). They repeat when held.
 - **Number and choice rows:** left and right change the value.
+
+### Sounds
+
+| Sound | When | Tones |
+|---|---|---|
+| Move | the focus moves (also by a letter jump), a value steps, a key is used on the on-screen keyboard | 1250 Hz |
+| Open | a screen opens | 1250 Hz, then 1875 Hz 40 ms later |
+| Back | a screen closes | 1875 Hz, then 1250 Hz 40 ms later |
+| Switch on / off | a switch is turned on or off | 1875 Hz / 833 Hz |
+
+Each tone is the mockup's: a sine whose gain rises exponentially from 0.0001 to 0.03 (−30 dBFS) in 2 ms, then falls exponentially back to 0.0001 by 25 ms, where it stops. The other tones are a fifth above or below the tick.
+
+The app says which sound an interaction makes (`app::Sound`, as `Effect::Sound`), and drops those that mustn't play. The UI's `sounds` module makes each sound once, at the output's rate, and plays it on a thread of its own, so playing one is a copy into the output's queue. The output is opened at the first sound (opening can block) and closed after 2 s without one (an open output keeps the sound hardware, or a Bluetooth stream, powered), and before a game opens its own. A sound that can't start within 100 ms of being asked for (a Bluetooth output slow to open) is dropped. After a failure to open or play, sounds are dropped for 2 s, or until the output changes, and each failure is logged once. The log's `sound:` lines say when the interface sounds' output opens and closes, and why.
 
 ### Fonts
 

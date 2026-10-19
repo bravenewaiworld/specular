@@ -111,7 +111,30 @@ pub enum Effect {
     /// Sound goes to this output from now on, including a running game's.
     SoundTo(Output),
     Installer(InstallCmd),
+    /// Play this interface sound. Only sent while they can be heard: never while a game is being
+    /// played (it has the sound output, also while paused), muted, at volume 0 or with "Interface
+    /// sounds" off.
+    Sound(Sound),
 }
+
+/// The interface's sounds (made in specular-ui; see docs/look-and-motion.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sound {
+    /// The focus moved, or a value stepped. At most one per `TICK_GAP`.
+    Move,
+    /// A screen opened. Starting a game makes no sound: the game would have to wait for the
+    /// interface sounds' output (maybe a slow Bluetooth one) to open and close before opening its
+    /// own.
+    Open,
+    /// A screen closed.
+    Back,
+    /// A switch turned on (true) or off.
+    Toggle(bool),
+}
+
+/// `Sound::Move`s closer together than this are dropped, so a held direction (up to about 30
+/// moves a second) ticks about 15 times a second rather than buzzing.
+pub const TICK_GAP: Duration = Duration::from_millis(60);
 
 /// Holding the power button this long opens the power menu; a shorter press sleeps.
 pub const POWER_HOLD: Duration = Duration::from_secs(1);
@@ -260,6 +283,8 @@ pub struct App {
     now: Duration,
     /// What the radios and sound were last told (see `wireless::Radios`).
     radios: wireless::Radios,
+    /// When the last `Sound::Move` was sent (see `TICK_GAP`).
+    last_tick: Option<Duration>,
 }
 
 impl App {
@@ -293,6 +318,7 @@ impl App {
             keyboard: None,
             now: Duration::ZERO,
             radios: wireless::Radios::default(),
+            last_tick: None,
         }
     }
 
@@ -407,9 +433,31 @@ impl App {
 
     /// Feeds one message; returns the effects the caller must carry out, in order.
     pub fn handle(&mut self, msg: Msg) -> Vec<Effect> {
+        // Taken before the message is handled: a game this message quits (from its menu) still
+        // holds the sound output.
+        let in_game = self.playing.is_some();
         let mut e = self.handle_msg(msg);
         e.extend(self.reconcile_radios());
+        self.drop_unheard_sounds(&mut e, in_game);
         e
+    }
+
+    /// Removes the sounds from `effects` that mustn't play (see `Effect::Sound`), and ticks too
+    /// close to the last (`TICK_GAP`). The setting and the volume are read after the message, so
+    /// switching sounds on is heard and switching them off isn't (whether a game is being played is
+    /// taken from before it; see `handle`).
+    fn drop_unheard_sounds(&mut self, effects: &mut Vec<Effect>, in_game: bool) {
+        let on = self.ctx.settings.get(builtin::INTERFACE_SOUNDS, &Layer::Global).is_some_and(|(v, _)| *v == true);
+        let heard = on && !in_game && !self.muted && self.volume().1 > 0;
+        effects.retain(|e| match e {
+            Effect::Sound(_) if !heard => false,
+            Effect::Sound(Sound::Move) => {
+                if self.last_tick.is_some_and(|t| self.now < t + TICK_GAP) { return false; }
+                self.last_tick = Some(self.now);
+                true
+            }
+            _ => true,
+        });
     }
 
     fn handle_msg(&mut self, msg: Msg) -> Vec<Effect> {
@@ -509,7 +557,7 @@ impl App {
             let to = list::step(&view.rows, focus, delta, p.repeat);
             if to == focus { return vec![]; }
             self.nav.top_mut().focus = view.rows.get(to).map(|r| r.id.clone());
-            return vec![Effect::Redraw(None)];
+            return vec![Effect::Sound(Sound::Move), Effect::Redraw(None)];
         }
         let id = self.nav.top().id.clone();
         if matches!(p.button, Button::L2 | Button::R2) && self.screens[&id].letter_index() && !view.rows.is_empty() {
@@ -517,7 +565,7 @@ impl App {
             let letter = Effect::ShowLetter(library::index_letter(&view.rows[to].label));
             if to == focus { return vec![letter]; }
             self.nav.top_mut().focus = Some(view.rows[to].id.clone());
-            return vec![Effect::Redraw(None), letter];
+            return vec![Effect::Sound(Sound::Move), Effect::Redraw(None), letter];
         }
         let focused = view.rows.get(focus).filter(|r| r.kind.focusable());
         let row = focused.map(|r| r.id.0.as_str());
@@ -656,7 +704,7 @@ impl App {
         let Some((kb, _)) = &mut self.keyboard else { return self.go(|nav| nav.pop()) };
         match kb.press(p) {
             KeyOutcome::None => vec![],
-            KeyOutcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
+            KeyOutcome::Changed => { self.changed(); vec![Effect::Sound(Sound::Move), Effect::Redraw(None)] }
             KeyOutcome::Cancel => self.go(|nav| nav.pop()),
             KeyOutcome::Done(text) => {
                 let purpose = self.keyboard.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
@@ -682,7 +730,7 @@ impl App {
         if !self.nav.contains(&screens::KEYBOARD) { self.keyboard = None; }
         self.repeater.reset();
         self.changed();
-        vec![Effect::Redraw(Some(t))]
+        vec![Effect::Sound(if t == Transition::Push { Sound::Open } else { Sound::Back }), Effect::Redraw(Some(t))]
     }
 }
 
@@ -848,7 +896,9 @@ impl Screen for SettingsScreen {
 /// A press on a global setting's row: changes it, saves it and applies it.
 fn setting_press(ctx: &mut Ctx, row: &Row, p: Press) -> Outcome {
     let Some((key, value)) = ctx.settings.press(&row.id.0, &Layer::Global, p) else { return Outcome::None };
-    Outcome::Effects(vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key, value }])
+    // Switches sound their new state; numbers and choices tick as they step.
+    let sound = value.as_bool().map_or(Sound::Move, Sound::Toggle);
+    Outcome::Effects(vec![Effect::Sound(sound), Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key, value }])
 }
 
 /// The keyboard's screen: one row per key, line by line (`Layout::Keys`), its text above them.

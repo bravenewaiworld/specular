@@ -118,9 +118,10 @@ Completed:
  - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
  - A splash while a game starts: "Powered by" its core, the core's copyright notice and web address (from the credits), over the zooming box art until the game's first frame, for at least 1 s
  - The light bar, and the LEDs showing the accent, take each system's colour on its game list and while its games are played ("Tint by system", on by default)
+ - Interface sounds, made in code from the mockup's tick: a quiet tick as the focus moves, short tones as screens open and close and switches turn on and off; none over a game, even paused. The output opens at the first sound and closes when idle. "Interface sounds" turns them off
 
 TODO:
- - Sounds
+ - Interface sounds: to check on the Brick (how loud they are, and that the speaker doesn't pop as their output opens and closes)
  - Title screens and screenshots as art
  - Profile FemtoVG's per-frame cost while scrolling (about 47 % of a core on the Brick): text layout cache hits, how many row slots redraw, whether off-screen slots draw
  - Pluggable LED and rumble effects (e.g. the light bar reacting to low battery or a save in game, rumble following sound peaks)

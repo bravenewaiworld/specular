@@ -1,13 +1,15 @@
 //! Specular's UI: draws the core's screens with Slint and carries out the app's effects. All
 //! slow work happens off the UI thread: files on an I/O thread (and the library scan on its
 //! own), hardware on a hardware thread, each radio on a thread of its own (`radio_thread`), box
-//! art on the art service's threads (`art`), and opening sound outputs on short-lived threads;
-//! their results come back as messages to the app, or as calls on the UI thread.
+//! art on the art service's threads (`art`), interface sounds on a thread of their own
+//! (`sounds`), and opening a game's sound outputs on short-lived threads; their results come back
+//! as messages to the app, or as calls on the UI thread.
 
 mod art;
 mod frames;
 mod game;
 mod keys;
+mod sounds;
 mod watch;
 
 use std::cell::{Cell, RefCell};
@@ -149,6 +151,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     // The radios and the headphone jack get threads of their own; the rest of the hardware goes
     // to the hardware thread.
     let mut hardware = device.hardware();
+    let device: game::SharedDevice = Arc::from(device);
     let (wifi, bluetooth, installer) = (hardware.wifi.take(), hardware.bluetooth.take(), hardware.installer.take());
     match hardware.headphones.take() {
         Some(jack) => { std::thread::spawn(move || jack.watch(Box::new(|plugged| post(Msg::Headphones(plugged))))); }
@@ -181,7 +184,8 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         installer: installer.map(installer_thread),
         io,
         data,
-        device: Arc::from(device),
+        sounds: sounds::Sounds::start(device.clone()),
+        device,
         output: RefCell::new(Output::Speaker),
         sound_requests: Cell::new(0),
         playing: RefCell::default(),
@@ -501,6 +505,7 @@ struct Runner {
     io: mpsc::Sender<Save>,
     data: DataRoot,
     device: game::SharedDevice,
+    sounds: sounds::Sounds,
     /// Where sound goes: what the app last asked for (`Effect::SoundTo`). Games launched later
     /// open it; a running game is moved to it (`route_sound`).
     output: RefCell<Output>,
@@ -667,6 +672,7 @@ impl Runner {
             Effect::Bluetooth(cmd) => if let Some(t) = &self.bluetooth { let _ = t.send(cmd); },
             Effect::Installer(cmd) => if let Some(t) = &self.installer { let _ = t.send(cmd); },
             Effect::SoundTo(output) => self.set_output(output),
+            Effect::Sound(sound) => self.sounds.play(sound),
         }
     }
 
@@ -685,6 +691,7 @@ impl Runner {
     fn set_output(&self, output: Output) {
         eprintln!("sound: output {output:?}");
         let _ = self.hardware.send(HwCmd::Output(output.clone()));
+        self.sounds.set_output(output.clone());
         *self.output.borrow_mut() = output;
         self.route_sound();
     }
@@ -778,7 +785,7 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
-        game::Playing::start(game, &system, &self.data, &self.device, self.output.borrow().clone(), self.window.clone(),
+        game::Playing::start(game, &system, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.window.clone(),
             move |r| on_ui(move |me| me.started(launch, r)));
     }
 
