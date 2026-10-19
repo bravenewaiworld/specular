@@ -113,16 +113,17 @@ impl Output {
 /// Sound output.
 pub trait Audio: Send {
     /// An output's volume, 0–20 (Specular's scale; the device maps it to its own controls).
-    /// The speaker's and the headphones' are set whenever they change, whichever output plays:
-    /// the device keeps both and plays the level of the output in use, so setting the other one
-    /// isn't heard. (A device that can't tell when headphones are plugged in ignores the
-    /// headphones'.) A Bluetooth output's is set only while sound goes to it.
+    /// The speaker's and the headphones' are set whenever they change or the sound is muted or
+    /// unmuted, whichever output plays. A port must keep both and play the level of the output in
+    /// use (on the Brick the kernel's codec driver does), so setting the other one isn't heard; a
+    /// port without a jack (`Hardware::headphones` is None) may ignore the headphones'. A
+    /// Bluetooth output's is set only while sound goes to it.
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()>;
 }
 
-/// Whether headphones are plugged into the device's jack. The kernel's sound driver moves the
-/// sound between the speaker and the jack by itself, each at its own level (see `Audio`); this
-/// only says which level the volume keys and the gauge act on.
+/// Whether headphones are plugged into the device's jack. The device moves the sound between the
+/// speaker and the jack by itself, each at its own level (see `Audio::set_volume`); this only says
+/// which level the volume keys and the gauge act on.
 pub trait HeadphoneJack: Send {
     /// Follows the jack until it can't any more, blocking (the UI crate gives it a thread of its
     /// own): calls `plugged` with the state at the start, if it can be read, then on each change.

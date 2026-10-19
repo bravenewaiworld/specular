@@ -376,8 +376,7 @@ enum HwCmd {
     /// Sets the level of the outputs whose volume is `setting` (`Output::volume_setting`).
     Volume { setting: &'static str, level: u8 },
     Muted(bool),
-    /// Sound goes to this output now. A Bluetooth one gets its level (or silence, if muted); the
-    /// device moves between its own outputs by itself (see `Audio::set_volume`).
+    /// Sound goes to this output now (which levels that sets: `Audio::set_volume`).
     Output(Output),
     Sleep,
     PowerOff,
@@ -386,9 +385,7 @@ enum HwCmd {
 
 /// The volume as the hardware thread keeps it: the level for each volume setting
 /// (`Output::volume_setting`), with mute held separately, since muting sets the hardware to 0
-/// without losing the level. Each change sets the device's levels as `Audio::set_volume` expects:
-/// the speaker's and the headphones' whichever plays, a Bluetooth output's only while sound goes
-/// to it.
+/// without losing the level. Each change sets the levels `Audio::set_volume` asks for.
 struct Volume { levels: HashMap<&'static str, u8>, output: Output, muted: bool }
 
 impl Volume {
@@ -407,9 +404,9 @@ impl Volume {
         self.write(audio, |o| matches!(o, Output::Bluetooth(_)))
     }
 
-    /// Sets the levels of the outputs `which` picks, out of those the device is given levels for
-    /// now: what each should play at (0 while muted, or before its setting is known). Sets all of
-    /// them even if one fails, and returns the first error.
+    /// Sets the levels of the outputs `which` picks, out of the speaker, the headphones and the
+    /// current output if it is Bluetooth: each its level, or 0 while muted or before its setting
+    /// is known. Sets all of them even if one fails, and returns the first error.
     fn write(&self, audio: &dyn Audio, which: impl Fn(&Output) -> bool) -> std::io::Result<()> {
         let bluetooth = matches!(self.output, Output::Bluetooth(_)).then(|| self.output.clone());
         [Output::Speaker, Output::Headphones].into_iter().chain(bluetooth).filter(which).fold(Ok(()), |result, output| {
@@ -1553,21 +1550,19 @@ mod tests {
         assert_eq!(audio.take(), []);
         v.set_level(&audio, builtin::VOLUME, 13).unwrap();
         assert_eq!(audio.take(), [(Speaker, 13)]);
-        // Muting silences every output with a level on the device, and unmuting restores them.
-        v.set_muted(&audio, true).unwrap();
-        assert_eq!(audio.take(), [(Speaker, 0), (Headphones, 0)]);
-        v.set_level(&audio, builtin::HEADPHONE_VOLUME, 7).unwrap();
-        assert_eq!(audio.take(), [(Headphones, 0)]);
+        // A Bluetooth output's level is set as sound moves to it, and while it plays.
         v.set_output(&audio, headset.clone()).unwrap();
-        assert_eq!(audio.take(), [(headset.clone(), 0)]);
-        v.set_muted(&audio, false).unwrap();
-        assert_eq!(audio.take(), [(Speaker, 13), (Headphones, 7), (headset.clone(), 9)]);
-        // A Bluetooth output's level is set only while sound goes to it.
-        v.set_output(&audio, Speaker).unwrap();
         v.set_level(&audio, builtin::BLUETOOTH_VOLUME, 10).unwrap();
+        assert_eq!(audio.take(), [(headset.clone(), 9), (headset.clone(), 10)]);
+        // Muting silences every output given a level, also one changed while muted, and
+        // unmuting restores them.
+        v.set_muted(&audio, true).unwrap();
+        v.set_level(&audio, builtin::HEADPHONE_VOLUME, 7).unwrap();
+        assert_eq!(audio.take(), [(Speaker, 0), (Headphones, 0), (headset.clone(), 0), (Headphones, 0)]);
+        v.set_muted(&audio, false).unwrap();
+        assert_eq!(audio.take(), [(Speaker, 13), (Headphones, 7), (headset, 10)]);
+        v.set_output(&audio, Speaker).unwrap();
         assert_eq!(audio.take(), []);
-        v.set_output(&audio, headset.clone()).unwrap();
-        assert_eq!(audio.take(), [(headset, 10)]);
     }
 
     #[test]
