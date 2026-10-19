@@ -63,7 +63,12 @@ Completed:
 
 TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
- - PS1 games at full speed on the Brick with the CPU minimum: check it (see DEVELOPMENT.md), and measure what it costs in battery (docs/runtime.md, Open questions)
+ - The CPU minimum, checked on the Brick (start at 1.8 GHz, the system's default in the game menu and after quitting, `power.cpu_min` off per system, none for NES; PS1 games at 60 fps): its rules still to fix:
+   - The step down never fires for a PS1 game: it adds the UI's 6 ms to the slowest runs and wants them within 75 % of a refresh, so runs must be under 6.5 ms, and SwanStation's take 10–14 ms even at 2 GHz (they needn't fit with the UI's, which draws on its own thread). So a single pair of misses holds 2 GHz until the game ends.
+   - Misses during a disc load or scene change raise it too, and at the top step are put down to a heat limit, though more speed doesn't help a load.
+   - A game without a start level whose launch misses twice gets a minimum of 408 MHz, the same as the default.
+   - The frame statistics' `CPU ≥ … MHz` runs past the screen's edge.
+   - Also: measure what it costs in battery (docs/runtime.md, Open questions)
 
 ### Library and Game Management
 
