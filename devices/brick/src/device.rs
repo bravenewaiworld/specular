@@ -124,21 +124,37 @@ impl Lights for BrickLights {
     fn show(&self, colours: &[Rgb]) -> io::Result<()> { self.0.show(colours, LED_LIMIT) }
 }
 
-/// The volume: the codec's digital volume ("DAC volume", 0.75 dB per step, 159 = 0 dB), set
-/// with amixer. Specular's levels are 2 dB apart, the top one at 0 dB (louder only clips); 0 is
-/// the control's lowest, -119 dB. (TrimUI's ALSA set-up also has a software volume, "Soft Volume
-/// Master", but the driver refuses writes to it.) The speaker and the headphone jack share this
-/// control, so it is set to the level of whichever one the kernel plays on (it switches as
-/// headphones are plugged in). Bluetooth headphones and speakers have their own (through bluez-alsa).
+/// The volume: the codec's "Speaker Playback Volume" and "Headphone Playback Volume", set with
+/// amixer (each 0–255, 0.75 dB per step, 159 = 0 dB). Crystaline OS's codec driver keeps both and
+/// plays the level of the output in use, switching as headphones are plugged in or out, so the
+/// other output's level can be set without being heard. Specular's levels are 2 dB apart, the
+/// top one at 0 dB (louder only clips); 0 is the control's lowest, -119 dB. Bluetooth headphones
+/// and speakers have their own (through bluez-alsa).
 struct Volume;
 
 impl Audio for Volume {
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()> {
-        if let Output::Bluetooth(address) = output { return specular_linux::sound::set_bluetooth_volume(address, level); }
-        // 2 dB per level below the top is 8/3 of the control's steps. Never above 159: the
-        // control goes up to +72 dB.
-        let below_top = (specular_core::settings::builtin::VOLUME_MAX - level as i64).max(0) as f64;
-        let value = if level == 0 { 0 } else { (159.0 - below_top * 2.0 / 0.75).round() as i32 };
-        run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", "name=DAC volume", &format!("{value},{value}")])
+        let control = match output {
+            Output::Speaker => "name=Speaker Playback Volume",
+            Output::Headphones => "name=Headphone Playback Volume",
+            Output::Bluetooth(address) => return specular_linux::sound::set_bluetooth_volume(address, level),
+        };
+        run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", control, &codec_step(level).to_string()])
+    }
+}
+
+/// The codec control's step for a volume level. 2 dB per level below the top is 8/3 of the
+/// control's steps; never above 159, since the control goes up to +72 dB.
+fn codec_step(level: u8) -> u8 {
+    let below_top = (specular_core::settings::builtin::VOLUME_MAX - level as i64).max(0) as f64;
+    if level == 0 { 0 } else { (159.0 - below_top * 2.0 / 0.75).round() as u8 }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn levels_are_2_db_apart_with_the_top_at_0_db() {
+        let steps: Vec<u8> = [0, 1, 10, 18, 19, 20, 21].into_iter().map(super::codec_step).collect();
+        assert_eq!(steps, [0, 108, 132, 154, 156, 159, 159]);
     }
 }

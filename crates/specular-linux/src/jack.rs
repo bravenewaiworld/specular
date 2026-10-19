@@ -28,7 +28,7 @@ impl HeadphoneJack for EvdevJack {
 fn follow(sysfs: &Path, dev: &Path, mut plugged: Box<dyn FnMut(bool) + Send>) {
     let jack = open_first(sysfs, dev, File::options().read(true), "input: headphone jack", |d| d.has("sw", SW_HEADPHONE_INSERT));
     let Some((name, mut file)) = jack else {
-        eprintln!("input: no headphone jack found (no input device has SW_HEADPHONE_INSERT); headphones get the speaker's volume");
+        eprintln!("input: no headphone jack found (no input device has SW_HEADPHONE_INSERT); the volume keys and the gauge always act on the speaker's level");
         return;
     };
     let mut last = None;

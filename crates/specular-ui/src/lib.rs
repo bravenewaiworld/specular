@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
 use specular_core::art::ArtKind;
 use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
-use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble};
+use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble};
 use specular_core::effects::{self, Effects, Event};
 use specular_core::rumble::RumbleLine;
 use specular_core::library::{self, Game, SystemDecl, user_cores};
@@ -376,7 +376,8 @@ enum HwCmd {
     /// Sets the level of the outputs whose volume is `setting` (`Output::volume_setting`).
     Volume { setting: &'static str, level: u8 },
     Muted(bool),
-    /// Sound goes to this output now: its level (or silence, if muted) is applied to it.
+    /// Sound goes to this output now. A Bluetooth one gets its level (or silence, if muted); the
+    /// device moves between its own outputs by itself (see `Audio::set_volume`).
     Output(Output),
     Sleep,
     PowerOff,
@@ -385,15 +386,37 @@ enum HwCmd {
 
 /// The volume as the hardware thread keeps it: the level for each volume setting
 /// (`Output::volume_setting`), with mute held separately, since muting sets the hardware to 0
-/// without losing the level.
+/// without losing the level. Each change sets the device's levels as `Audio::set_volume` expects:
+/// the speaker's and the headphones' whichever plays, a Bluetooth output's only while sound goes
+/// to it.
 struct Volume { levels: HashMap<&'static str, u8>, output: Output, muted: bool }
 
 impl Volume {
-    /// Sets the current output's volume to what it should be now.
-    fn apply(&self, audio: &dyn specular_core::device::Audio) -> std::io::Result<()> {
-        let level = if self.muted { 0 } else { self.levels.get(self.output.volume_setting()).copied().unwrap_or(0) };
-        eprintln!("sound: {:?} volume {level}{}", self.output, if self.muted { " (muted)" } else { "" });
-        audio.set_volume(&self.output, level)
+    fn set_level(&mut self, audio: &dyn Audio, setting: &'static str, level: u8) -> std::io::Result<()> {
+        self.levels.insert(setting, level);
+        self.write(audio, |o| o.volume_setting() == setting)
+    }
+
+    fn set_muted(&mut self, audio: &dyn Audio, muted: bool) -> std::io::Result<()> {
+        self.muted = muted;
+        self.write(audio, |_| true)
+    }
+
+    fn set_output(&mut self, audio: &dyn Audio, output: Output) -> std::io::Result<()> {
+        self.output = output;
+        self.write(audio, |o| matches!(o, Output::Bluetooth(_)))
+    }
+
+    /// Sets the levels of the outputs `which` picks, out of those the device is given levels for
+    /// now: what each should play at (0 while muted, or before its setting is known). Sets all of
+    /// them even if one fails, and returns the first error.
+    fn write(&self, audio: &dyn Audio, which: impl Fn(&Output) -> bool) -> std::io::Result<()> {
+        let bluetooth = matches!(self.output, Output::Bluetooth(_)).then(|| self.output.clone());
+        [Output::Speaker, Output::Headphones].into_iter().chain(bluetooth).filter(which).fold(Ok(()), |result, output| {
+            let level = if self.muted { 0 } else { self.levels.get(output.volume_setting()).copied().unwrap_or(0) };
+            eprintln!("sound: {output:?} volume {level}{}", if self.muted { " (muted)" } else { "" });
+            result.and(audio.set_volume(&output, level))
+        })
     }
 }
 
@@ -414,13 +437,9 @@ fn hardware_thread(hw: Hardware) -> mpsc::Sender<HwCmd> {
             let result = match rx.recv_timeout(next_battery.saturating_duration_since(Instant::now())) {
                 Ok(HwCmd::Brightness(l)) => hw.display.set_brightness(l),
                 Ok(HwCmd::Lights(c)) => hw.lights.show(&c),
-                Ok(HwCmd::Volume { setting, level }) => {
-                    volume.levels.insert(setting, level);
-                    // Another output's level is applied when sound moves to it.
-                    if setting == volume.output.volume_setting() { volume.apply(&*hw.audio) } else { Ok(()) }
-                }
-                Ok(HwCmd::Muted(m)) => { volume.muted = m; volume.apply(&*hw.audio) }
-                Ok(HwCmd::Output(o)) => { volume.output = o; volume.apply(&*hw.audio) }
+                Ok(HwCmd::Volume { setting, level }) => volume.set_level(&*hw.audio, setting, level),
+                Ok(HwCmd::Muted(m)) => volume.set_muted(&*hw.audio, m),
+                Ok(HwCmd::Output(o)) => volume.set_output(&*hw.audio, o),
                 Ok(HwCmd::Sleep) => {
                     let r = hw.power.sleep();
                     post(Msg::Woke);
@@ -1502,6 +1521,53 @@ mod tests {
                             (Key::RightArrow, "\u{f703}"), (Key::Return, "\n"), (Key::Tab, "\t"), (Key::Escape, "\u{1b}")] {
             assert_eq!(slint::SharedString::from(key).as_str(), code);
         }
+    }
+
+    /// Records each `set_volume`.
+    #[derive(Default)]
+    struct Levels(std::sync::Mutex<Vec<(super::Output, u8)>>);
+
+    impl super::Audio for Levels {
+        fn set_volume(&self, output: &super::Output, level: u8) -> std::io::Result<()> {
+            self.0.lock().unwrap().push((output.clone(), level));
+            Ok(())
+        }
+    }
+
+    impl Levels {
+        fn take(&self) -> Vec<(super::Output, u8)> { std::mem::take(&mut self.0.lock().unwrap()) }
+    }
+
+    #[test]
+    fn the_speaker_and_headphones_get_their_levels_whichever_plays() {
+        use super::{Output::*, builtin};
+        let audio = Levels::default();
+        let mut v = super::Volume { levels: Default::default(), output: Speaker, muted: false };
+        let headset = Bluetooth(specular_core::wireless::bluetooth::BtAddress("00:11:22:33:44:55".into()));
+        v.set_level(&audio, builtin::VOLUME, 12).unwrap();
+        v.set_level(&audio, builtin::HEADPHONE_VOLUME, 6).unwrap();
+        v.set_level(&audio, builtin::BLUETOOTH_VOLUME, 9).unwrap();
+        assert_eq!(audio.take(), [(Speaker, 12), (Headphones, 6)]);
+        // The device moves between the speaker and the jack by itself.
+        v.set_output(&audio, Headphones).unwrap();
+        assert_eq!(audio.take(), []);
+        v.set_level(&audio, builtin::VOLUME, 13).unwrap();
+        assert_eq!(audio.take(), [(Speaker, 13)]);
+        // Muting silences every output with a level on the device, and unmuting restores them.
+        v.set_muted(&audio, true).unwrap();
+        assert_eq!(audio.take(), [(Speaker, 0), (Headphones, 0)]);
+        v.set_level(&audio, builtin::HEADPHONE_VOLUME, 7).unwrap();
+        assert_eq!(audio.take(), [(Headphones, 0)]);
+        v.set_output(&audio, headset.clone()).unwrap();
+        assert_eq!(audio.take(), [(headset.clone(), 0)]);
+        v.set_muted(&audio, false).unwrap();
+        assert_eq!(audio.take(), [(Speaker, 13), (Headphones, 7), (headset.clone(), 9)]);
+        // A Bluetooth output's level is set only while sound goes to it.
+        v.set_output(&audio, Speaker).unwrap();
+        v.set_level(&audio, builtin::BLUETOOTH_VOLUME, 10).unwrap();
+        assert_eq!(audio.take(), []);
+        v.set_output(&audio, headset.clone()).unwrap();
+        assert_eq!(audio.take(), [(headset, 10)]);
     }
 
     #[test]

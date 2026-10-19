@@ -28,7 +28,7 @@ Completed:
 TODO:
  - Rumble from games (built; to check on the Brick)
  - Menus paced by the vsync, as games are (built; to measure on the Brick)
- - Separate volume levels for speaker and headphones (built; to check on the Brick)
+ - Separate volume levels for speaker and headphones, each in its own codec control (built; to check on the Brick, see DEVELOPMENT.md)
 
 ### Core Integration and Support
 
