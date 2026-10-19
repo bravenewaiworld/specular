@@ -80,12 +80,15 @@ pub struct Row {
     pub overridden: bool,
     /// Drawn before the label.
     pub icon: Option<Icon>,
+    /// A button hint shown, before the screen's own, while the row is focused (X: Reset on a
+    /// setting that overrides).
+    pub hint: Option<(Button, String)>,
 }
 
 impl Row {
     /// A row that overrides nothing.
     pub fn new(id: impl Into<String>, label: impl Into<String>, kind: RowKind) -> Self {
-        Self { id: RowId(id.into()), label: label.into(), kind, overridden: false, icon: None }
+        Self { id: RowId(id.into()), label: label.into(), kind, overridden: false, icon: None, hint: None }
     }
 
     /// A note: text that explains something (see `RowKind::Note`).

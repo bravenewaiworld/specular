@@ -42,6 +42,14 @@ impl NavStack {
         (self.0.len() > 1).then(|| { self.0.pop(); Transition::Pop })
     }
 
+    /// Closes the lowest screen of kind `id` and every screen above it; None if none is open (home
+    /// is never closed).
+    pub fn close(&mut self, id: &ScreenId) -> Option<Transition> {
+        let i = self.0.iter().skip(1).position(|s| &s.id == id)? + 1;
+        self.0.truncate(i);
+        Some(Transition::Pop)
+    }
+
     /// Back to home; None if already there.
     pub fn home(&mut self) -> Option<Transition> {
         (self.0.len() > 1).then(|| { self.0.truncate(1); Transition::Pop })
@@ -64,6 +72,11 @@ mod tests {
         assert_eq!(nav.depth(), 3);
         assert_eq!(nav.pop(), Some(Transition::Pop));
         assert_eq!(nav.top().id, ScreenId("games".into()));
+        nav.push(screen("settings"));
+        nav.push(screen("keyboard"));
+        assert_eq!(nav.close(&ScreenId("settings".into())), Some(Transition::Pop));
+        assert_eq!((nav.depth(), nav.close(&ScreenId("settings".into()))), (2, None));
+        assert_eq!(nav.close(&ScreenId("home".into())), None); // never home
         nav.push(screen("settings"));
         assert_eq!(nav.home(), Some(Transition::Pop));
         assert_eq!(nav.top().id, ScreenId("home".into()));

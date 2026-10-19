@@ -3972,6 +3972,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "libc",
+ "serde_json",
  "specular-core",
  "specular-linux",
  "tempfile",

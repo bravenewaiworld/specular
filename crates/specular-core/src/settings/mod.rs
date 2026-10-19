@@ -1,24 +1,26 @@
 //! Settings: declared once, stored as layered JSON, shown as generated rows.
 //!
 //! Each setting is a `SettingDecl`. Its value is looked up from the most specific layer that has
-//! one: a game's file, then its system's, then the global file, then the declared default. Only
-//! overrides are stored, so changing a default in a new version reaches everyone who never
-//! changed it. Keys in a file that no declaration knows (settings of a plugin not loaded, or of a
+//! one: a game's file, then its system's, then the global file (for a core's option, the core's
+//! file: see `core_options`), then the declared default. Only overrides are stored, so changing
+//! a default in a new version reaches everyone who never changed it. Keys in a file that no declaration knows (settings of a plugin not loaded, or of a
 //! newer version) are kept untouched. A stored value of the wrong type or out of range is
 //! ignored, as if absent.
 
 pub mod builtin;
+pub mod core_options;
 pub mod migrate;
 pub mod schema;
 pub mod store;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 use crate::device::Rgb;
 use crate::input::{Button, Press};
+use crate::library::SystemDecl;
 use crate::model::{Row, RowKind};
 use crate::palette::{self, PALETTE};
 
@@ -35,7 +37,11 @@ pub enum Scope { Global, System, Game }
 /// Where a value is stored.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Layer {
+    /// Specular's own settings, for every system and game.
     Global,
+    /// A core's options, for every system and game it plays, by its id (`CoreDecl::id`). It
+    /// stands where `Global` does for Specular's own settings (its scope is `Scope::Global`).
+    Core(String),
     System(String),
     /// A game, by system and by its ROM's path under `roms/` without the extension (e.g.
     /// "gba/RPG/Golden Sun (USA, Europe)"), so games of the same name in different folders
@@ -44,15 +50,19 @@ pub enum Layer {
 }
 
 impl Layer {
-    pub fn scope(&self) -> Scope { match self { Layer::Global => Scope::Global, Layer::System(_) => Scope::System, Layer::Game { .. } => Scope::Game } }
+    pub fn scope(&self) -> Scope {
+        match self { Layer::Global | Layer::Core(_) => Scope::Global, Layer::System(_) => Scope::System, Layer::Game { .. } => Scope::Game }
+    }
 
-    /// The layers a value is looked up in, most specific first.
-    fn chain(&self) -> Vec<Layer> {
-        match self {
-            Layer::Global => vec![Layer::Global],
-            Layer::System(_) => vec![self.clone(), Layer::Global],
-            Layer::Game { system, .. } => vec![self.clone(), Layer::System(system.clone()), Layer::Global],
-        }
+    /// The layers `d`'s value is looked up in at this one, most specific first: this one and the
+    /// system's (for a game), then `d`'s least specific one, `Global` or its core's.
+    fn chain(&self, d: &SettingDecl) -> Vec<Layer> {
+        let specific = match self {
+            Layer::Global | Layer::Core(_) => vec![],
+            Layer::System(_) => vec![self.clone()],
+            Layer::Game { system, .. } => vec![self.clone(), Layer::System(system.clone())],
+        };
+        specific.into_iter().chain([d.base()]).collect()
     }
 
     /// The layer's file in the config folder (`migrate::config_dir`). Games' files mirror the
@@ -63,6 +73,7 @@ impl Layer {
     fn file(&self) -> PathBuf {
         match self {
             Layer::Global => "specular.json".into(),
+            Layer::Core(c) => Path::new("cores").join(format!("{c}.json")),
             Layer::System(s) => Path::new("systems").join(format!("{s}.json")),
             Layer::Game { game, .. } => Path::new("games").join(format!("{game}.json")),
         }
@@ -72,8 +83,7 @@ impl Layer {
     /// schema is in the file's folder or a folder above it (a game's is in `games/`, however deep
     /// the game's file), so the path is a run of `../` and its name.
     fn schema_ref(&self) -> String {
-        let system = match self { Layer::Global => "", Layer::System(system) | Layer::Game { system, .. } => system };
-        let schema = schema::file(self.scope(), system);
+        let schema = schema::file(self);
         let up = self.file().components().count() - schema.components().count();
         format!("{}{}", "../".repeat(up), schema.file_name().unwrap().to_string_lossy())
     }
@@ -126,9 +136,21 @@ pub struct SettingDecl {
     pub visibility: Visibility,
     /// The most specific layer allowed to override it (e.g. brightness is global only).
     pub deepest: Scope,
+    /// The core whose option it is (`CoreDecl::id`), stored in the core's file rather than the
+    /// global one; None for Specular's own settings.
+    pub core: Option<&'static str>,
 }
 
 impl SettingDecl {
+    /// Its least specific layer: the global one, or its core's.
+    fn base(&self) -> Layer { self.core.map_or(Layer::Global, |c| Layer::Core(c.into())) }
+
+    /// Whether it may be stored in `at`'s file: one no more specific than `deepest`, and at the
+    /// global scope only its `base` (its core's file for a core's option, else specular.json).
+    fn settable_at(&self, at: &Layer) -> bool {
+        at.scope() <= self.deepest && (at.scope() > Scope::Global || *at == self.base())
+    }
+
     /// Whether `v` is a valid value for this setting.
     fn accepts(&self, v: &Value) -> bool {
         match self.kind {
@@ -160,13 +182,15 @@ pub struct Settings {
 impl Settings {
     pub fn new(decls: Vec<SettingDecl>) -> Self { Self { decls, layers: HashMap::new() } }
 
-    fn decl(&self, key: &str) -> Option<&SettingDecl> { self.decls.iter().find(|d| d.key == key) }
+    /// A setting's declaration, by its key.
+    pub fn decl(&self, key: &str) -> Option<&SettingDecl> { self.decls.iter().find(|d| d.key == key) }
 
     /// The declared settings.
     pub fn decls(&self) -> &[SettingDecl] { &self.decls }
 
     /// Adds a layer's contents as loaded from its file (`store::load_layer`), less `SCHEMA_KEY`.
-    /// Values already set in memory win: they were changed after the file was written.
+    /// Values already set in memory win: they were changed after the file was written. Values that
+    /// can't be used are kept (see `ignored`).
     pub fn set_layer(&mut self, layer: Layer, values: Map<String, Value>) {
         let map = self.layers.entry(layer).or_default();
         for (k, v) in values.into_iter().filter(|(k, _)| k != SCHEMA_KEY) { map.entry(k).or_insert(v); }
@@ -184,7 +208,7 @@ impl Settings {
     /// None if no such setting is declared.
     pub fn get(&self, key: &str, at: &Layer) -> Option<(&Value, Option<Layer>)> {
         let d = self.decl(key)?;
-        for layer in at.chain().into_iter().filter(|l| l.scope() <= d.deepest) {
+        for layer in at.chain(d).into_iter().filter(|l| l.scope() <= d.deepest) {
             if let Some(v) = self.layers.get(&layer).and_then(|m| m.get(key)).filter(|v| d.accepts(v)) {
                 return Some((v, Some(layer)));
             }
@@ -196,7 +220,7 @@ impl Settings {
     pub fn set(&mut self, key: &str, at: &Layer, v: Value) -> Result<(), SettingError> {
         let d = self.decl(key).ok_or(SettingError::Unknown)?;
         if !d.accepts(&v) { return Err(SettingError::WrongValue); }
-        if at.scope() > d.deepest { return Err(SettingError::NotAtThisLayer); }
+        if !d.settable_at(at) { return Err(SettingError::NotAtThisLayer); }
         self.layers.entry(at.clone()).or_default().remove(key);
         if self.get(key, at).map(|(inherited, _)| inherited) != Some(&v) {
             self.layers.get_mut(at).unwrap().insert(key.to_string(), v);
@@ -204,13 +228,20 @@ impl Settings {
         Ok(())
     }
 
-    /// The settings screen for `at`: one row per setting that can be set there and is visible at
-    /// `show`, under a header per section, in declaration order. Rows that override a less
-    /// specific layer are marked.
-    pub fn rows(&self, at: &Layer, show: Visibility) -> Vec<Row> {
+    /// Removes the value set at `at` itself, so it inherits again. Returns the setting's key if
+    /// there was one.
+    pub fn reset(&mut self, key: &str, at: &Layer) -> Option<&'static str> {
+        let key = self.decl(key)?.key;
+        self.layers.get_mut(at)?.remove(key).map(|_| key)
+    }
+
+    /// The settings screen for `at`: one row per setting of `core`'s (None: Specular's own) that
+    /// may be set there (`settable_at`) and is visible at `show`, under a header per section, in declaration
+    /// order. Rows that override a less specific layer are marked.
+    pub fn rows(&self, at: &Layer, show: Visibility, core: Option<&str>) -> Vec<Row> {
         let mut rows = Vec::new();
         let mut section = "";
-        for d in self.decls.iter().filter(|d| d.visibility <= show && at.scope() <= d.deepest) {
+        for d in self.decls.iter().filter(|d| d.visibility <= show && d.core == core && d.settable_at(at)) {
             if d.section != section {
                 section = d.section;
                 rows.push(Row::new(format!("section:{section}"), section, RowKind::Header));
@@ -274,6 +305,49 @@ impl Settings {
         if new == current { return None; }
         self.set(key, at, new.clone()).ok().map(|_| (key, new))
     }
+}
+
+/// What a settings file read for `layer` holds that is ignored, one line per key: values that
+/// aren't valid for their setting, and settings that can't be set in that file (brightness in a
+/// game's, say). Keys no declaration knows are kept and not reported: they may be a plugin's, or
+/// a newer version's.
+pub fn ignored(decls: &[SettingDecl], layer: &Layer, values: &Map<String, Value>) -> Vec<String> {
+    values.iter().filter_map(|(key, v)| {
+        let d = decls.iter().find(|d| d.key == key)?;
+        if !d.settable_at(layer) { Some(format!("{key} can't be set in this file, so it is ignored")) }
+        else if !d.accepts(v) { Some(format!("{key} = {v} isn't one of its values, so it is ignored")) }
+        else { None }
+    }).collect()
+}
+
+/// The games that have a settings file in the config folder `config`, as `Layer::Game`'s `game`
+/// (their paths under `roms/` without extension). Only `games/` is walked, which holds files just
+/// for games with settings, so this costs little however many games there are. A `.tmp` file
+/// counts (`store::load_layer` reads it if its file is missing); the schemas, `.bad` files and
+/// links don't.
+pub fn games_with_settings(config: &Path) -> BTreeSet<String> {
+    fn walk(root: &Path, dir: &Path, depth: usize, out: &mut BTreeSet<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let (path, Ok(kind)) = (e.path(), e.file_type()) else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            if kind.is_dir() && depth < crate::library::MAX_DEPTH { walk(root, &path, depth + 1, out); continue; }
+            let Some(stem) = name.strip_suffix(".json").or_else(|| name.strip_suffix(".json.tmp")) else { continue };
+            // Schemas are only at the top (`schema::file`).
+            if !kind.is_file() || (depth == 0 && stem.ends_with(".schema")) { continue; }
+            let game = path.parent().unwrap().join(stem);
+            out.insert(game.strip_prefix(root).unwrap().to_string_lossy().into_owned());
+        }
+    }
+    let mut games = BTreeSet::new();
+    walk(&config.join("games"), &config.join("games"), 0, &mut games);
+    games
+}
+
+/// Every setting: Specular's own (`builtin`), then the options of these systems' cores (each
+/// core's once).
+pub fn declarations(systems: &[SystemDecl]) -> Vec<SettingDecl> {
+    builtin::settings().into_iter().chain(crate::library::cores(systems).into_iter().flat_map(|c| core_options::decls(c).iter().cloned())).collect()
 }
 
 /// A choice row from (stored value, label) options, with `v` selected (the first if it matches

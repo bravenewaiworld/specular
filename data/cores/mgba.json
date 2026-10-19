@@ -1,0 +1,661 @@
+{
+  "categories": [
+    {
+      "key": "system",
+      "label": "System",
+      "info": "Configure base hardware selection / BIOS parameters."
+    },
+    {
+      "key": "video",
+      "label": "Video",
+      "info": "Configure DMG palette / SGB borders / color correction / LCD ghosting effects."
+    },
+    {
+      "key": "audio",
+      "label": "Audio",
+      "info": "Configure audio filtering."
+    },
+    {
+      "key": "input",
+      "label": "Input & Auxiliary Devices",
+      "info": "Configure controller / sensor input and controller rumble settings."
+    },
+    {
+      "key": "performance",
+      "label": "Performance",
+      "info": "Configure idle loop removal / frameskipping parameters."
+    }
+  ],
+  "options": [
+    {
+      "key": "mgba_gb_model",
+      "label": "Game Boy Model (Restart)",
+      "info": "Runs loaded content with a specific Game Boy model. 'Autodetect' will select the most appropriate model for the current game.",
+      "category": "system",
+      "values": [
+        {
+          "value": "Autodetect"
+        },
+        {
+          "value": "Game Boy"
+        },
+        {
+          "value": "Super Game Boy"
+        },
+        {
+          "value": "Game Boy Color"
+        },
+        {
+          "value": "Super Game Boy Color"
+        },
+        {
+          "value": "Game Boy Advance"
+        }
+      ],
+      "default": "Autodetect"
+    },
+    {
+      "key": "mgba_use_bios",
+      "label": "Use BIOS File if Found (Restart)",
+      "info": "Use official BIOS/bootloader for emulated hardware, if present in RetroArch's system directory.",
+      "category": "system",
+      "values": [
+        {
+          "value": "ON",
+          "label": "enabled"
+        },
+        {
+          "value": "OFF",
+          "label": "disabled"
+        }
+      ],
+      "default": "ON"
+    },
+    {
+      "key": "mgba_skip_bios",
+      "label": "Skip BIOS Intro (Restart)",
+      "info": "When using an official BIOS/bootloader, skip the start-up logo animation. This setting is ignored when 'Use BIOS File if Found' is disabled.",
+      "category": "system",
+      "values": [
+        {
+          "value": "OFF",
+          "label": "disabled"
+        },
+        {
+          "value": "ON",
+          "label": "enabled"
+        }
+      ],
+      "default": "OFF"
+    },
+    {
+      "key": "mgba_gb_colors",
+      "label": "Default Game Boy Palette",
+      "info": "Selects which palette is used for Game Boy games that are not Game Boy Color or Super Game Boy compatible, or if the model is forced to Game Boy.",
+      "category": "video",
+      "values": [
+        {
+          "value": "Grayscale"
+        },
+        {
+          "value": "DMG Green"
+        },
+        {
+          "value": "GB Pocket"
+        },
+        {
+          "value": "GB Light"
+        },
+        {
+          "value": "GBC Brown ↑"
+        },
+        {
+          "value": "GBC Red ↑A"
+        },
+        {
+          "value": "GBC Dark Brown ↑B"
+        },
+        {
+          "value": "GBC Pale Yellow ↓"
+        },
+        {
+          "value": "GBC Orange ↓A"
+        },
+        {
+          "value": "GBC Yellow ↓B"
+        },
+        {
+          "value": "GBC Blue ←"
+        },
+        {
+          "value": "GBC Dark Blue ←A"
+        },
+        {
+          "value": "GBC Gray ←B"
+        },
+        {
+          "value": "GBC Green →"
+        },
+        {
+          "value": "GBC Dark Green →A"
+        },
+        {
+          "value": "GBC Reverse →B"
+        },
+        {
+          "value": "SGB 1-A"
+        },
+        {
+          "value": "SGB 1-B"
+        },
+        {
+          "value": "SGB 1-C"
+        },
+        {
+          "value": "SGB 1-D"
+        },
+        {
+          "value": "SGB 1-E"
+        },
+        {
+          "value": "SGB 1-F"
+        },
+        {
+          "value": "SGB 1-G"
+        },
+        {
+          "value": "SGB 1-H"
+        },
+        {
+          "value": "SGB 2-A"
+        },
+        {
+          "value": "SGB 2-B"
+        },
+        {
+          "value": "SGB 2-C"
+        },
+        {
+          "value": "SGB 2-D"
+        },
+        {
+          "value": "SGB 2-E"
+        },
+        {
+          "value": "SGB 2-F"
+        },
+        {
+          "value": "SGB 2-G"
+        },
+        {
+          "value": "SGB 2-H"
+        },
+        {
+          "value": "SGB 3-A"
+        },
+        {
+          "value": "SGB 3-B"
+        },
+        {
+          "value": "SGB 3-C"
+        },
+        {
+          "value": "SGB 3-D"
+        },
+        {
+          "value": "SGB 3-E"
+        },
+        {
+          "value": "SGB 3-F"
+        },
+        {
+          "value": "SGB 3-G"
+        },
+        {
+          "value": "SGB 3-H"
+        },
+        {
+          "value": "SGB 4-A"
+        },
+        {
+          "value": "SGB 4-B"
+        },
+        {
+          "value": "SGB 4-C"
+        },
+        {
+          "value": "SGB 4-D"
+        },
+        {
+          "value": "SGB 4-E"
+        },
+        {
+          "value": "SGB 4-F"
+        },
+        {
+          "value": "SGB 4-G"
+        },
+        {
+          "value": "SGB 4-H"
+        }
+      ],
+      "default": "Grayscale"
+    },
+    {
+      "key": "mgba_gb_colors_preset",
+      "label": "Hardware Preset Game Boy Palettes (Restart)",
+      "info": "Use the palettes for Game Boy games that have presets on the Game Boy Color or Super Game Boy.",
+      "category": "video",
+      "values": [
+        {
+          "value": "0",
+          "label": "Default Game Boy preset"
+        },
+        {
+          "value": "1",
+          "label": "Game Boy Color presets only"
+        },
+        {
+          "value": "2",
+          "label": "Super Game Boy presets only"
+        },
+        {
+          "value": "3",
+          "label": "Any available presets"
+        }
+      ],
+      "default": "0"
+    },
+    {
+      "key": "mgba_sgb_borders",
+      "label": "Use Super Game Boy Borders (Restart)",
+      "info": "Display Super Game Boy borders when running Super Game Boy enhanced games.",
+      "category": "video",
+      "values": [
+        {
+          "value": "ON",
+          "label": "enabled"
+        },
+        {
+          "value": "OFF",
+          "label": "disabled"
+        }
+      ],
+      "default": "ON"
+    },
+    {
+      "key": "mgba_color_correction",
+      "label": "Color Correction",
+      "info": "Adjusts output colors to match the display of real GBA/GBC hardware.",
+      "category": "video",
+      "values": [
+        {
+          "value": "OFF",
+          "label": "disabled"
+        },
+        {
+          "value": "GBA",
+          "label": "Game Boy Advance"
+        },
+        {
+          "value": "GBC",
+          "label": "Game Boy Color"
+        },
+        {
+          "value": "Auto"
+        }
+      ],
+      "default": "OFF"
+    },
+    {
+      "key": "mgba_interframe_blending",
+      "label": "Interframe Blending",
+      "info": "Simulates LCD ghosting effects. 'Simple' performs a 50:50 mix of the current and previous frames. 'Smart' attempts to detect screen flickering, and only performs a 50:50 mix on affected pixels. 'LCD Ghosting' mimics natural LCD response times by combining multiple buffered frames. 'Simple' or 'Smart' blending is required when playing games that aggressively exploit LCD ghosting for transparency effects (Wave Race, Chikyuu Kaihou Gun ZAS, F-Zero, the Boktai series...).",
+      "category": "video",
+      "values": [
+        {
+          "value": "OFF",
+          "label": "disabled"
+        },
+        {
+          "value": "mix",
+          "label": "Simple"
+        },
+        {
+          "value": "mix_smart",
+          "label": "Smart"
+        },
+        {
+          "value": "lcd_ghosting",
+          "label": "LCD Ghosting (Accurate)"
+        },
+        {
+          "value": "lcd_ghosting_fast",
+          "label": "LCD Ghosting (Fast)"
+        }
+      ],
+      "default": "OFF"
+    },
+    {
+      "key": "mgba_audio_low_pass_filter",
+      "label": "Audio Filter",
+      "info": "Enables a low pass audio filter to reduce the 'harshness' of generated audio.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "mgba_audio_low_pass_range",
+      "label": "Audio Filter Level",
+      "info": "Specifies the cut-off frequency of the low pass audio filter. A higher value increases the perceived 'strength' of the filter, since a wider range of the high frequency spectrum is attenuated.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "5",
+          "label": "5%"
+        },
+        {
+          "value": "10",
+          "label": "10%"
+        },
+        {
+          "value": "15",
+          "label": "15%"
+        },
+        {
+          "value": "20",
+          "label": "20%"
+        },
+        {
+          "value": "25",
+          "label": "25%"
+        },
+        {
+          "value": "30",
+          "label": "30%"
+        },
+        {
+          "value": "35",
+          "label": "35%"
+        },
+        {
+          "value": "40",
+          "label": "40%"
+        },
+        {
+          "value": "45",
+          "label": "45%"
+        },
+        {
+          "value": "50",
+          "label": "50%"
+        },
+        {
+          "value": "55",
+          "label": "55%"
+        },
+        {
+          "value": "60",
+          "label": "60%"
+        },
+        {
+          "value": "65",
+          "label": "65%"
+        },
+        {
+          "value": "70",
+          "label": "70%"
+        },
+        {
+          "value": "75",
+          "label": "75%"
+        },
+        {
+          "value": "80",
+          "label": "80%"
+        },
+        {
+          "value": "85",
+          "label": "85%"
+        },
+        {
+          "value": "90",
+          "label": "90%"
+        },
+        {
+          "value": "95",
+          "label": "95%"
+        }
+      ],
+      "default": "60"
+    },
+    {
+      "key": "mgba_allow_opposing_directions",
+      "label": "Allow Opposing Directional Input",
+      "info": "Enabling this will allow pressing / quickly alternating / holding both left and right (or up and down) directions at the same time. This may cause movement-based glitches.",
+      "category": "input",
+      "values": [
+        {
+          "value": "no",
+          "label": "disabled"
+        },
+        {
+          "value": "yes",
+          "label": "enabled"
+        }
+      ],
+      "default": "no"
+    },
+    {
+      "key": "mgba_solar_sensor_level",
+      "label": "Solar Sensor Level",
+      "info": "Sets ambient sunlight intensity. Can be used by games that included a solar sensor in their cartridges, e.g: the Boktai series.",
+      "category": "input",
+      "values": [
+        {
+          "value": "sensor",
+          "label": "Use device sensor if available"
+        },
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        }
+      ],
+      "default": "0"
+    },
+    {
+      "key": "mgba_force_gbp",
+      "label": "Game Boy Player Rumble (Restart)",
+      "info": "Enabling this will allow compatible games with the Game Boy Player boot logo to make the controller rumble. Due to how Nintendo decided this feature should work, it may cause glitches such as flickering or lag in some of these games.",
+      "category": "input",
+      "values": [
+        {
+          "value": "OFF",
+          "label": "disabled"
+        },
+        {
+          "value": "ON",
+          "label": "enabled"
+        }
+      ],
+      "default": "OFF"
+    },
+    {
+      "key": "mgba_idle_optimization",
+      "label": "Idle Loop Removal",
+      "info": "Reduce system load by optimizing so-called 'idle-loops' - sections in the code where nothing happens, but the CPU runs at full speed (like a car revving in neutral). Improves performance, and should be enabled on low-end hardware.",
+      "category": "performance",
+      "values": [
+        {
+          "value": "Remove Known"
+        },
+        {
+          "value": "Detect and Remove"
+        },
+        {
+          "value": "Don't Remove"
+        }
+      ],
+      "default": "Remove Known"
+    },
+    {
+      "key": "mgba_frameskip",
+      "label": "Frameskip",
+      "info": "Skip frames to avoid audio buffer under-run (crackling). Improves performance at the expense of visual smoothness. 'Auto' skips frames when advised by the frontend. 'Auto (Threshold)' utilises the 'Frameskip Threshold (%)' setting. 'Fixed Interval' utilises the 'Frameskip Interval' setting.",
+      "category": "performance",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "auto",
+          "label": "Auto"
+        },
+        {
+          "value": "auto_threshold",
+          "label": "Auto (Threshold)"
+        },
+        {
+          "value": "fixed_interval",
+          "label": "Fixed Interval"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "mgba_frameskip_threshold",
+      "label": "Frameskip Threshold (%)",
+      "info": "When 'Frameskip' is set to 'Auto (Threshold)', specifies the audio buffer occupancy threshold (percentage) below which frames will be skipped. Higher values reduce the risk of crackling by causing frames to be dropped more frequently.",
+      "category": "performance",
+      "values": [
+        {
+          "value": "15"
+        },
+        {
+          "value": "18"
+        },
+        {
+          "value": "21"
+        },
+        {
+          "value": "24"
+        },
+        {
+          "value": "27"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "33"
+        },
+        {
+          "value": "36"
+        },
+        {
+          "value": "39"
+        },
+        {
+          "value": "42"
+        },
+        {
+          "value": "45"
+        },
+        {
+          "value": "48"
+        },
+        {
+          "value": "51"
+        },
+        {
+          "value": "54"
+        },
+        {
+          "value": "57"
+        },
+        {
+          "value": "60"
+        }
+      ],
+      "default": "33"
+    },
+    {
+      "key": "mgba_frameskip_interval",
+      "label": "Frameskip Interval",
+      "info": "When 'Frameskip' is set to 'Fixed Interval', the value set here is the number of frames omitted after a frame is rendered - i.e. '0' = 60fps, '1' = 30fps, '2' = 15fps, etc.",
+      "category": "performance",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        }
+      ],
+      "default": "0"
+    }
+  ]
+}

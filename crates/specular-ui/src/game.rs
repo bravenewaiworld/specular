@@ -48,13 +48,14 @@ pub struct Playing {
 pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
-    /// Starts `game` with its system's core, its sound on `output` and its rumble on `rumble`, on
-    /// another thread, since reading a large ROM or opening a Bluetooth output can take a second or
-    /// more; then calls `started` there with the result. The UI is told of each new frame
-    /// (`Runner::game_frame`) and each in-game save. Before opening the game's output, that thread
-    /// waits for the interface `sounds` to close theirs.
-    pub fn start(game: &Game, system: &SystemDecl, data: &DataRoot, device: &SharedDevice, sounds: &Sounds, output: Output, rumble: Option<RumbleLine>,
-                 started: impl FnOnce(Result<Self, String>) + Send + 'static) {
+    /// Starts `game` with its system's core, given these `options` (`App::core_options`), its
+    /// sound on `output` and its rumble on `rumble`, on another thread, since reading a large ROM
+    /// or opening a Bluetooth output can take a second or more; then calls `started` there with the
+    /// result. The UI is told of each new frame (`Runner::game_frame`) and each in-game save.
+    /// Before opening the game's output, that thread waits for the interface `sounds` to close
+    /// theirs.
+    pub fn start(game: &Game, system: &SystemDecl, options: Vec<(String, String)>, data: &DataRoot, device: &SharedDevice, sounds: &Sounds,
+                 output: Output, rumble: Option<RumbleLine>, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let Some(core) = system.core else { return started(Err(format!("No emulator for {} yet", system.name))) };
         let library = cores_dir().join(format!("{}.so", core.library));
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
@@ -64,7 +65,8 @@ impl Playing {
             save: game.save_path(&data.saves(), "srm"),
             autosave: Some(game.state_path(&data.roms(), "autosave")),
             system_dir: data.bios(),
-            options: core.options.iter().map(|&(k, v)| (k.to_string(), v.to_string())).collect(),
+            options,
+            option_list: Some(specular_core::settings::core_options::list(core)),
             rom_by_path: core.rom_by_path,
             record: Some(record.clone()),
             states_restore_save: core.states_restore_save,

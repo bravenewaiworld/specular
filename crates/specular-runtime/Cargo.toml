@@ -18,3 +18,4 @@ cc = "1"
 specular-linux = { path = "../specular-linux" }
 tempfile = "3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde_json = "1"

@@ -12,15 +12,22 @@ const SCALING: &[(&str, &str)] = &[("integer", "Integer"), ("fit", "Fit"), ("str
 fn decls() -> Vec<SettingDecl> {
     vec![
         SettingDecl { key: "display.brightness", section: "Display", label: "Brightness", help: "How bright.", kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" },
-            default: json!(7), visibility: Visibility::User, deepest: Scope::Global },
+            default: json!(7), visibility: Visibility::User, deepest: Scope::Global, core: None },
         SettingDecl { key: "video.scaling", section: "Display", label: "Scaling", help: "How big.", kind: SettingKind::Choice(SCALING),
-            default: json!("integer"), visibility: Visibility::User, deepest: Scope::Game },
+            default: json!("integer"), visibility: Visibility::User, deepest: Scope::Game, core: None },
         SettingDecl { key: "dev.frame_stats", section: "Developer", label: "Frame stats", help: "How fast.", kind: SettingKind::Bool,
-            default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global },
+            default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global, core: None },
     ]
 }
 
+/// A core's option, as `core_options::decls` makes them.
+fn idle() -> SettingDecl {
+    SettingDecl { key: "mgba_idle", section: "mGBA", label: "Idle loops", help: "Skips them.", kind: SettingKind::Choice(&[("on", "on"), ("off", "off")]),
+        default: json!("on"), visibility: Visibility::Developer, deepest: Scope::Game, core: Some("mgba") }
+}
+
 fn gba() -> Layer { Layer::System("gba".into()) }
+fn mgba() -> Layer { Layer::Core("mgba".into()) }
 fn golden_sun() -> Layer { Layer::Game { system: "gba".into(), game: "gba/Golden Sun".into() } }
 fn press(button: Button) -> Press { Press { button, repeat: false } }
 fn held(button: Button) -> Press { Press { button, repeat: true } }
@@ -77,11 +84,11 @@ fn unknown_keys_are_kept() {
 fn rows_follow_sections_visibility_and_layer() {
     let mut s = Settings::new(decls());
     let labels = |rows: &[crate::model::Row]| rows.iter().map(|r| r.label.clone()).collect::<Vec<_>>();
-    assert_eq!(labels(&s.rows(&Layer::Global, Visibility::User)), ["Display", "Brightness", "Scaling"]);
-    assert_eq!(labels(&s.rows(&Layer::Global, Visibility::Developer)), ["Display", "Brightness", "Scaling", "Developer", "Frame stats"]);
+    assert_eq!(labels(&s.rows(&Layer::Global, Visibility::User, None)), ["Display", "Brightness", "Scaling"]);
+    assert_eq!(labels(&s.rows(&Layer::Global, Visibility::Developer, None)), ["Display", "Brightness", "Scaling", "Developer", "Frame stats"]);
     // a game's settings show only what a game may override, marked when it does
     s.set("video.scaling", &golden_sun(), json!("stretch")).unwrap();
-    let rows = s.rows(&golden_sun(), Visibility::User);
+    let rows = s.rows(&golden_sun(), Visibility::User, None);
     assert_eq!(labels(&rows), ["Display", "Scaling"]);
     assert!(rows[1].overridden);
     assert_eq!(rows[1].kind, RowKind::Choice { options: vec!["Integer".into(), "Fit".into(), "Stretch".into()], selected: 2, swatch: None });
@@ -112,7 +119,7 @@ fn presses_change_values() {
 #[test]
 fn colours_step_through_the_palette_and_can_follow_another() {
     let colour = |key, same_as, default| SettingDecl { key, section: "Look", label: key, help: "", kind: SettingKind::Colour { same_as },
-        default: json!(default), visibility: Visibility::User, deepest: Scope::Global };
+        default: json!(default), visibility: Visibility::User, deepest: Scope::Global, core: None };
     let mut s = Settings::new(vec![colour("Accent", None, "teal"), colour("second", Some("Accent"), "coral")]);
     let g = Layer::Global;
     assert_eq!(s.colour("second", &g), palette::find("coral"));
@@ -121,7 +128,7 @@ fn colours_step_through_the_palette_and_can_follow_another() {
     s.set("second", &g, json!(SAME)).unwrap();
     s.set("Accent", &g, json!("lime")).unwrap();
     assert_eq!(s.colour("second", &g), palette::find("lime"));
-    let rows = s.rows(&g, Visibility::User);
+    let rows = s.rows(&g, Visibility::User, None);
     let RowKind::Choice { options, selected: 0, swatch } = &rows[2].kind else { panic!("{:?}", rows[2]) };
     assert_eq!((options[0].as_str(), options[1].as_str(), *swatch), ("Same as accent", "Teal", palette::find("lime")));
     // without `same_as` there is no "same"; a stored id not in the palette is ignored, and the
@@ -177,25 +184,29 @@ fn a_corrupt_file_is_moved_aside() {
 #[test]
 fn schemas_document_what_each_file_may_hold() {
     let gba = crate::library::builtin_systems().into_iter().find(|s| s.id == "gba").unwrap();
-    let all = schema::all(&decls(), &[gba]);
+    let all = schema::all(&[decls(), vec![idle()]].concat(), &[gba]);
     let files: Vec<_> = all.iter().map(|(f, _)| f.to_str().unwrap()).collect();
-    assert_eq!(files, ["specular.schema.json", "systems/gba.schema.json", "games/gba.schema.json"]);
-    let (global, system, game) = (&all[0].1, &all[1].1, &all[2].1);
+    assert_eq!(files, ["specular.schema.json", "systems/gba.schema.json", "games/gba.schema.json", "cores/mgba.schema.json"]);
+    let (global, system, game, core) = (&all[0].1, &all[1].1, &all[2].1, &all[3].1);
     assert_eq!(global["$schema"], "https://json-schema.org/draft/2020-12/schema");
     assert!(global["$comment"].as_str().unwrap().contains("read-only"));
     assert_eq!(global["properties"]["display.brightness"],
         json!({"title": "Display: Brightness", "description": "How bright.", "type": "integer", "minimum": 1, "maximum": 10, "default": 7}));
     assert_eq!(global["properties"]["video.scaling"]["enum"], json!(["integer", "fit", "stretch"]));
     assert_eq!(global["properties"]["dev.frame_stats"]["type"], "boolean");
-    // a system's and its games' files hold only what may be set that specifically
+    // a system's and its games' files hold only what may be set that specifically, and its core's
+    // options; the core's file only those
     for s in [system, game] {
-        assert_eq!(s["properties"].as_object().unwrap().keys().collect::<Vec<_>>(), ["video.scaling"]);
+        assert_eq!(s["properties"].as_object().unwrap().keys().collect::<Vec<_>>(), ["video.scaling", "mgba_idle"]);
     }
+    assert_eq!(core["properties"].as_object().unwrap().keys().collect::<Vec<_>>(), ["mgba_idle"]);
+    assert!(global["properties"].get("mgba_idle").is_none());
     assert_eq!(game["title"], "Game Boy Advance game settings");
+    assert_eq!(core["title"], "mGBA options");
     // a colour lists the palette, after "same" if it can follow another
     let colour = SettingDecl { key: "c", section: "", label: "", help: "", kind: SettingKind::Colour { same_as: Some("a") },
-        default: json!("same"), visibility: Visibility::User, deepest: Scope::Global };
-    let s = schema::schema(&[colour], Scope::Global, "", "");
+        default: json!("same"), visibility: Visibility::User, deepest: Scope::Global, core: None };
+    let s = schema::schema(&[colour], &Layer::Global, None, "", "");
     assert_eq!(s["properties"]["c"]["enum"].as_array().unwrap()[..2], [json!("same"), json!("teal")]);
 }
 
@@ -329,4 +340,61 @@ fn a_fresh_card_has_nothing_to_migrate() {
     let root = tempfile::tempdir().unwrap();
     assert!(migrate::migrate(root.path()));
     assert!(!root.path().join("config").exists());
+}
+
+#[test]
+fn a_cores_options_are_looked_up_in_its_file_not_the_global_one() {
+    let mut s = Settings::new([decls(), vec![idle()]].concat());
+    assert_eq!(mgba().path(Path::new("")), Path::new("cores/mgba.json"));
+    assert_eq!(mgba().schema_ref(), "mgba.schema.json");
+    s.set_layer(Layer::Global, Map::from_iter([("mgba_idle".into(), json!("off"))]));
+    assert_eq!(s.get("mgba_idle", &golden_sun()), Some((&json!("on"), None)));
+    assert_eq!(s.set("mgba_idle", &Layer::Global, json!("off")), Err(SettingError::NotAtThisLayer));
+    assert_eq!(s.set("display.brightness", &mgba(), json!(3)), Err(SettingError::NotAtThisLayer));
+    s.set("mgba_idle", &mgba(), json!("off")).unwrap();
+    assert_eq!(s.get("mgba_idle", &golden_sun()), Some((&json!("off"), Some(mgba()))));
+    s.set("mgba_idle", &golden_sun(), json!("on")).unwrap();
+    assert_eq!(s.get("mgba_idle", &golden_sun()), Some((&json!("on"), Some(golden_sun()))));
+    assert_eq!(s.get("mgba_idle", &gba()).unwrap().0, &json!("off"));
+    // rows are Specular's settings, or one core's options
+    let keys = |rows: Vec<crate::model::Row>| rows.into_iter().filter(|r| r.kind != RowKind::Header).map(|r| r.id.0).collect::<Vec<_>>();
+    assert_eq!(keys(s.rows(&golden_sun(), Visibility::Developer, None)), ["video.scaling"]);
+    assert_eq!(keys(s.rows(&golden_sun(), Visibility::Developer, Some("mgba"))), ["mgba_idle"]);
+    assert!(s.rows(&golden_sun(), Visibility::User, Some("mgba")).is_empty());
+}
+
+#[test]
+fn resetting_an_override_inherits_again() {
+    let mut s = Settings::new(decls());
+    s.set("video.scaling", &gba(), json!("fit")).unwrap();
+    s.set("video.scaling", &golden_sun(), json!("stretch")).unwrap();
+    assert_eq!(s.reset("video.scaling", &golden_sun()), Some("video.scaling"));
+    assert_eq!(s.get("video.scaling", &golden_sun()), Some((&json!("fit"), Some(gba()))));
+    assert_eq!(s.reset("video.scaling", &golden_sun()), None); // nothing left to reset
+    assert_eq!(s.reset("nope", &gba()), None);
+}
+
+#[test]
+fn values_a_file_holds_in_vain_are_reported() {
+    let values = Map::from_iter([("display.brightness".into(), json!(3)), ("video.scaling".into(), json!("zoom")),
+                                 ("plugin.thing".into(), json!(1)), ("mgba_idle".into(), json!("off"))]);
+    let decls = [decls(), vec![idle()]].concat();
+    assert_eq!(ignored(&decls, &golden_sun(), &values), [
+        "display.brightness can't be set in this file, so it is ignored",
+        "video.scaling = \"zoom\" isn't one of its values, so it is ignored",
+    ]);
+    assert_eq!(ignored(&decls, &Layer::Global, &values).len(), 2); // brightness is fine there, the core's option isn't
+}
+
+#[test]
+fn games_with_settings_are_found_from_their_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let games = dir.path().join("games");
+    fs::create_dir_all(games.join("gba/RPG")).unwrap();
+    for f in ["gba.schema.json", "gba/RPG/Golden Sun.json", "gba/Tetris.json.tmp", "gba/Mother 3.json", "gba/Mother 3.json.tmp",
+              "gba/Broken.json.bad", "gba/notes.txt"] {
+        fs::write(games.join(f), "{}").unwrap();
+    }
+    assert_eq!(games_with_settings(dir.path()).into_iter().collect::<Vec<_>>(), ["gba/Mother 3", "gba/RPG/Golden Sun", "gba/Tetris"]);
+    assert!(games_with_settings(&dir.path().join("none")).is_empty());
 }

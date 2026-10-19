@@ -99,10 +99,8 @@ Completed:
  - Select shows or hides the Wi-Fi password on the keyboard, with a hint; it is hidden each time the keyboard opens
  - Settings files in `{sd card}/config/v0/` (`specular.json`, `systems/<system>.json`, `games/<game>.json`; see docs/settings.md), beside fully documented JSON Schemas generated from the declarations: every setting with what it does, its values and its default. Schemas are read-only and rewritten only when they change; each settings file names its schema (`$schema`), so editors explain and check it
  - Settings moved from `configs/` to `config/v0/` at start-up, safe against power cuts; the old folder is kept. Each future format change adds a step to a new `vN/` folder
-
-TODO:
- - Per-system and per-game settings (the stored layers exist; they aren't loaded or editable yet)
- - Core options as settings, declared from each core's option list (`cores/<core>.json`, overridable per system and per game), with their schemas
+ - Per-system and per-game settings: Start on a game (or "Game settings" in the in-game menu) opens its settings, with "All <system> games…" for its system's; overrides are marked, X resets one, and changes apply to the running game. Every layer is loaded before its games are listed
+ - Core options as settings (`cores/<core>.json`, overridable per system and per game), with their schemas; shown with Developer details on the game and system screens, and changed mid-game. The cores' option lists are written by `make cores` into `data/cores/` and compiled in, with constants for Specular's code; the launch logs how a core's options differ from its list. Specular's fixed choices (mGBA's idle loop removal, Nestopia's NTSC filter off, SwanStation's software renderer) are now defaults
 
 ### Aesthetics and Presentation
 

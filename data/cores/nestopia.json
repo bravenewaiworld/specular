@@ -1,0 +1,1323 @@
+{
+  "categories": [
+    {
+      "key": "system",
+      "label": "System",
+      "info": "Change system region and other hardware-related settings."
+    },
+    {
+      "key": "video",
+      "label": "Video",
+      "info": "Change aspect ratio, display cropping, color palette and video filter settings."
+    },
+    {
+      "key": "audio",
+      "label": "Audio",
+      "info": "Change audio effects and channel volumes."
+    },
+    {
+      "key": "input",
+      "label": "Input",
+      "info": "Change input devices and other input related settings."
+    },
+    {
+      "key": "hacks",
+      "label": "Emulation Hacks",
+      "info": "Change processor overclocking and emulation accuracy settings affecting low-level performance and compatibility."
+    }
+  ],
+  "options": [
+    {
+      "key": "nestopia_favored_system",
+      "label": "Favored System",
+      "info": "System to prefer for images that do not say which one they want. Images that do say, and images found in the NstDatabase.xml database file, are unaffected. Only applies while 'Force System' is set to 'Auto'. Requires a restart.",
+      "category": "system",
+      "values": [
+        {
+          "value": "ntsc",
+          "label": "NTSC"
+        },
+        {
+          "value": "pal",
+          "label": "PAL"
+        },
+        {
+          "value": "famicom",
+          "label": "Famicom"
+        },
+        {
+          "value": "dendy",
+          "label": "Dendy"
+        }
+      ],
+      "default": "ntsc"
+    },
+    {
+      "key": "nestopia_force_system",
+      "label": "Force System",
+      "info": "Ignore the system the image asks for and use this one instead. Changing this setting will restart the game.",
+      "category": "system",
+      "values": [
+        {
+          "value": "auto",
+          "label": "Auto"
+        },
+        {
+          "value": "ntsc",
+          "label": "NTSC"
+        },
+        {
+          "value": "pal",
+          "label": "PAL"
+        },
+        {
+          "value": "famicom",
+          "label": "Famicom"
+        },
+        {
+          "value": "dendy",
+          "label": "Dendy"
+        }
+      ],
+      "default": "auto"
+    },
+    {
+      "key": "nestopia_fds_auto_insert",
+      "label": "FDS Auto Insert",
+      "info": "Automatically insert first FDS disk on reset.",
+      "category": "system",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "enabled"
+    },
+    {
+      "key": "nestopia_fds_savefile_format",
+      "label": "FDS Savefile Format",
+      "info": "Define which format will be used by savefiles generated for FDS games. Based on the format chosen, FDS savefiles might be used interchangeably with other cores and standalone emulators. It is recommended to use with caution, as improper handling may cause undesired overwrites, or deletion of the existing saves.",
+      "category": "system",
+      "values": [
+        {
+          "value": "sav_ups",
+          "label": "SAV + UPS (Default)"
+        },
+        {
+          "value": "ups",
+          "label": "UPS (Standalone Nestopia)"
+        },
+        {
+          "value": "ips",
+          "label": "IPS (Mesen)"
+        }
+      ],
+      "default": "sav_ups"
+    },
+    {
+      "key": "nestopia_blargg_ntsc_filter",
+      "label": "Blargg NTSC Filter",
+      "info": "Enable Blargg NTSC filters.",
+      "category": "video",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "composite",
+          "label": "Composite Video"
+        },
+        {
+          "value": "svideo",
+          "label": "S-Video"
+        },
+        {
+          "value": "rgb",
+          "label": "RGB SCART"
+        },
+        {
+          "value": "monochrome",
+          "label": "Monochrome"
+        }
+      ],
+      "default": "composite"
+    },
+    {
+      "key": "nestopia_palette",
+      "label": "Palette",
+      "info": "Color palette to be used. If 'Custom' is selected, the palette used will be taken from the 'custom.pal' file placed in the RetroArch System/BIOS directory.",
+      "category": "video",
+      "values": [
+        {
+          "value": "royaltea",
+          "label": "Royaltea"
+        },
+        {
+          "value": "cxa2025as",
+          "label": "CXA2025AS (US)"
+        },
+        {
+          "value": "cxa2025as_jp",
+          "label": "CXA2025AS (JP)"
+        },
+        {
+          "value": "consumer",
+          "label": "Consumer"
+        },
+        {
+          "value": "canonical",
+          "label": "Canonical"
+        },
+        {
+          "value": "alternative",
+          "label": "Alternative"
+        },
+        {
+          "value": "rgb",
+          "label": "RGB"
+        },
+        {
+          "value": "pal",
+          "label": "PAL"
+        },
+        {
+          "value": "digital-prime-fbx",
+          "label": "Digital Prime FBX"
+        },
+        {
+          "value": "magnum-fbx",
+          "label": "Magnum FBX"
+        },
+        {
+          "value": "smoothv2-fbx",
+          "label": "Smooth V2 FBX"
+        },
+        {
+          "value": "composite-direct-fbx",
+          "label": "Composite Direct FBX"
+        },
+        {
+          "value": "pvm-style-d93-fbx",
+          "label": "PVM-style D93 FBX"
+        },
+        {
+          "value": "ntsc-hardware-fbx",
+          "label": "NTSC hardware FBX"
+        },
+        {
+          "value": "nes-classic-fbx-fs",
+          "label": "NES Classic FBx (fixed)"
+        },
+        {
+          "value": "restored-wii-vc",
+          "label": "Restored Wii VC"
+        },
+        {
+          "value": "wii-vc",
+          "label": "Wii Virtual Console"
+        },
+        {
+          "value": "raw",
+          "label": "Raw"
+        },
+        {
+          "value": "custom",
+          "label": "Custom"
+        }
+      ],
+      "default": "royaltea"
+    },
+    {
+      "key": "nestopia_overscan_v_top",
+      "label": "Mask Overscan (Top Vertical)",
+      "info": "Mask out (vertically) the potentially random glitchy video output that would have been hidden by the bezel around the edge of a standard-definition television screen.",
+      "category": "video",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "11"
+        },
+        {
+          "value": "12"
+        },
+        {
+          "value": "13"
+        },
+        {
+          "value": "14"
+        },
+        {
+          "value": "15"
+        },
+        {
+          "value": "16"
+        },
+        {
+          "value": "17"
+        },
+        {
+          "value": "18"
+        },
+        {
+          "value": "19"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "21"
+        },
+        {
+          "value": "22"
+        },
+        {
+          "value": "23"
+        },
+        {
+          "value": "24"
+        }
+      ],
+      "default": "8"
+    },
+    {
+      "key": "nestopia_overscan_v_bottom",
+      "label": "Mask Overscan (Bottom Vertical)",
+      "info": "Mask out (vertically) the potentially random glitchy video output that would have been hidden by the bezel around the edge of a standard-definition television screen.",
+      "category": "video",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "11"
+        },
+        {
+          "value": "12"
+        },
+        {
+          "value": "13"
+        },
+        {
+          "value": "14"
+        },
+        {
+          "value": "15"
+        },
+        {
+          "value": "16"
+        },
+        {
+          "value": "17"
+        },
+        {
+          "value": "18"
+        },
+        {
+          "value": "19"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "21"
+        },
+        {
+          "value": "22"
+        },
+        {
+          "value": "23"
+        },
+        {
+          "value": "24"
+        }
+      ],
+      "default": "8"
+    },
+    {
+      "key": "nestopia_overscan_h_left",
+      "label": "Mask Overscan (Left Horizontal)",
+      "info": "Mask out (horizontally) the potentially random glitchy video output that would have been hidden by the bezel around the edge of a standard-definition television screen.",
+      "category": "video",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "11"
+        },
+        {
+          "value": "12"
+        },
+        {
+          "value": "13"
+        },
+        {
+          "value": "14"
+        },
+        {
+          "value": "15"
+        },
+        {
+          "value": "16"
+        }
+      ],
+      "default": "0"
+    },
+    {
+      "key": "nestopia_overscan_h_right",
+      "label": "Mask Overscan (Right Horizontal)",
+      "info": "Mask out (horizontally) the potentially random glitchy video output that would have been hidden by the bezel around the edge of a standard-definition television screen.",
+      "category": "video",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "11"
+        },
+        {
+          "value": "12"
+        },
+        {
+          "value": "13"
+        },
+        {
+          "value": "14"
+        },
+        {
+          "value": "15"
+        },
+        {
+          "value": "16"
+        }
+      ],
+      "default": "0"
+    },
+    {
+      "key": "nestopia_aspect",
+      "label": "Preferred Aspect Ratio",
+      "info": "RetroArch's aspect ratio must be set to 'Core Provided' in the Video settings. 'Auto' will use the NstDatabase.xml database file for region autodetection, defaulting to NTSC if there is no database present. 'Auto', 'NTSC' and 'PAL' give the picture its correct pixel aspect ratio, so it narrows as the overscan mask is raised. '4:3' and '5:4' are display aspect ratios, and fill that shape whatever is masked. 'Uncorrected' gives square pixels.",
+      "category": "video",
+      "values": [
+        {
+          "value": "auto",
+          "label": "Auto"
+        },
+        {
+          "value": "ntsc",
+          "label": "NTSC"
+        },
+        {
+          "value": "pal",
+          "label": "PAL"
+        },
+        {
+          "value": "4:3",
+          "label": "4:3 (DAR)"
+        },
+        {
+          "value": "5:4",
+          "label": "5:4 (DAR)"
+        },
+        {
+          "value": "uncorrected",
+          "label": "Uncorrected"
+        }
+      ],
+      "default": "auto"
+    },
+    {
+      "key": "nestopia_audio_filter",
+      "label": "Audio Output Filter",
+      "info": "Approximate the analog stage that follows the DAC on real hardware, by applying a first order 220Hz high pass and a first order 14kHz low pass to the mixed output. This removes the DC offset the mixer sits on and rolls off the extreme treble.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "nestopia_show_advanced_av_settings",
+      "label": "Show Advanced Audio Settings (Reopen menu)",
+      "info": "Enable configuration of low-level audio channel parameters.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "nestopia_audio_vol_sq1",
+      "label": "Square 1 Channel Volume %",
+      "info": "Modify Square 1 Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_sq2",
+      "label": "Square 2 Channel Volume %",
+      "info": "Modify Square 2 Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_tri",
+      "label": "Triangle Channel Volume %",
+      "info": "Modify Triangle Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_noise",
+      "label": "Noise Channel Volume %",
+      "info": "Modify Noise Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_dpcm",
+      "label": "DPCM Channel Volume %",
+      "info": "Modify DPCM Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_fds",
+      "label": "FDS Channel Volume %",
+      "info": "Modify FDS Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_mmc5",
+      "label": "MMC5 Channel Volume %",
+      "info": "Modify MMC5 Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_vrc6",
+      "label": "VRC6 Channel Volume %",
+      "info": "Modify VRC6 Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_vrc7",
+      "label": "VRC7 Channel Volume %",
+      "info": "Modify VRC7 Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_n163",
+      "label": "N163 Channel Volume %",
+      "info": "Modify N163 Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_audio_vol_s5b",
+      "label": "S5B Channel Volume %",
+      "info": "Modify S5B Channel Volume %.",
+      "category": "audio",
+      "values": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "10"
+        },
+        {
+          "value": "20"
+        },
+        {
+          "value": "30"
+        },
+        {
+          "value": "40"
+        },
+        {
+          "value": "50"
+        },
+        {
+          "value": "60"
+        },
+        {
+          "value": "70"
+        },
+        {
+          "value": "80"
+        },
+        {
+          "value": "85"
+        },
+        {
+          "value": "90"
+        },
+        {
+          "value": "95"
+        },
+        {
+          "value": "100"
+        }
+      ],
+      "default": "100"
+    },
+    {
+      "key": "nestopia_select_adapter",
+      "label": "4 Player Adapter",
+      "info": "Manually select a 4 Player Adapter if needed. Some games will not recognize the adapter correctly through the NstDatabase.xml database, this option should help fix that.",
+      "category": "input",
+      "values": [
+        {
+          "value": "auto",
+          "label": "Auto"
+        },
+        {
+          "value": "ntsc",
+          "label": "NTSC"
+        },
+        {
+          "value": "famicom",
+          "label": "Famicom"
+        }
+      ],
+      "default": "auto"
+    },
+    {
+      "key": "nestopia_button_shift",
+      "label": "Shift Buttons Clockwise",
+      "info": "Rotate the A/B/X/Y buttons clockwise.",
+      "category": "input",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "nestopia_arkanoid_device",
+      "label": "Arkanoid device",
+      "info": "Select the device you wish to use for the Arkanoid paddle.",
+      "category": "input",
+      "values": [
+        {
+          "value": "mouse",
+          "label": "Mouse"
+        },
+        {
+          "value": "pointer",
+          "label": "Pointer"
+        }
+      ],
+      "default": "mouse"
+    },
+    {
+      "key": "nestopia_arkanoid_paddle_range",
+      "label": "Arkanoid Paddle Range",
+      "info": "Set the range for the Arkanoid paddle.",
+      "category": "input",
+      "values": [
+        {
+          "value": "combined",
+          "label": "Combined range of both controllers (32-166)"
+        },
+        {
+          "value": "arkanoidI",
+          "label": "Arkanoid I controller range (46-166)"
+        },
+        {
+          "value": "arkanoidII",
+          "label": "Arkanoid II controller range (32-153)"
+        }
+      ],
+      "default": "combined"
+    },
+    {
+      "key": "nestopia_zapper_device",
+      "label": "Zapper device",
+      "info": "Select the device you wish to use for the Zapper.",
+      "category": "input",
+      "values": [
+        {
+          "value": "lightgun",
+          "label": "Light gun"
+        },
+        {
+          "value": "mouse",
+          "label": "Mouse"
+        },
+        {
+          "value": "pointer",
+          "label": "Pointer"
+        }
+      ],
+      "default": "lightgun"
+    },
+    {
+      "key": "nestopia_show_crosshair",
+      "label": "Show Crosshair",
+      "info": "Set whether to show the crosshair when the Zapper is used.",
+      "category": "input",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "enabled"
+    },
+    {
+      "key": "nestopia_turbo_pulse",
+      "label": "Turbo Pulse Speed",
+      "info": "Set the turbo pulse speed for the Turbo B and Turbo A buttons.",
+      "category": "input",
+      "values": [
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        }
+      ],
+      "default": "2"
+    },
+    {
+      "key": "nestopia_nospritelimit",
+      "label": "Remove Sprite Limit",
+      "info": "Remove 8-sprites-per-scanline hardware limit.",
+      "category": "hacks",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "nestopia_dmc_pop_reducer",
+      "label": "DMC Pop Reducer",
+      "info": "Halve large direct writes to the DMC level, which are otherwise heard as clicks. Inaccurate, and quietens samples streamed through $4011 as large swings.",
+      "category": "hacks",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "nestopia_genie_distortion",
+      "label": "Game Genie Sound Distortion",
+      "info": "The Game Genie cheat device could inadvertently introduce sound distortion in games. By enabling this, you can simulate the distortion it would add to a game's sound.",
+      "category": "hacks",
+      "values": [
+        {
+          "value": "disabled"
+        },
+        {
+          "value": "enabled"
+        }
+      ],
+      "default": "disabled"
+    },
+    {
+      "key": "nestopia_ram_power_state",
+      "label": "RAM Power-on State",
+      "info": "RAM values on power up. Some games rely on initial RAM values for random number generation as an example.",
+      "category": "hacks",
+      "values": [
+        {
+          "value": "0x00"
+        },
+        {
+          "value": "0xFF"
+        },
+        {
+          "value": "random",
+          "label": "Random"
+        }
+      ],
+      "default": "0x00"
+    }
+  ]
+}

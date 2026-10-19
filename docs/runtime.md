@@ -24,6 +24,7 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 - **A zipped ROM is unzipped into memory, and the core given its `/proc/self/fd/<n>` path** (2026-10-18). A memfd holds it, so nothing is written to the card and mGBA still maps the file (its pages are shared, not copied). Only for a core that can't open zips (none among its `valid_extensions`, and no `block_extract`), as libretro has frontends do; the file inside is the first with one of the core's extensions. A ROM that would leave less than 64 MB of memory available (`MemAvailable`) is refused. Saves stay named after the zip. Rejected: building mGBA with zip support (every core would need its own, and our mapping patch works on files); unzipping to a file on the card (writes, and a leftover file after a crash); a temporary file under `/tmp` (tmpfs: the same memory, plus a file to clean up).
 - **Cores' log messages go into Specular's log, through a C shim** (2026-10-18). libretro's log callback is C-variadic, which Rust 1.98 can't define on stable, so `src/log.c` (built with `cc`) formats the message and hands it to Rust. Lines read `core: <core> <level>: <message>`. Debug messages are dropped before they are formatted, and at most 30 are written a second, the rest counted and the count logged, so a core logging every frame costs little and can't flood the log. Rejected: nightly Rust (`c_variadic`); a log thread (writing a line to stderr is cheap, and the cap bounds how many).
 - **Games rumble through libretro's rumble interface, for the first player** (2026-10-18). The core's strong and weak motor strengths go to the rumble thread (see [architecture.md](architecture.md)). The game's rumble is stilled while it is paused (its menu, sleep) and restored on resuming (what the core asks meanwhile, resetting or loading a state from the menu, is kept for then), and stilled when it ends, by the frontend being removed, which also covers a core that fails to load. A crash or the watchdog ending Specular closes its rumble device, and the kernel stops the effect then. Rejected: leaving the rumble on over the menu (a held strength would buzz until the game resumes).
+- **Cores declare their options in libretro's version 2, and can change them mid-game** (2026-10-18). Version 2 carries each option's info text, categories and value labels, which go into the settings' schemas (see [settings.md](settings.md)); versions 0 and 1 are read too, for cores that use them. A change is handed to the game's thread and the core told through GET_VARIABLE_UPDATE, which cores ask about each frame. Rejected: version 0 (a description and bare values only); restarting the game to change an option (some cores read theirs only at launch anyway, and say so).
 - **A watchdog ends Specular if a core spends 6 s on one frame** (2026-10-13). A stuck core's thread can't be stopped; the service manager restarts Specular. The battery save is then as the game last wrote it, at most about 10 s old.
 
 ## Design
@@ -39,7 +40,8 @@ pub struct LaunchSpec {
     pub save: PathBuf,                  // battery save (.srm)
     pub autosave: Option<PathBuf>,      // resumed from at launch
     pub system_dir: PathBuf,            // bios/
-    pub options: Vec<(String, String)>, // core options; the rest keep their defaults
+    pub options: Vec<(String, String)>, // core options; the rest keep the core's defaults
+    pub option_list: Option<&'static CoreOptions>, // what the core should declare (data/cores/); differences are logged
     pub rom_by_path: bool,              // only for cores known to read the file themselves
     pub record: Option<(PathBuf, LaunchRecord)>, // the launch record (see architecture.md)
     pub states_restore_save: bool,      // keep a newer .srm when a state rolls it back (see Saves and states)
@@ -60,6 +62,7 @@ impl Session {
     pub fn take_sound_peak(&self) -> u16;     // the loudest sample since the last call, for the effects
     pub fn pause(&self, paused: bool);
     pub fn set_sound(&self, out: Option<Box<dyn SoundOut>>);  // open it beforehand: opening can block
+    pub fn set_options(&self, options: Vec<(String, String)>); // as LaunchSpec::options; the core reads them again (GET_VARIABLE_UPDATE)
     pub fn save_state(&self, path: &Path) -> io::Result<()>;
     pub fn load_state(&self, path: &Path) -> io::Result<()>;
     pub fn flush(&self) -> io::Result<()>;   // battery save and autosave, on the card when it returns
@@ -70,6 +73,8 @@ impl Session {
 A zip that can't be unzipped fails the start with a message for the player ("the zip can't be read", "the zip holds no game mGBA plays", "the zip is damaged", "the game is too large to unzip"), shown as "The game couldn't start: …"; the log has the zip's path, what it holds and the sizes. A ROM unzipped is logged with its size and how long unzipping took.
 
 Frames are handed over in a `FrameSlot` holding the newest frame: neither side waits, and a frame the UI hasn't taken is replaced by a newer one. The UI uploads it on its own thread just before Slint draws (the only time its GL context is sure to be current), into one texture the window shows. 3D cores will need a GL context shared with the UI's instead.
+
+A core's options are given as `LaunchSpec::options` says, the rest left at the core's defaults (see [settings.md](settings.md) for where the values come from). Cores are told Specular takes libretro's options version 2, the newest, and their declarations are read in any version. At launch the log has how the core's options differ from its list in `data/cores/` (`game: mGBA's options differ from Specular's list (data/cores/): …`), the values given (`game: mGBA's options: mgba_idle_optimization = Remove Known, the rest its defaults`), and any it doesn't take (an option it doesn't have, or a value it doesn't list), which keep its default. `set_options` logs each value that changes (`game: mGBA option mgba_color_correction: OFF → GBA`). Some options only take effect once the game starts again (mGBA marks those "(Restart)").
 
 Only the libretro environment calls Specular needs are accepted; the rest are refused, which cores must cope with. Each call refused is logged once a game, with its number (`game: refused the core's environment call 13 (0xd)`). A change of timing or picture size while running is accepted but not acted on: frames carry their own size, and pacing and sound keep the timing the game started with. Buttons are read when the core asks, so as late as possible.
 
@@ -110,7 +115,8 @@ Every game's sound is resampled, by linear interpolation, to the output's rate (
 pub struct CoreDecl {        // specular-core's library module: how Specular runs a core
     pub name: &'static str,
     pub library: &'static str,                            // e.g. "nestopia_libretro"
-    pub options: &'static [(&'static str, &'static str)],
+    pub options: &'static str,                            // its option list, data/cores/<id>.json (see settings.md)
+    pub defaults: &'static [(&'static str, &'static str)], // Specular's defaults for some options
     pub rom_by_path: bool,
     pub states_restore_save: bool,                        // see Saves and states
     pub bios: &'static [Bios],
@@ -124,7 +130,7 @@ pub struct Bios {
 impl CoreDecl { pub fn check_bios(&self, rom: &Path, bios_dir: &Path) -> Result<(), String>; }
 ```
 
-| Core | Systems | Options set | BIOS in `bios/` | States restore save memory |
+| Core | Systems | Specular's defaults for its options | BIOS in `bios/` | States restore save memory |
 |---|---|---|---|---|
 | mGBA | GB, GBC, GBA | `mgba_idle_optimization = Remove Known` | none | no |
 | Nestopia | NES, Famicom Disk System | `nestopia_blargg_ntsc_filter = disabled` | `disksys.rom`, for `.fds` games only; required | yes (battery memory) |
@@ -143,6 +149,8 @@ Kept in `tools/core-patches/mgba`; `tools/build-cores.sh` fetches mGBA at a pinn
 mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-wait loops of known games: it saves battery without changing how they run (TrimUI's own setting too). Nestopia and SwanStation are built unpatched.
 
 ## Findings
+
+- (2026-10-18, desktop) mGBA reads its options again when GET_VARIABLE_UPDATE says they changed: colour correction turned on mid-game changes the next frames. Its fixed-interval frameskip turned on mid-game has no effect (it reloads its configuration, which drops the value; inferred from its source), though it works from launch. Source: `crates/specular-runtime/src/tests.rs`.
 
 - (2026-10-14, device) On the Brick, GBA games run at the panel's 60.2 Hz beside the UI. mGBA takes a median 5–7 ms a frame (95 % under 9–15 ms) at the 816 MHz the `ondemand` governor picks, with about 30–50 ms of sound queued. Source: frame statistics on the Brick.
 - (2026-10-14, device) While a game runs, Specular itself uses about 29 MB of the 66 MB resident (the rest is mGBA and its game); 31 MB in the menus. Source: Brick measurements.

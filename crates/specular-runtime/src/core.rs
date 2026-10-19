@@ -25,8 +25,12 @@ pub const ENV_GET_LANGUAGE: c_uint = 39;
 pub const ENV_SET_SUPPORT_ACHIEVEMENTS: c_uint = 42 | EXPERIMENTAL;
 pub const ENV_GET_INPUT_BITMASKS: c_uint = 51 | EXPERIMENTAL;
 pub const ENV_GET_CORE_OPTIONS_VERSION: c_uint = 52;
+pub const ENV_SET_CORE_OPTIONS: c_uint = 53;
+pub const ENV_SET_CORE_OPTIONS_INTL: c_uint = 54;
 pub const ENV_SET_CORE_OPTIONS_DISPLAY: c_uint = 55;
 pub const ENV_SET_MINIMUM_AUDIO_LATENCY: c_uint = 63;
+pub const ENV_SET_CORE_OPTIONS_V2: c_uint = 67;
+pub const ENV_SET_CORE_OPTIONS_V2_INTL: c_uint = 68;
 /// A call of Specular's own, from our patched mGBA (`tools/core-patches/mgba/0002`): the game
 /// has changed its save memory and finished writing to it. Made inside `retro_run`, once the
 /// save memory has gone 15 frames (a quarter of a second) without a write. No data.
@@ -70,7 +74,7 @@ impl SystemInfo {
 }
 
 /// A C string from a core, if it isn't null.
-fn text(p: *const c_char) -> Option<String> { (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()) }
+pub fn text(p: *const c_char) -> Option<String> { (!p.is_null()).then(|| unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()) }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -86,6 +90,41 @@ pub struct AvInfo { pub geometry: Geometry, pub timing: Timing }
 
 #[repr(C)]
 pub struct Variable { pub key: *const c_char, pub value: *const c_char }
+
+/// The most values a core option has in versions 1 and 2 of libretro's core options interface (the arrays end early with a null value).
+pub const OPTION_VALUES_MAX: usize = 128;
+
+#[repr(C)]
+pub struct OptionValue { pub value: *const c_char, pub label: *const c_char }
+
+/// Version 1's option (`retro_core_option_definition`); an array of them ends with a null key.
+#[repr(C)]
+pub struct OptionDefinition {
+    pub key: *const c_char, pub desc: *const c_char, pub info: *const c_char,
+    pub values: [OptionValue; OPTION_VALUES_MAX], pub default_value: *const c_char,
+}
+
+/// Version 1's options in the user's language, and in English (`retro_core_options_intl`).
+#[repr(C)]
+pub struct OptionsIntl { pub us: *const OptionDefinition, pub local: *const OptionDefinition }
+
+#[repr(C)]
+pub struct OptionCategory { pub key: *const c_char, pub desc: *const c_char, pub info: *const c_char }
+
+/// Version 2's option (`retro_core_option_v2_definition`); an array of them ends with a null key.
+#[repr(C)]
+pub struct OptionV2Definition {
+    pub key: *const c_char, pub desc: *const c_char, pub desc_categorized: *const c_char,
+    pub info: *const c_char, pub info_categorized: *const c_char, pub category_key: *const c_char,
+    pub values: [OptionValue; OPTION_VALUES_MAX], pub default_value: *const c_char,
+}
+
+/// Version 2's options: arrays ending with a null key.
+#[repr(C)]
+pub struct OptionsV2 { pub categories: *const OptionCategory, pub definitions: *const OptionV2Definition }
+
+#[repr(C)]
+pub struct OptionsV2Intl { pub us: *const OptionsV2, pub local: *const OptionsV2 }
 
 #[repr(C)]
 pub struct Message { pub msg: *const c_char, pub frames: c_uint }

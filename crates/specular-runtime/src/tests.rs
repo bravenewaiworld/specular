@@ -40,7 +40,7 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
     let (count, sound) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let c = count.clone();
     let session = Session::start(
-        LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None },
+        LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None },
         Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(),
                   on_frame: Box::new(move || *c.lock().unwrap() += 1), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
@@ -74,7 +74,7 @@ fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
-    let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None };
+    let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None };
     assert!(Session::start(spec(dir.path().join("none.so")), out()).is_err());
     if let Some(core) = mgba() { assert!(Session::start(spec(core), out()).err().unwrap().contains("none.gba")); }
 }
@@ -100,7 +100,7 @@ fn the_battery_save_is_written_once_the_game_writes_it_and_the_game_resumes_from
                                     0xe5c0_1000 /* strb r1, [r0] */, 0xeaff_fffe /* b . */])).unwrap();
     let (save, autosave) = (dir.path().join("writes.srm"), dir.path().join(".states/writes.autosave"));
     let spec = || LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: save.clone(), autosave: Some(autosave.clone()),
-                               system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None };
+                               system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None };
     let saves = Arc::new(Mutex::new(0usize));
     let out = || {
         let saves = saves.clone();
@@ -142,7 +142,7 @@ fn the_games_rumble_stops_while_it_is_paused_and_when_it_ends() {
     let line = RumbleLine::default();
     line.set_level(specular_core::settings::builtin::RUMBLE_MAX as u8);
     let session = Session::start(
-        LaunchSpec { core, rom: rom_path, save: dir.path().join("rumbles.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None },
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("rumbles.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None },
         Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: Some(line.clone()), on_save: Box::new(|| {}) },
     ).unwrap();
     let full = Motors { strong: 0xffff, weak: 0xffff };
@@ -185,7 +185,7 @@ fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs()
     let game = specular_core::library::Game { system: "gba", path: "game.zip".into(), title: "Game".into(), sort_key: String::new() };
     let record = LaunchRecord::new("mGBA", &core, &game);
     let spec = |rom: PathBuf| LaunchSpec { core: core.clone(), rom, save: dir.path().join("game.srm"), autosave: None, system_dir: dir.path().into(),
-                                           options: vec![], rom_by_path: true, states_restore_save: false, record: Some((record_path.clone(), record.clone())) };
+                                           options: vec![], option_list: None, rom_by_path: true, states_restore_save: false, record: Some((record_path.clone(), record.clone())) };
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::new(FrameSlot::default()), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
     let write = |name: &str, data: &[u8]| { let p = dir.path().join(name); std::fs::write(&p, data).unwrap(); p };
     // mGBA is given the unzipped ROM's path, which has no extension: it tells a GBA ROM by its contents.
@@ -242,7 +242,7 @@ fn the_sound_moves_to_a_new_output_between_frames() {
     std::fs::write(&rom_path, rom(&[0xeaff_fffe /* b . */])).unwrap();
     let (first, second) = (Arc::new(Mutex::new(0usize)), Arc::new(Mutex::new(0usize)));
     let session = Session::start(
-        LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], rom_by_path: false, states_restore_save: false, record: None },
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, states_restore_save: false, record: None },
         Outputs { sound: Some(Box::new(Count(first.clone()))), vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(200)); // frames reach the first output
@@ -298,7 +298,7 @@ fn runs_an_nes_game_with_frames_sound_and_its_battery_save() {
     let sound = Arc::new(Mutex::new(0usize));
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().into(),
-                     options: vec![("nestopia_blargg_ntsc_filter".into(), "disabled".into())], rom_by_path: false, states_restore_save: true, record: None },
+                     options: vec![("nestopia_blargg_ntsc_filter".into(), "disabled".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
         Outputs { sound: Some(Box::new(Count(sound.clone()))), vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(300));
@@ -336,7 +336,7 @@ fn runs_a_ps1_game_without_a_bios() {
     let frames = Arc::new(FrameSlot::default());
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().join("bios"),
-                     options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], rom_by_path: false, states_restore_save: true, record: None },
+                     options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None, rom_by_path: false, states_restore_save: true, record: None },
         Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
@@ -355,7 +355,7 @@ fn a_newer_battery_save_is_kept(core: PathBuf, rom_name: &str, rom: Vec<u8>, opt
     std::fs::write(&rom_path, rom).unwrap();
     let (save, state, newer) = (dir.path().join("game.srm"), dir.path().join("game.state1"), dir.path().join("game.newer.srm"));
     let spec = || LaunchSpec { core: core.clone(), rom: rom_path.clone(), save: save.clone(), autosave: None, system_dir: dir.path().into(),
-        options: options.iter().map(|&(k, v)| (k.into(), v.into())).collect(), rom_by_path: false, states_restore_save: true, record: None };
+        options: options.iter().map(|&(k, v)| (k.into(), v.into())).collect(), option_list: None, rom_by_path: false, states_restore_save: true, record: None };
     let out = || Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) };
     let run = |load: Option<&Path>, save_to: Option<&Path>| {
         let session = Session::start(spec(), out()).unwrap();
@@ -424,3 +424,71 @@ fn a_state_carries_its_save_crc_after_its_zstd_frame() {
     assert_eq!(with_save_crc(frame.clone(), None), frame);
 }
 
+
+#[test]
+fn the_option_lists_are_what_the_cores_built_declare() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/cores");
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".json") else { continue };
+        let Some(core) = core(id) else { eprintln!("skipped {id}: no host build"); continue };
+        let listed: CoreOptions = serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
+        assert!(listed.options.len() > 10, "{id}");
+        assert_eq!(declared_options(&core).unwrap(), listed, "data/cores/{id}.json is out of date: `make cores` writes it again");
+    }
+}
+
+#[test]
+fn options_changed_mid_game_reach_the_core() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    let rom_path = dir.path().join("red.gba");
+    // Makes the backdrop pure red (palette entry 0 = 0x001f), shows it (DISPCNT = 0), and loops.
+    std::fs::write(&rom_path, rom(&[0xe3a0_0405 /* mov r0, #0x05000000 */, 0xe3a0_101f /* mov r1, #0x1f */, 0xe1c0_10b0 /* strh r1, [r0] */,
+                                    0xe3a0_0404 /* mov r0, #0x04000000 */, 0xe3a0_1000 /* mov r1, #0 */, 0xe1c0_10b0 /* strh r1, [r0] */,
+                                    0xeaff_fffe /* b . */])).unwrap();
+    let frames = Arc::new(FrameSlot::default());
+    let list: &'static CoreOptions = Box::leak(Box::new(declared_options(&core).unwrap()));
+    let session = Session::start(
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("red.srm"), autosave: None, system_dir: dir.path().into(),
+                     options: vec![], option_list: Some(list), rom_by_path: false, states_restore_save: false, record: None },
+        Outputs { sound: None, vsync: None, display_hz: 60.0, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}) },
+    ).unwrap();
+    // The colour of the middle of the newest frame, after a few more.
+    let colour = || {
+        std::thread::sleep(Duration::from_millis(300));
+        let f = frames.take().expect("a frame");
+        let i = ((f.height / 2 * f.width + f.width / 2) * 4) as usize;
+        let c = [f.rgba[i], f.rgba[i + 1], f.rgba[i + 2]];
+        frames.give_back(f);
+        c
+    };
+    assert_eq!(colour(), [255, 0, 0]);
+    // mGBA's colour correction, which it reads again when told its options changed, dulls it.
+    session.set_options(vec![("mgba_color_correction".into(), "GBA".into())]);
+    let corrected = colour();
+    assert_ne!(corrected, [255, 0, 0]);
+    assert!(corrected[0] > corrected[1], "{corrected:?}");
+    // Left out again, it goes back to the core's default.
+    session.set_options(vec![]);
+    assert_eq!(colour(), [255, 0, 0]);
+    session.quit().unwrap();
+}
+
+#[test]
+fn values_given_that_a_core_doesnt_take_keep_its_default() {
+    let value = |v: &str| specular_core::settings::core_options::OptionValue { value: v.into(), label: None };
+    let declared = CoreOptions { categories: vec![], options: vec![specular_core::settings::core_options::CoreOption {
+        key: "a".into(), label: "A".into(), info: None, category: None, values: vec![value("x"), value("y")], default: "x".into() }] };
+    let mut o = options::Options::new(vec![("a".into(), "z".into()), ("b".into(), "1".into())]);
+    o.declare(declared);
+    assert_eq!(o.get("a").unwrap().to_str().unwrap(), "x");
+    assert_eq!(o.refused(), ["a = z: not one of its values; it keeps \"x\"", "b = 1: it has no such option"]);
+    assert!(!o.updated);
+    assert_eq!(o.give(vec![("a".into(), "y".into()), ("b".into(), "1".into())]), ["option a: x → y"]);
+    assert!(std::mem::take(&mut o.updated));
+    assert!(o.give(vec![("a".into(), "y".into())]).is_empty());
+    assert!(!o.updated);
+}

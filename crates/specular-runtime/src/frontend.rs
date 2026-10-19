@@ -3,7 +3,7 @@
 //! every call into the core is made.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char, c_uint, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering::Relaxed};
@@ -13,6 +13,7 @@ use specular_core::rumble::RumbleLine;
 
 use crate::FrameSlot;
 use crate::core::*;
+use crate::options::{self, Options};
 
 /// What the callbacks work with.
 pub struct Frontend {
@@ -22,9 +23,7 @@ pub struct Frontend {
     pub pixel_format: c_uint,
     /// Samples made by the core during the current `retro_run`.
     pub samples: Vec<[i16; 2]>,
-    /// Core options: their values, the defaults overridden by `overrides`.
-    pub variables: HashMap<String, CString>,
-    pub overrides: HashMap<String, String>,
+    pub options: Options,
     pub system_dir: CString,
     pub save_dir: CString,
     /// Set when the core makes the `ENV_SAVE_RAM_WRITTEN` call; the game's thread clears it after
@@ -45,6 +44,17 @@ impl Frontend {
     pub fn pause_rumble(&mut self, paused: bool) {
         self.paused = paused;
         if let Some(line) = &self.rumble { line.set_game(if paused { Motors::STILL } else { self.motors }); }
+    }
+}
+
+impl Default for Frontend {
+    fn default() -> Self {
+        Self {
+            buttons: Arc::default(), frames: Arc::default(), on_frame: Box::new(|| {}),
+            pixel_format: PIXEL_0RGB1555, // libretro's default
+            samples: Vec::new(), options: Options::default(), system_dir: CString::default(), save_dir: CString::default(),
+            save_ram_written: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false,
+        }
     }
 }
 
@@ -99,30 +109,25 @@ impl Frontend {
                 ENV_GET_SAVE_DIRECTORY => { *(data as *mut *const c_char) = self.save_dir.as_ptr(); true }
                 ENV_GET_CAN_DUPE => { *(data as *mut bool) = true; true }
                 ENV_GET_LANGUAGE => { *(data as *mut c_uint) = 0; true } // English
-                // Version 0: cores then declare their options with SET_VARIABLES, the simplest form.
-                ENV_GET_CORE_OPTIONS_VERSION => { *(data as *mut c_uint) = 0; true }
-                ENV_SET_VARIABLES => {
-                    let mut v = data as *const Variable;
-                    while !v.is_null() && !(*v).key.is_null() {
-                        let key = CStr::from_ptr((*v).key).to_string_lossy().into_owned();
-                        // "Description; default|other|…"
-                        let spec = CStr::from_ptr((*v).value).to_string_lossy();
-                        let default = spec.split_once("; ").map_or("", |(_, o)| o.split('|').next().unwrap_or(""));
-                        let value = self.overrides.get(&key).map_or(default, |s| s.as_str());
-                        self.variables.insert(key, CString::new(value).unwrap_or_default());
-                        v = v.add(1);
-                    }
-                    true
-                }
+                // Version 2 of the core options interface, the newest: its options have categories
+                // and info text, which go into the settings' schemas (cores/<core>.schema.json). Only
+                // the English options are read (GET_LANGUAGE says English).
+                ENV_GET_CORE_OPTIONS_VERSION => { *(data as *mut c_uint) = 2; true }
+                ENV_SET_VARIABLES => { self.options.declare(options::from_variables(data as *const Variable)); true }
+                ENV_SET_CORE_OPTIONS => { self.options.declare(options::from_v1(data as *const OptionDefinition)); true }
+                ENV_SET_CORE_OPTIONS_INTL => { self.options.declare(options::from_v1((*(data as *const OptionsIntl)).us)); true }
+                // Returning true tells the core that categories are understood (libretro.h).
+                ENV_SET_CORE_OPTIONS_V2 => { self.options.declare(options::from_v2(data as *const OptionsV2)); true }
+                ENV_SET_CORE_OPTIONS_V2_INTL => { self.options.declare(options::from_v2((*(data as *const OptionsV2Intl)).us)); true }
                 ENV_GET_VARIABLE => {
                     let v = data as *mut Variable;
                     let key = CStr::from_ptr((*v).key).to_string_lossy();
-                    match self.variables.get(key.as_ref()) {
+                    match self.options.get(key.as_ref()) {
                         Some(value) => { (*v).value = value.as_ptr(); true }
                         None => { (*v).value = std::ptr::null(); false }
                     }
                 }
-                ENV_GET_VARIABLE_UPDATE => { *(data as *mut bool) = false; true }
+                ENV_GET_VARIABLE_UPDATE => { *(data as *mut bool) = std::mem::take(&mut self.options.updated); true }
                 ENV_SET_MESSAGE => {
                     let m = &*(data as *const Message);
                     if !m.msg.is_null() { eprintln!("core: {}", CStr::from_ptr(m.msg).to_string_lossy()); }

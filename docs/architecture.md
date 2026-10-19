@@ -221,7 +221,7 @@ Msg::LastGameStopped(LaunchRecord)
 | Extension point | Registry today |
 |---|---|
 | Screens | `App::register(ScreenId, Box<dyn Screen>)`; `ScreenId` is a string so plugins can add their own |
-| Settings | the `Vec<SettingDecl>` given to `App::new` (see [settings.md](settings.md)) |
+| Settings | the `Vec<SettingDecl>` given to `App::new`: Specular's and its cores' options (`settings::declarations`; see [settings.md](settings.md)) |
 | Systems and emulators | the `Vec<SystemDecl>` given to `App::new`, each naming its `CoreDecl` |
 | Art sources | the ordered `Vec<Box<dyn ArtSource>>` given to the art worker |
 | Lights and rumble effects | the ordered `Vec<Box<dyn effects::Reaction>>` given to `Effects::new` (see [look-and-motion.md](look-and-motion.md)) |

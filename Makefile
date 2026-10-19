@@ -36,9 +36,14 @@ build:
 	$(CROSS_ENV) CARGO_TARGET_DIR=$(OUT) cargo build --release $(CROSS_ARGS) \
 		-p specular-$(DEVICE) -p specular-runtime --bins --examples
 
-# Always run: the cores' own builds decide what is out of date.
+# Always run: the cores' own builds decide what is out of date. Built for this PC (not
+# cross-compiled), each core is then loaded to write the options it declares to
+# data/cores/<core>.json, which Specular compiles in (see
+# crates/specular-core/src/settings/core_options.rs); a file changes only if they did. A cross
+# build never touches data/cores/.
 cores:
 	CROSS_COMPILE=$(CROSS_COMPILE) CORE_CFLAGS='$(CORE_CFLAGS)' tools/build-cores.sh $(CORES)
+	$(if $(CROSS_COMPILE),,CARGO_TARGET_DIR=$(OUT) cargo run -q -p specular-runtime --example core-options -- data/cores $(CORES)/*.so)
 
 install: build cores
 	install -D -m 755 $(BIN)/specular $(DESTDIR)$(PREFIX)/specular

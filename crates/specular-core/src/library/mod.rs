@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 pub use names::{display_title, index_letter, sort_key};
 pub use search::search;
 
+use crate::settings::core_options::{mgba, nestopia, swanstation};
+
 /// An emulated system and the files that hold its games.
 #[derive(Clone, Debug)]
 pub struct SystemDecl {
@@ -56,8 +58,12 @@ pub struct CoreDecl {
     pub name: &'static str,
     /// Its library's name without ".so", e.g. "mgba_libretro".
     pub library: &'static str,
-    /// The core options it runs with; the rest keep the core's defaults.
-    pub options: &'static [(&'static str, &'static str)],
+    /// The options it declares, as JSON (`settings::core_options::CoreOptions`): its
+    /// `data/cores/<id>.json`, which `make cores` writes from its build.
+    pub options: &'static str,
+    /// Specular's defaults for some of its options, by key: given to it at launch unless a
+    /// settings file says otherwise. Its other options are left at its own defaults.
+    pub defaults: &'static [(&'static str, &'static str)],
     /// Give it only the ROM's path, although it asks for the contents (see
     /// `LaunchSpec::rom_by_path` in specular-runtime).
     pub rom_by_path: bool,
@@ -103,30 +109,56 @@ impl CoreDecl {
     }
 }
 
+impl CoreDecl {
+    /// Its short name, as `tools/build-cores.sh` builds it: its library's, less "_libretro"
+    /// ("mgba"). Names its option list in `data/cores/` and its options' file in the config folder.
+    pub fn id(&self) -> &'static str { self.library.strip_suffix("_libretro").unwrap_or(self.library) }
+
+    /// Specular's default for one of its options (`defaults`), if it has one.
+    pub fn default_of(&self, key: &str) -> Option<&'static str> { self.defaults.iter().find(|(k, _)| *k == key).map(|(_, v)| *v) }
+}
+
 /// mGBA, for GB, GBC and GBA alike. "Remove Known" skips the busy-wait loops of known games,
-/// which saves battery without changing how they run (TrimUI's own setting too). It gets only the
-/// ROM's path, and our build (tools/core-patches/mgba) maps that file instead of copying it. Given
-/// the contents, mGBA copies them, and copies a GBA ROM again on the first write to its cartridge
-/// area (as Pokémon games' clock does): 64 MB of memory for a 32 MB ROM.
-const MGBA: &CoreDecl = &CoreDecl { name: "mGBA", library: "mgba_libretro", options: &[("mgba_idle_optimization", "Remove Known")], rom_by_path: true,
-    states_restore_save: false, bios: &[] };
+/// which saves battery without changing how they run (TrimUI's own setting too). It is mGBA's
+/// default too; it is Specular's so that a change to mGBA's doesn't change it. It gets only the ROM's path, and our build
+/// (tools/core-patches/mgba) maps that file instead of copying it. Given the contents, mGBA copies
+/// them, and copies a GBA ROM again on the first write to its cartridge area (as Pokémon games'
+/// clock does): 64 MB of memory for a 32 MB ROM.
+const MGBA: &CoreDecl = &CoreDecl {
+    name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
+    defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,
+    states_restore_save: false, bios: &[],
+};
 
 /// Nestopia, for the NES and the Famicom Disk System. Its NTSC filter is off: it widens the
 /// picture to 602 pixels, blurring it, and costs time. Its states hold the battery memory
 /// (docs/runtime.md).
-const NESTOPIA: &CoreDecl = &CoreDecl { name: "Nestopia", library: "nestopia_libretro", options: &[("nestopia_blargg_ntsc_filter", "disabled")], rom_by_path: false,
+const NESTOPIA: &CoreDecl = &CoreDecl {
+    name: "Nestopia", library: "nestopia_libretro", options: nestopia::LIST,
+    defaults: &[(nestopia::BLARGG_NTSC_FILTER, nestopia::blargg_ntsc_filter::DISABLED)], rom_by_path: false,
     states_restore_save: true,
-    bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }] };
+    bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }],
+};
 
 /// SwanStation, for the PS1, with its software renderer (the hardware ones need a GL context
 /// shared with the UI). Without a BIOS it runs its built-in OpenBIOS, which some games don't run
 /// with. It also recognises a known BIOS dump by its contents, whatever its name; `check_bios`
 /// goes by name only, so it may log a missing BIOS that the core then finds. Its states hold the
 /// memory card (docs/runtime.md).
-const SWANSTATION: &CoreDecl = &CoreDecl { name: "SwanStation", library: "swanstation_libretro", options: &[("swanstation_GPU_Renderer", "Software")], rom_by_path: false,
+const SWANSTATION: &CoreDecl = &CoreDecl {
+    name: "SwanStation", library: "swanstation_libretro", options: swanstation::LIST,
+    defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
     states_restore_save: true,
     bios: &[Bios { games: "PlayStation games", extensions: &[],
-        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }] };
+        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }],
+};
+
+/// The cores of `systems`, each once, in their order.
+pub fn cores(systems: &[SystemDecl]) -> Vec<&'static CoreDecl> {
+    let mut cores: Vec<&'static CoreDecl> = Vec::new();
+    for c in systems.iter().filter_map(|s| s.core) { if !cores.iter().any(|k| k.id() == c.id()) { cores.push(c); } }
+    cores
+}
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,
 /// .chd, .pbp or .m3u; a .bin is only a track of a .cue. Their colours differ, and none is teal,

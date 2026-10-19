@@ -64,6 +64,7 @@ Every screen is built from a few patterns, and any new screen has to be too:
 
 - **Lists of rows.** Each row is one of: header, note (explanatory text, never focused), text, image (a game with its art), toggle, choice (a colour choice also shows its swatch), number, action, or a key of the on-screen keyboard.
 - **A grid of box art.**
+- **A row's own hint**: a button hint a row adds while it is focused, before the screen's (X Reset on a setting that overrides).
 - **The index letter**: one large letter (150 u) on a raised square shaped like the focus plate, centred over the list.
 - **The splash**: three centred lines (the core, its copyright notice, its web address) on a raised plate shaped like the focus plate, at the bottom of the screen over the box art of a game starting.
 - **A sheet**, a picker for long choices such as Language. No screen needs one yet.

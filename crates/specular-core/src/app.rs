@@ -24,6 +24,7 @@ use crate::wireless::wifi::{WifiCmd, WifiEvent};
 mod credits;
 mod icons;
 mod install;
+mod layers;
 mod wireless;
 pub use wireless::{BtState, WifiNeed, WifiState};
 pub use install::{InstallCmd, InstallState, TaskView};
@@ -75,11 +76,17 @@ pub enum Effect {
     Redraw(Option<Transition>),
     /// Write this settings layer to its file.
     SaveSettings(Layer),
-    /// A global setting has this value (on loading, and when it changes). The UI carries out the
-    /// ones the device acts on, such as brightness, and ignores the rest.
+    /// One of Specular's settings has this value where it applies now: at the running game's layer
+    /// while one is played, else the global one. Sent for every setting once the global settings
+    /// have loaded, for one changed, and for those that may differ per system or game when a game
+    /// starts. The UI carries out the ones the device or the UI acts on, such as brightness or
+    /// scaling, and ignores the rest.
     Apply { key: &'static str, value: serde_json::Value },
-    /// Start playing a game.
+    /// Start playing a game, its core's options set as `App::core_options` says.
     Launch(Game),
+    /// One of the running game's core options changed. This is the full set of values to give its
+    /// core now (`App::core_options`); options left out go back to the core's defaults.
+    CoreOptions(Vec<(String, String)>),
     /// Pause (true) or resume the running game (its in-game menu opened or closed).
     PauseGame(bool),
     /// Save the running game's state, or load the state saved last.
@@ -192,6 +199,9 @@ pub enum Outcome {
     Launch(Game),
     /// Carry these out (include `Effect::Redraw` if the screen changed too).
     Effects(Vec<Effect>),
+    /// This setting was changed (or reset) at this layer: the app saves the layer, and applies
+    /// the setting where it takes effect (`Effect::Apply`, `Effect::CoreOptions`).
+    SettingChanged(Layer, &'static str),
 }
 
 /// One kind of screen. Built-in screens implement it; plugins will register their own.
@@ -246,6 +256,10 @@ pub mod screens {
     pub const RESTORE_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("restore confirm"));
     pub const TASK: ScreenId = ScreenId(std::borrow::Cow::Borrowed("task"));
     pub const CREDITS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("credits"));
+    /// One game's settings, with its path under `roms/` in its params; also opened from the in-game menu, over the paused game.
+    pub const GAME_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game settings"));
+    /// The settings of all of one system's games, with the system's id in its params.
+    pub const SYSTEM_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("system settings"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -302,6 +316,7 @@ impl App {
         icons::register(&mut screens);
         install::register(&mut screens);
         credits::register(&mut screens);
+        layers::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
                    credits: Credits::default() },
@@ -346,10 +361,44 @@ impl App {
         crate::palette::find(self.ctx.systems.iter().find(|s| s.id == system)?.tint)
     }
 
-    /// Who buttons are for now: the game while one is played and no menu is open over it.
+    /// Who buttons are for now: the game while one is played and no menu is open over it (nor a
+    /// screen opened from its menu).
     pub fn input_target(&self) -> InputTarget {
-        let menu = [screens::GAME_MENU, screens::POWER_MENU].contains(&self.nav.top().id);
+        let menu = self.nav.contains(&screens::GAME_MENU) || self.nav.top().id == screens::POWER_MENU;
         if self.playing.is_some() && !menu { InputTarget::Game } else { InputTarget::App }
+    }
+
+    /// The running game's core options, as given to its core: those set in a settings layer, or
+    /// given a default by Specular (`settings::core_options::values`). Empty with no game, or a
+    /// system without a core.
+    pub fn core_options(&self) -> Vec<(String, String)> {
+        let Some((game, core)) = self.playing.as_ref().zip(self.playing_core()) else { return vec![] };
+        crate::settings::core_options::values(&self.ctx.settings, core, &game.settings_layer())
+    }
+
+    /// The running game's core.
+    fn playing_core(&self) -> Option<&'static library::CoreDecl> {
+        let game = self.playing.as_ref()?;
+        self.ctx.systems.iter().find(|s| s.id == game.system)?.core
+    }
+
+    /// The layer settings are applied at now: the running game's, else the global one.
+    fn applied_layer(&self) -> Layer { self.playing.as_ref().map_or(Layer::Global, Game::settings_layer) }
+
+    /// The effect that applies `key`'s current value: `Apply` at `applied_layer` for one of
+    /// Specular's settings, `CoreOptions` for an option of the running game's core; None for
+    /// another core's option.
+    fn apply(&self, key: &'static str) -> Option<Effect> {
+        let s = &self.ctx.settings;
+        match s.decl(key)?.core {
+            None => s.get(key, &self.applied_layer()).map(|(v, _)| Effect::Apply { key, value: v.clone() }),
+            Some(core) => (self.playing_core()?.id() == core).then(|| Effect::CoreOptions(self.core_options())),
+        }
+    }
+
+    /// `apply` for each of Specular's own settings (not core options) for which `which` is true.
+    fn apply_all(&self, which: impl Fn(&SettingDecl) -> bool) -> Vec<Effect> {
+        self.ctx.settings.decls().iter().filter(|d| d.core.is_none() && which(d)).filter_map(|d| self.apply(d.key)).collect()
     }
 
     /// What the screens see (read-only: changes go through messages, so the cache stays right).
@@ -494,7 +543,7 @@ impl App {
             Msg::GameEnded(why) => {
                 if self.playing.take().is_none() { return vec![]; }
                 self.idle_since = None;
-                if self.nav.top().id == screens::GAME_MENU { self.nav.pop(); }
+                self.nav.close(&screens::GAME_MENU);
                 self.changed();
                 why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
             }
@@ -514,14 +563,16 @@ impl App {
                 // A change made before the file was loaded was saved without the file's values
                 // (and replaced it): save the two together.
                 let save = (!self.ctx.settings.layer(&layer).is_empty()).then(|| Effect::SaveSettings(layer.clone()));
+                let global = layer == Layer::Global;
                 self.ctx.settings.set_layer(layer, values);
                 self.changed();
-                let s = &self.ctx.settings;
-                self.radios.settings_loaded = true;
-                std::iter::once(Effect::Redraw(None))
-                    .chain(s.decls().iter().filter_map(|d| s.get(d.key, &Layer::Global).map(|(v, _)| Effect::Apply { key: d.key, value: v.clone() })))
-                    .chain(save)
-                    .collect()
+                // The other layers are loaded before the games they are for are listed, so before
+                // any of those can be played: nothing in them applies yet.
+                let applied: Vec<Effect> = if global {
+                    self.radios.settings_loaded = true;
+                    self.apply_all(|_| true)
+                } else { vec![] };
+                std::iter::once(Effect::Redraw(None)).chain(applied).chain(save).collect()
             }
             Msg::Wifi(e) => self.wifi_event(e),
             Msg::Bluetooth(e) => self.bluetooth_event(e),
@@ -574,7 +625,8 @@ impl App {
         if id == screens::INSTALL { return self.install_screen(p.button, row); }
         if id == screens::RESTORE_CONFIRM { return self.restore_confirm(p.button, row); }
         if id == screens::TASK { return self.task_screen(p.button, row); }
-        // (A, B and Menu never repeat.)
+        // (A, B and Menu never repeat.) Over a paused game, Menu resumes it.
+        if p.button == Button::Menu && self.nav.contains(&screens::GAME_MENU) { return self.resume(); }
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
         let outcome = self.screens[&id].press(&mut self.ctx, self.nav.top_mut(), focused, p);
         self.outcome(outcome)
@@ -601,9 +653,19 @@ impl App {
             Outcome::Launch(game) => {
                 self.playing = Some(game.clone());
                 self.repeater.reset();
-                vec![Effect::Launch(game), Effect::Redraw(None)]
+                // The settings that may differ for this game.
+                let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
+                std::iter::once(Effect::Launch(game)).chain(per_game).chain([Effect::Redraw(None)]).collect()
             }
             Outcome::Effects(e) => { self.changed(); e }
+            Outcome::SettingChanged(layer, key) => {
+                self.changed();
+                // Switches sound their new state; numbers and choices tick as they step.
+                let on = self.ctx.settings.get(key, &layer).and_then(|(v, _)| v.as_bool());
+                let mut e = vec![Effect::Sound(on.map_or(Sound::Move, Sound::Toggle)), Effect::Redraw(None), Effect::SaveSettings(layer)];
+                e.extend(self.apply(key));
+                e
+            }
         }
     }
 
@@ -691,10 +753,22 @@ impl App {
             (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
             (Button::A, Some("load")) => vec![Effect::LoadState, Effect::PauseGame(false)],
             (Button::A, Some("reset")) => vec![Effect::ResetGame, Effect::PauseGame(false)],
+            (Button::A, Some("settings")) => {
+                let Some(game) = &self.playing else { return vec![] };
+                let path = game.path.to_string_lossy().into_owned();
+                return self.go(|nav| Some(nav.push(ScreenState::new(screens::GAME_SETTINGS, Some(path)))));
+            }
             (Button::A, Some("quit")) => { self.playing = None; vec![Effect::QuitGame] }
             _ => return vec![],
         };
         e.extend(self.go(|nav| nav.pop()));
+        e
+    }
+
+    /// Closes the game menu, and any screen opened over it, resuming the game.
+    fn resume(&mut self) -> Vec<Effect> {
+        let mut e = vec![Effect::PauseGame(false)];
+        e.extend(self.go(|nav| nav.close(&screens::GAME_MENU)));
         e
     }
 
@@ -798,16 +872,18 @@ fn games_view(ctx: &Ctx, title: String, rows: Vec<Row>) -> ScreenView {
     let grid = games_grid(ctx);
     ScreenView {
         title, layout: if grid { Layout::Grid } else { Layout::ListWithPicture }, rows,
-        hints: vec![(Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::X, "Search".into()), (Button::B, "Back".into()), (Button::A, "Play".into())],
+        hints: vec![(Button::Start, "Settings".into()), (Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::X, "Search".into()),
+                    (Button::B, "Back".into()), (Button::A, "Play".into())],
         entry: None,
     }
 }
 
-/// A press on a screen of games: A plays the focused one, Y switches between list and grid, X
-/// opens the keyboard to search, B goes back.
+/// A press on a screen of games: A plays the focused one, Start opens its settings, Y switches
+/// between list and grid, X opens the keyboard to search, B goes back.
 fn games_press(ctx: &mut Ctx, focused: Option<&Row>, p: Press) -> Outcome {
     match (p.button, focused) {
         (Button::B, _) => Outcome::Back,
+        (Button::Start, Some(row)) if !p.repeat => Outcome::Push(ScreenState::new(screens::GAME_SETTINGS, Some(row.id.0.clone()))),
         (Button::X, _) => type_search(),
         (Button::Y, _) if !p.repeat => {
             let value = if games_grid(ctx) { "list" } else { "grid" };
@@ -869,7 +945,7 @@ struct SettingsScreen;
 impl Screen for SettingsScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows = wireless::settings_rows(ctx);
-        rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility()));
+        rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility(), None));
         // Credits, last in the System section.
         let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
         rows.insert(system_end, credits::settings_row());
@@ -893,12 +969,10 @@ impl Screen for SettingsScreen {
     }
 }
 
-/// A press on a global setting's row: changes it, saves it and applies it.
+/// A press on a global setting's row: changes it (`Outcome::SettingChanged` has the app save and
+/// apply it).
 fn setting_press(ctx: &mut Ctx, row: &Row, p: Press) -> Outcome {
-    let Some((key, value)) = ctx.settings.press(&row.id.0, &Layer::Global, p) else { return Outcome::None };
-    // Switches sound their new state; numbers and choices tick as they step.
-    let sound = value.as_bool().map_or(Sound::Move, Sound::Toggle);
-    Outcome::Effects(vec![Effect::Sound(sound), Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key, value }])
+    ctx.settings.press(&row.id.0, &Layer::Global, p).map_or(Outcome::None, |(key, _)| Outcome::SettingChanged(Layer::Global, key))
 }
 
 /// The keyboard's screen: one row per key, line by line (`Layout::Keys`), its text above them.
@@ -947,7 +1021,7 @@ impl Screen for GameMenu {
         ScreenView {
             title: "Paused".into(), layout: Layout::List,
             rows: vec![action("resume", "Resume"), action("save", "Save state"), action("load", "Load state"),
-                       action("reset", "Restart"), action("quit", "Quit game")],
+                       action("reset", "Restart"), action("settings", "Game settings"), action("quit", "Quit game")],
             hints: vec![(Button::B, "Resume".into()), (Button::A, "Select".into())],
             entry: None,
         }

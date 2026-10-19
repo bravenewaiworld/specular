@@ -9,10 +9,10 @@ fn game(system: &'static str, title: &str) -> Game {
     Game { system, path: format!("{system}/{title}.rom").into(), title: title.into(), sort_key: title.to_lowercase() }
 }
 
-/// Specular's settings with interface sounds off by default, so that only the sounds' own tests
-/// see them.
+/// Specular's settings and its cores' options, with interface sounds off by default, so that only
+/// the sounds' own tests see them.
 fn quiet() -> Vec<SettingDecl> {
-    let mut decls = crate::settings::builtin::settings();
+    let mut decls = crate::settings::declarations(&builtin_systems());
     decls.iter_mut().find(|d| d.key == builtin::INTERFACE_SOUNDS).unwrap().default = json!(false);
     decls
 }
@@ -38,6 +38,17 @@ fn event(app: &mut App, button: Button, pressed: bool, t: u64) -> Vec<Effect> {
 }
 
 fn focused(app: &App) -> String { app.view().rows[app.focus()].label.clone() }
+
+fn labels(app: &App) -> Vec<String> { app.view().rows.iter().map(|r| r.label.clone()).collect() }
+
+/// Scaling applied (to the running game) with this value.
+fn scaling(value: &str) -> Effect { Effect::Apply { key: builtin::SCALING, value: json!(value) } }
+
+/// Moves the focus down to the row labelled `label`.
+fn focus_on(a: &mut App, label: &str) {
+    for _ in 0..100 { if focused(a) == label { return; } tap(a, Button::Down, 0); }
+    panic!("no row {label} in {:?}", labels(a));
+}
 
 /// Types `text` on the on-screen keyboard: moves to each key in turn and presses it.
 fn type_text(a: &mut App, text: &str) {
@@ -69,7 +80,7 @@ fn open_a_system_play_and_come_back() {
     assert_eq!(a.parent_title().as_deref(), Some("Library"));
     tap(&mut a, Button::Down, 10);
     assert_eq!(focused(&a), "Mother 3");
-    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Redraw(None)]);
     assert_eq!(a.input_target(), InputTarget::Game);
     a.handle(Msg::GameEnded(None));
     assert_eq!(a.input_target(), InputTarget::App);
@@ -250,7 +261,7 @@ fn search_finds_games_in_every_system_best_first_and_plays_them() {
     a.handle(Msg::Library { games: vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")], card_found: true });
     assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
     assert_eq!(focused(&a), "Super Metroid");
-    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Redraw(None)]);
     a.handle(Msg::GameEnded(None));
     assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(focused(&a), "Search");
@@ -1005,7 +1016,7 @@ fn moves_tick_and_screens_sound_as_they_open_and_close_but_never_over_a_game() {
     assert_eq!(sounds(tap(&mut a, Button::A, 600)), []); // the game starts
     // The game has the sound output, also while paused in its menu, and as it is quit from there.
     assert_eq!(sounds(tap(&mut a, Button::Menu, 700)), []);
-    for t in 0..4 { assert_eq!(sounds(tap(&mut a, Button::Down, 800 + 100 * t)), []); }
+    for t in 0..5 { assert_eq!(sounds(tap(&mut a, Button::Down, 800 + 100 * t)), []); }
     assert_eq!(focused(&a), "Quit game");
     assert_eq!(sounds(tap(&mut a, Button::A, 1300)), []);
     assert_eq!(a.playing(), None);
@@ -1048,4 +1059,109 @@ fn no_sounds_while_muted_or_at_volume_zero() {
     assert_eq!(sounds(tap(&mut a, Button::Down, 300)), [Sound::Move]);
     a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::from_iter([("sound.volume".into(), json!(0))])));
     assert_eq!(sounds(tap(&mut a, Button::Down, 400)), []);
+}
+
+#[test]
+fn start_opens_a_games_settings_where_it_can_differ_from_its_systems() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0); // Game Boy Advance
+    assert!(a.view().hints.contains(&(Button::Start, "Settings".into())));
+    tap(&mut a, Button::Start, 10);
+    assert_eq!((a.view().title.as_str(), a.parent_title().as_deref()), ("Golden Sun", Some("Game Boy Advance")));
+    assert_eq!(labels(&a), ["Display", "Scaling", "Game Boy Advance", "All Game Boy Advance games…"]);
+    assert_eq!(focused(&a), "Scaling");
+    let golden_sun = game("gba", "Golden Sun").settings_layer();
+    assert_eq!(tap(&mut a, Button::Right, 20), vec![Effect::Redraw(None), Effect::SaveSettings(golden_sun.clone()), scaling("integer")]); // not playing
+    let row = &a.view().rows[a.focus()];
+    assert!(row.overridden);
+    assert_eq!(row.hint, Some((Button::X, "Reset".into())));
+    // all of the system's games: set there, it is inherited, so not marked in the game's
+    focus_on(&mut a, "All Game Boy Advance games…");
+    tap(&mut a, Button::A, 30);
+    assert_eq!(a.view().title, "All Game Boy Advance games");
+    tap(&mut a, Button::Left, 40);
+    assert_eq!(a.ctx().settings.layer(&Layer::System("gba".into())).get(builtin::SCALING), Some(&json!("stretch")));
+    tap(&mut a, Button::B, 50);
+    tap(&mut a, Button::Up, 60);
+    assert_eq!(focused(&a), "Scaling");
+    // X resets the game's own value, which then follows the system's
+    assert_eq!(tap(&mut a, Button::X, 70), vec![Effect::Redraw(None), Effect::SaveSettings(golden_sun.clone()), scaling("integer")]);
+    let row = &a.view().rows[a.focus()];
+    assert_eq!((row.overridden, &row.hint), (false, &None));
+    assert_eq!(a.ctx().settings.get(builtin::SCALING, &golden_sun).unwrap().0, &json!("stretch"));
+    assert_eq!(tap(&mut a, Button::X, 80), vec![]); // nothing to reset
+}
+
+#[test]
+fn a_games_settings_over_its_menu_apply_as_it_plays() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0);
+    let e = tap(&mut a, Button::A, 10);
+    assert_eq!(e[0], Effect::Launch(game("gba", "Golden Sun")));
+    assert_eq!(a.core_options(), [("mgba_idle_optimization".to_string(), "Remove Known".to_string())]);
+    tap(&mut a, Button::Menu, 20);
+    focus_on(&mut a, "Game settings");
+    tap(&mut a, Button::A, 30);
+    assert_eq!((a.view().title.as_str(), a.input_target()), ("Golden Sun", InputTarget::App));
+    // the change reaches the running game
+    assert!(tap(&mut a, Button::Right, 40).contains(&scaling("fit")));
+    // B goes back to the menu, Menu resumes the game from either
+    tap(&mut a, Button::B, 50);
+    assert_eq!(a.view().title, "Paused");
+    focus_on(&mut a, "Game settings");
+    tap(&mut a, Button::A, 60);
+    assert_eq!(tap(&mut a, Button::Menu, 70), vec![Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
+    assert_eq!((a.input_target(), a.view().title.as_str()), (InputTarget::Game, "Game Boy Advance"));
+    // started again, it gets its own scaling
+    a.handle(Msg::GameEnded(None));
+    tap(&mut a, Button::Down, 80);
+    assert!(tap(&mut a, Button::A, 90).contains(&scaling("integer"))); // Mother 3
+    a.handle(Msg::GameEnded(None));
+    tap(&mut a, Button::Up, 100);
+    assert!(tap(&mut a, Button::A, 110).contains(&scaling("fit")));
+}
+
+#[test]
+fn a_game_ending_closes_its_settings_over_its_menu() {
+    let mut a = app();
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10);
+    tap(&mut a, Button::Menu, 20);
+    focus_on(&mut a, "Game settings");
+    tap(&mut a, Button::A, 30);
+    a.handle(Msg::GameEnded(Some("it crashed".into())));
+    assert_eq!(a.view().title, "Game Boy Advance");
+}
+
+#[test]
+fn with_developer_details_the_cores_options_are_listed_and_reach_the_running_game() {
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, json!({"ui.developer_details": true}).as_object().unwrap().clone()));
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10); // Golden Sun
+    tap(&mut a, Button::Menu, 20);
+    focus_on(&mut a, "Game settings");
+    tap(&mut a, Button::A, 30);
+    assert!(labels(&a).contains(&"mGBA: Performance".to_string()), "{:?}", labels(&a));
+    focus_on(&mut a, "Frameskip");
+    let e = tap(&mut a, Button::Right, 40);
+    let golden_sun = game("gba", "Golden Sun").settings_layer();
+    assert!(e.contains(&Effect::SaveSettings(golden_sun.clone())));
+    assert!(e.contains(&Effect::CoreOptions(vec![("mgba_idle_optimization".into(), "Remove Known".into()), ("mgba_frameskip".into(), "auto".into())])), "{e:?}");
+    // the global settings don't list them
+    a.handle(Msg::GameEnded(None));
+    tap(&mut a, Button::Menu, 50);
+    tap(&mut a, Button::Up, 60);
+    tap(&mut a, Button::A, 70);
+    assert_eq!(a.view().title, "Settings");
+    assert!(!labels(&a).iter().any(|l| l.starts_with("mGBA")));
+}
+
+#[test]
+fn settings_files_other_than_the_global_one_apply_nothing_when_they_load() {
+    let mut a = app();
+    let gba = Layer::System("gba".into());
+    let e = a.handle(Msg::SettingsLoaded(gba.clone(), json!({"video.scaling": "fit"}).as_object().unwrap().clone()));
+    assert_eq!(e, vec![Effect::Redraw(None)]);
+    assert_eq!(a.ctx().settings.get(builtin::SCALING, &game("gba", "Golden Sun").settings_layer()).unwrap().0, &json!("fit"));
 }

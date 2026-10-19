@@ -13,7 +13,7 @@ mod sounds;
 mod watch;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
@@ -161,7 +161,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     }
     let rumble = hardware.rumble.take().map(rumble_thread);
     if rumble.is_none() { eprintln!("rumble: this device has none"); }
-    let mut app = App::new(systems.clone(), builtin::settings());
+    let mut app = App::new(systems.clone(), settings::declarations(&systems));
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
     // Beside the binary, where `make install` puts it (and the build does, for development).
@@ -468,13 +468,17 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         let writable = settings::migrate::migrate(&data.0);
         if !writable { on_ui(|r| r.toast("Settings can't be saved until Specular restarts. The log says why.")); }
         let config = data.config();
-        // A corrupt file has been moved aside; either way, start from what could be read.
-        let values = store::load_layer(&Layer::Global.path(&config)).unwrap_or_else(|e| { eprintln!("settings: {e:?}"); Default::default() });
-        post(Msg::SettingsLoaded(Layer::Global, values));
+        let systems = playable_systems();
+        let decls = settings::declarations(&systems);
+        // The global layer, then each system's and each core's; games' are loaded with the library.
+        let cores = specular_core::library::cores(&systems).into_iter().map(|c| Layer::Core(c.id().into()));
+        for layer in [Layer::Global].into_iter().chain(systems.iter().map(|s| Layer::System(s.id.into()))).chain(cores) {
+            post(Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
+        }
         // No schemas without a card: the data folder is then the bare mount point, which must stay
         // empty (see `card_found`).
         if writable && card_found(&data) {
-            for (file, schema) in settings::schema::all(&builtin::settings(), &playable_systems()) {
+            for (file, schema) in settings::schema::all(&decls, &systems) {
                 let path = config.join(file);
                 match store::store_generated(&path, &schema) {
                     Ok(true) => eprintln!("settings: wrote {}", path.display()),
@@ -489,12 +493,18 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         std::thread::spawn(move || {
             let (roms, saves) = (data.roms(), data.saves());
             let watch = watch::RomsWatch::new().map_err(|e| eprintln!("library: can't watch for new games: {e}")).ok();
+            // The settings files of games already loaded, or found to be for no game.
+            // The games whose settings files are loaded, and the files found to be for no game.
+            let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
             loop {
                 if let Some(w) = &watch { w.watch(&roms); }
-                let games = specular_core::library::scan(&roms, &playable_systems());
+                let games = specular_core::library::scan(&roms, &systems);
                 for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
                     eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
                 }
+                // Before the games are listed, so no game can be played or have its settings shown
+                // before they are loaded.
+                load_games_layers(&config, &decls, &games, &mut loaded, &mut orphans);
                 post(Msg::Library { games, card_found: card_found(&data) });
                 let Some(w) = &watch else { return };
                 w.wait_for_change();
@@ -509,6 +519,39 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Save>, std::thread::JoinHandle<()>
         }
     });
     (tx, handle)
+}
+
+/// Reads `layer`'s file from the config folder, logging what it holds and what of it is ignored
+/// (`settings::ignored`). A file that can't be read gives an empty layer (a damaged one is moved
+/// aside: see `store::load_layer`).
+fn load_layer(config: &Path, decls: &[settings::SettingDecl], layer: &Layer) -> serde_json::Map<String, serde_json::Value> {
+    let path = layer.path(config);
+    let values = store::load_layer(&path).unwrap_or_else(|e| {
+        match e {
+            store::LoadError::Io(e) => eprintln!("settings: can't read {}, so its settings are left out: {e}", path.display()),
+            store::LoadError::Corrupt { moved_to } => eprintln!("settings: {} isn't a JSON object, so its settings are left out; it was moved to {}", path.display(), moved_to.display()),
+        }
+        Default::default()
+    });
+    let set: Vec<String> = values.iter().filter(|(k, _)| *k != settings::SCHEMA_KEY).map(|(k, v)| format!("{k} = {v}")).collect();
+    if !set.is_empty() { eprintln!("settings: loaded {}: {}", path.display(), set.join(", ")); }
+    for line in settings::ignored(decls, layer, &values) { eprintln!("settings: {}: {line}", path.display()); }
+    values
+}
+
+/// Loads the settings file of each of `games` that has one and isn't `loaded` yet. Logs once each
+/// file under `games/` that is for no game in the library (a ROM renamed, say), and so not loaded
+/// (`orphans`); it is loaded if its game appears in a later scan.
+fn load_games_layers(config: &Path, decls: &[settings::SettingDecl], games: &[Game], loaded: &mut HashSet<String>, orphans: &mut HashSet<String>) {
+    let files = settings::games_with_settings(config);
+    for g in games {
+        let layer = g.settings_layer();
+        let Layer::Game { game, .. } = &layer else { continue };
+        if files.contains(game) && loaded.insert(game.clone()) { post(Msg::SettingsLoaded(layer.clone(), load_layer(config, decls, &layer))); }
+    }
+    for f in files.into_iter().filter(|f| !loaded.contains(f)) {
+        if orphans.insert(f.clone()) { eprintln!("settings: games/{f}.json is for no game in the library, so it isn't loaded"); }
+    }
 }
 
 /// Whether the SD card is in. Without it, a device's data folder is an empty (or missing) mount
@@ -674,6 +717,7 @@ impl Runner {
             }
             Effect::Apply { key, value } => self.apply_setting(key, &value),
             Effect::Launch(game) => self.launch(&game),
+            Effect::CoreOptions(options) => if let Some(p) = self.playing.borrow().as_ref() { p.session.set_options(options); },
             Effect::PauseGame(paused) => {
                 self.with_game(|p| { p.pause(paused); Ok("") });
                 if paused { self.tell_effects(Event::GameStopped); }
@@ -839,7 +883,8 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(system) = system else { return self.started(launch, Err(format!("unknown system {}", game.system))) };
-        game::Playing::start(game, &system, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
+        let options = self.app.borrow().core_options();
+        game::Playing::start(game, &system, options, &self.data, &self.device, &self.sounds, self.output.borrow().clone(), self.rumble.clone(),
             move |r| on_ui(move |me| me.started(launch, r)));
     }
 
@@ -860,6 +905,8 @@ impl Runner {
                 // the game loaded.
                 let failed = p.sound_failed && *p.output.borrow() == *self.output.borrow();
                 if failed { post(Msg::SoundFailed(self.output.borrow().clone())); }
+                // Its options may have been changed (in its settings, over its menu) while it loaded.
+                p.session.set_options(self.app.borrow().core_options());
                 *self.playing.borrow_mut() = Some(p);
                 self.route_sound();
                 // (Kept until now: the list shows under the flying cover.)
@@ -1024,7 +1071,7 @@ impl Runner {
             self.rows.set_vec(wanted);
         }
         self.shown_layout.set(Some(view.layout));
-        let hints = self.hints(&view);
+        let hints = self.hints(&view, focus);
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
         w.set_playing(app.playing().is_some());
         w.set_game_menu(app.playing().is_some() && app.input_target() == InputTarget::App);
@@ -1171,9 +1218,10 @@ impl Runner {
         }
     }
 
-    /// The view's hints, for buttons the device has.
-    fn hints(&self, view: &ScreenView) -> Vec<Hint> {
-        view.hints.iter().filter(|(b, _)| self.profile.buttons.contains(b))
+    /// The view's hints, after the focused row's own, for buttons the device has.
+    fn hints(&self, view: &ScreenView, focus: usize) -> Vec<Hint> {
+        let row = view.rows.get(focus).and_then(|r| r.hint.as_ref());
+        row.into_iter().chain(&view.hints).filter(|(b, _)| self.profile.buttons.contains(b))
             .map(|(b, label)| Hint { button: button_label(*b).into(), label: label.as_str().into() }).collect()
     }
 

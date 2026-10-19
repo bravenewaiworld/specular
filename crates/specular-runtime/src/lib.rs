@@ -12,10 +12,11 @@
 mod core;
 mod frontend;
 mod log;
+mod options;
 mod sound;
 mod unzip;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -23,10 +24,11 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use specular_core::device::{Motors, SoundOut, Vsync};
+use specular_core::device::{SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
 use specular_core::rumble::RumbleLine;
+use specular_core::settings::core_options::CoreOptions;
 
 use crate::core::Core;
 use crate::frontend::Frontend;
@@ -49,8 +51,12 @@ pub struct LaunchSpec {
     pub autosave: Option<PathBuf>,
     /// Where cores look for BIOS files (`bios/`).
     pub system_dir: PathBuf,
-    /// Core options to set, by key (e.g. "mgba_idle_optimization"); the rest keep their defaults.
+    /// Core options to set, by key (e.g. "mgba_idle_optimization"); the rest keep the core's
+    /// defaults. A value the core doesn't take is logged, and its option keeps its default.
     pub options: Vec<(String, String)>,
+    /// The options the core should declare (its list in data/cores/): how what it declares differs
+    /// is logged at launch. None for a core without a list.
+    pub option_list: Option<&'static CoreOptions>,
     /// Give the core only the ROM's path, even if it asks for the contents. Only for a core known
     /// to then read the file itself (libretro doesn't promise that a core will); it can map the
     /// file instead of copying it.
@@ -174,6 +180,8 @@ enum Cmd {
     Flush(mpsc::Sender<io::Result<()>>),
     /// Plays on this output from the next frame (None: silence); see `Session::set_sound`.
     Sound(Option<Box<dyn SoundOut>>),
+    /// Gives the core these option values instead; see `Session::set_options`.
+    Options(Vec<(String, String)>),
     Quit(mpsc::Sender<io::Result<()>>),
 }
 
@@ -241,6 +249,11 @@ impl Session {
     /// From the next frame, plays the game's sound on `out` (None: silence), closing the previous
     /// output. Returns at once: open `out` beforehand, since opening can block.
     pub fn set_sound(&self, out: Option<Box<dyn SoundOut>>) { let _ = self.cmds.send(Cmd::Sound(out)); }
+    /// Gives the core these option values from now on, as `LaunchSpec::options` does at launch
+    /// (its other options go back to its defaults). If any value changes, the core is told the
+    /// next time it asks (libretro's GET_VARIABLE_UPDATE, usually each frame); some options only
+    /// take effect when the game is started again.
+    pub fn set_options(&self, options: Vec<(String, String)>) { let _ = self.cmds.send(Cmd::Options(options)); }
     /// Saves the game's state to `path` (zstd-compressed); `load_state` also takes uncompressed ones.
     pub fn save_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::SaveState(path.into(), r)) }
     pub fn load_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::LoadState(path.into(), r)) }
@@ -371,6 +384,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                 Cmd::LoadState(path, reply) => { let _ = reply.send(game.load_state(&path)); }
                 Cmd::Flush(reply) => game.save_all(Some(reply)),
                 Cmd::Sound(out) => sound.set_out(out),
+                Cmd::Options(options) => game.set_options(options),
                 Cmd::Quit(reply) => { game.save_all(Some(reply)); return; }
             }
             continue;
@@ -411,6 +425,8 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
 /// A loaded core with its game. Unloads both when dropped.
 struct Game {
     core: Core,
+    /// What the core calls itself, for the log.
+    name: String,
     av: core::AvInfo,
     save: PathBuf,
     /// The battery save as last written (or read), to write only when it changes.
@@ -438,7 +454,8 @@ impl Game {
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
-        log::start(info.name());
+        let name = info.name();
+        log::start(name.clone());
         let unzipped = unzip::if_needed(&spec.rom, &info)?;
         let rom_file = unzipped.as_ref().map_or(spec.rom.as_path(), |u| &u.path);
         let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string());
@@ -450,15 +467,7 @@ impl Game {
         };
         let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());
         frontend::install(Some(Frontend {
-            buttons, frames, on_frame,
-            pixel_format: core::PIXEL_0RGB1555, // libretro's default
-            samples: Vec::new(),
-            variables: HashMap::new(),
-            overrides: spec.options.iter().cloned().collect(),
-            system_dir, save_dir,
-            save_ram_written: false,
-            refused: Default::default(),
-            rumble, motors: Motors::STILL, paused: false,
+            buttons, frames, on_frame, options: options::Options::new(spec.options.clone()), system_dir, save_dir, rumble, ..Frontend::default()
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };
@@ -469,10 +478,11 @@ impl Game {
             frontend::install(None);
             return Err(format!("the core could not load {}", spec.rom.display()));
         }
+        log_options(&name, spec);
         let mut av = core::AvInfo::default();
         unsafe { (core.get_system_av_info)(&mut av) };
         let writer = Writer::new().map_err(|e| format!("starting the save writer: {e}"))?;
-        let mut g = Game { core, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
+        let mut g = Game { core, name, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
                            states_restore_save: spec.states_restore_save, loaded_state: None,
                            autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
         drop(rom);
@@ -482,6 +492,11 @@ impl Game {
             eprintln!("game: resuming from {}: {e}", p.display());
         }
         Ok(g)
+    }
+
+    /// See `Session::set_options`.
+    fn set_options(&mut self, options: Vec<(String, String)>) {
+        for c in frontend::with(|f| f.options.give(options)).unwrap_or_default() { eprintln!("game: {} {c}", self.name); }
     }
 
     /// Fills the core's battery memory from the save file, if there is one.
@@ -578,6 +593,34 @@ impl Drop for Game {
         }
         frontend::install(None);
     }
+}
+
+/// Logs, once the core has loaded its game (by when it has declared its options), how its options
+/// differ from its list, the values it is given, and those it doesn't take.
+fn log_options(name: &str, spec: &LaunchSpec) {
+    let Some((declared, refused)) = frontend::with(|f| (f.options.declared.clone(), f.options.refused())) else { return };
+    let differences = spec.option_list.map(|l| l.differences(&declared)).unwrap_or_default();
+    for d in differences { eprintln!("game: {name}'s options differ from Specular's list (data/cores/): {d}"); }
+    let given: Vec<String> = spec.options.iter().map(|(k, v)| format!("{k} = {v}")).collect();
+    eprintln!("game: {name}'s options: {}", if given.is_empty() { "its defaults".into() } else { format!("{}, the rest its defaults", given.join("; ")) });
+    for r in refused { eprintln!("game: {name} doesn't take {r}"); }
+}
+
+/// The options a core declares as it loads, given no values: for `make cores`, which writes them
+/// to data/cores/ (the `core-options` example). Options a core declares only once it has a game
+/// aren't seen. Fails if a game is running, whose core's state this would disturb (see
+/// `Session::start`).
+pub fn declared_options(core: &Path) -> Result<CoreOptions, String> {
+    if RUNNING.swap(true, Relaxed) { return Err("a game is running".into()); }
+    let _running = Running;
+    let core = Core::load(core)?;
+    frontend::install(Some(Frontend::default()));
+    frontend::connect(&core);
+    unsafe { (core.init)() };
+    let declared = frontend::with(|f| std::mem::take(&mut f.options.declared)).unwrap_or_default();
+    unsafe { (core.deinit)() };
+    frontend::install(None);
+    Ok(declared)
 }
 
 /// A file mapped into memory, read-only: the ROM handed to a core. Unlike a buffer read into
