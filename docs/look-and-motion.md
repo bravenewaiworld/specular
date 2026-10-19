@@ -1,6 +1,6 @@
 # Look and motion
 
-Status: In progress · Updated: 2026-10-18
+Status: In progress · Updated: 2026-10-19
 
 How Specular looks, moves and feels under the thumbs: the Light Bar look, the theme and its device-relative sizes, the motion rules, the prefab components every screen is drawn with, the sounds, and the fonts. Specular should feel like part of the device it runs on: quiet, exact and quick. The interactive reference is `design/mockup.html`; `crates/specular-ui/ui/theme.slint` holds the actual values.
 
@@ -18,7 +18,7 @@ How Specular looks, moves and feels under the thumbs: the Light Bar look, the th
 - **Focus never relies on colour alone** (2026-10-12). A focused row also gets a plate, heavier type and brighter text.
 - **The power button: a tap sleeps, a 1 s hold opens a power menu** (2026-10-14). The tap acts on release. The menu offers Power off, Restart and Cancel, also during a game (over its menu), and the game is quit, its saves written, before powering off or restarting.
 - **The device sleeps when left alone, never during a running game** (2026-10-13). After 30 s by default ("Sleep after").
-- **Only effects Slint can reproduce** (2026-10-12): timed animations with a standard ease or a cubic-bezier curve (an overshoot curve for a spring-like feel); no backdrop blur, blend modes or filters; glows are drop shadows. The in-game menu's frosted backdrop is to be a blurred copy of the frame, made once when the menu opens.
+- **Only effects Slint can reproduce** (2026-10-12): timed animations with a standard ease or a cubic-bezier curve (an overshoot curve for a spring-like feel); no backdrop blur, blend modes or filters; glows are drop shadows. The in-game menu's frosted backdrop is to be a blurred copy of the frame, made once when the menu opens (in V1).
 - **No fonts for non-Latin scripts are bundled** (2026-10-18). CJK fonts cost 15 MB or more, so Specular uses any font files in `{sd card}/fonts/` as fallbacks, and users who need one add it there.
 - **The card's fonts are named one by one, after the emoji font, at start-up** (2026-10-18). Specular puts each TrueType or OpenType file directly in `{sd card}/fonts/` on `$SLINT_FONT_PATH`, after Noto Emoji, and logs which it uses and which it skips, and why. Fonts added later are used from the next start. Rejected: putting the folder itself on `$SLINT_FONT_PATH` (Slint would read whole every file in it, font or not, and say nothing of those it can't use); looking in folders inside it (Slint doesn't either); the card's fonts before Noto Emoji (a CJK font's own symbols would replace its emoji).
 - **L2 and R2 jump between first letters in game lists and grids, and show the letter** (2026-10-18). The letter shows large, on a raised square over the middle of the list, for 0.7 s after the last jump, like the volume gauge after the last change. Held, they repeat like directions; at either end a fresh press wraps and a held one stops, as in lists. Rejected: a strip of letters down the side (always on screen, for something used now and then), L1 and R1 (they already jump by a screen).
@@ -59,7 +59,7 @@ The Light Bar timings, from the spec:
 | Quit (game shrinks into its art) | 340 ms |
 | In-game menu (slides in, game moves aside) | 240 ms / 280 ms |
 
-The light bar's colour changes over 350 ms (also between the accent and a system's colour). Today the in-game menu sits on a panel down the left over the dimmed game; the blurred backdrop isn't drawn yet.
+The light bar's colour changes over 350 ms (also between the accent and a system's colour). Today the in-game menu sits on a panel down the left over the dimmed game; the blurred backdrop is for V1.
 
 ### Prefabs
 

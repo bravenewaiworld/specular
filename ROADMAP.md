@@ -73,9 +73,6 @@ Completed:
  - Search: from Home, or X in any game list, across every system, best matches first; case, accents and punctuation ignored
  - A letter index: L2/R2 jump between first letters in game lists and grids, with the letter shown large for a moment
 
-TODO:
- - PS1 `.chd` discs identified by serial (today by name only)
-
 ### Installer
 
 Completed:
@@ -137,6 +134,11 @@ TODO:
 
 TODO:
  - USB audio output (headset dongles, USB-C DACs)
+ - CPU profile chosen by Specular for what is running, never a setting in the UI (the OS's `brick-power profile performance|balanced|saver`); overridable only in the config files
+ - The top USB-C port's power on or off (`brick-power usb-top on|off`, which refuses while a device is attached)
+ - At 3 % battery, the game is saved and quit (the OS powers off at 1 %)
+ - A power-saving mode: dimming, the screen off, WiFi and Bluetooth off while unused, the LEDs off, a lower refresh rate
+ - The panel run at the game's own refresh rate, once the OS can set it (`DISP_LCD_SET_FPS` on `/dev/disp`, 40–60.2 Hz)
  - Confirm the press-to-photon latency estimate with a camera of at least 240 fps (an LED and the screen in one shot), once one is available
 
 ### Core Integration and Support
@@ -150,3 +152,9 @@ TODO:
 
 TODO:
  - ScreenScraper as an optional art source (needs a project developer ID, each user's account, and quota handling)
+ - PS1 `.chd` discs identified by serial (today by name only). Needs a CHD decompressor: the libchdr SwanStation already bundles, or the pure-Rust `chd` crate (rejected for now: three decoders to read two sectors)
+
+### Aesthetics and Presentation
+
+TODO:
+ - The in-game menu's blurred backdrop: a blurred copy of the game's frame, made once as the menu opens (docs/look-and-motion.md)
