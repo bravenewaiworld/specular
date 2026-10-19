@@ -77,8 +77,8 @@ fn unzip(path: &Path, extensions: &[String], core: &str) -> Result<Unzipped, Str
 }
 
 /// The folder holding each Specular process's folder of links (named by its pid):
-/// `$XDG_RUNTIME_DIR/specular` (in memory, and the
-/// user's own), else `specular-<uid>` in the temporary folder (`/tmp`, in memory on a handheld).
+/// `$XDG_RUNTIME_DIR/specular` (in memory, and the user's own), else `specular-<uid>` in the
+/// temporary folder (`/tmp`, in memory on a handheld).
 pub(crate) fn runtime_dir() -> PathBuf {
     match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(d) => PathBuf::from(d).join("specular"),
