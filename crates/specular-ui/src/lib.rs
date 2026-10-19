@@ -974,7 +974,9 @@ impl Runner {
             Effect::Launch(game) => self.launch(&game),
             Effect::CoreOptions(options) => if let Some(p) = self.playing.borrow().as_ref() { p.session.set_options(options); },
             Effect::PauseGame(paused) => {
-                self.with_game(|p| { p.pause(paused); Ok("") });
+                // The game menu opening, or the card going (which can't be written then).
+                let save = self.app.borrow().ctx().card_writable();
+                self.with_game(|p| { p.pause(paused, save); Ok("") });
                 if paused { self.tell_effects(Event::GameStopped); }
             }
             Effect::SaveState => if self.with_game(|p| p.session.save_state(&p.state).map(|()| "State saved")) { self.tell_effects(Event::StateSaved) },
@@ -1020,7 +1022,7 @@ impl Runner {
                 self.ignore_power_until.set(Duration::MAX); // until `Msg::Woke`
                 // A game's battery save is written first: power can fail while asleep.
                 let save = self.app.borrow().ctx().card_writable();
-                self.with_game(|p| { p.pause(true); if save { p.session.flush().map(|()| "") } else { Ok("") } });
+                self.with_game(|p| { p.pause(true, false); if save { p.session.flush().map(|()| "") } else { Ok("") } });
                 self.tell_effects(Event::GameStopped);
                 let _ = self.hardware.send(HwCmd::Sleep);
             }
@@ -1225,7 +1227,10 @@ impl Runner {
                 self.art.borrow_mut().clear();
                 self.requested.borrow_mut().clear();
                 // The game may have been paused (its menu opened) while it loaded.
-                if self.app.borrow().input_target() == InputTarget::App { self.with_game(|p| { p.pause(true); Ok("") }); }
+                if self.app.borrow().input_target() == InputTarget::App {
+                    let save = self.app.borrow().ctx().card_writable();
+                    self.with_game(|p| { p.pause(true, save); Ok("") });
+                }
             }
             Err(e) => {
                 eprintln!("game: {e}");

@@ -32,6 +32,7 @@ use specular_core::cpu::CpuMin;
 use specular_core::device::{SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
+use specular_core::library::Autosave;
 use specular_core::rumble::RumbleLine;
 use specular_core::settings::core_options::CoreOptions;
 
@@ -51,10 +52,13 @@ pub struct LaunchSpec {
     /// changing), on `Session::flush`, and when the game ends.
     pub save: PathBuf,
     /// The automatic save state, if any: the game resumes from it if it exists (one the core
-    /// can't load is ignored, and replaced by the next), and it is written every 10 s of play
-    /// (time paused doesn't count), on `Session::flush`, and when the game ends. Written
-    /// zstd-compressed, like every save state, so other frontends can't read it as it is.
+    /// can't load is ignored, and replaced by the next), and it is written as `autosave_when`
+    /// says, on `Session::flush`, and when the game ends. Written zstd-compressed, like every
+    /// save state, so other frontends can't read it as it is.
     pub autosave: Option<PathBuf>,
+    /// When the autosave is written besides: every 10 s of play (time paused doesn't count), or
+    /// on pausing (see `Session::pause`).
+    pub autosave_when: Autosave,
     /// Where cores look for BIOS files (the card's `bios/`): libretro's system directory.
     pub system_dir: PathBuf,
     /// Core options to set, by key (e.g. "mgba_idle_optimization"); the rest keep the core's
@@ -215,7 +219,8 @@ impl Drop for Running {
 }
 
 enum Cmd {
-    Pause(bool),
+    /// See `Session::pause`.
+    Pause { paused: bool, save: bool },
     Reset,
     SaveState(PathBuf, mpsc::Sender<io::Result<()>>),
     LoadState(PathBuf, mpsc::Sender<io::Result<()>>),
@@ -290,7 +295,10 @@ impl Session {
     /// The buttons held now, as `joypad_bit`s.
     pub fn set_buttons(&self, bits: u16) { self.buttons.store(bits, Relaxed); }
 
-    pub fn pause(&self, paused: bool) { let _ = self.cmds.send(Cmd::Pause(paused)); }
+    /// Pauses or resumes the game. On pausing with `save`, the autosave is written if it is
+    /// written at pauses (`Autosave::AtPauses`); pass false where it can't be written (the card is
+    /// gone), or will be anyway (`flush` follows).
+    pub fn pause(&self, paused: bool, save: bool) { let _ = self.cmds.send(Cmd::Pause { paused, save }); }
     pub fn reset(&self) { let _ = self.cmds.send(Cmd::Reset); }
     /// From the next frame, plays the game's sound on `out` (None: silence), closing the previous
     /// output. Returns at once: open `out` beforehand, since opening can block.
@@ -435,6 +443,10 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps, options }));
     // Dropped as this returns, setting the system's default again.
     let mut cpu = cpu::CpuSpeed::start(out.cpu_min, out.set_cpu_min);
+    let at_pauses = spec.autosave_when == Autosave::AtPauses;
+    if game.autosave.is_some() {
+        eprintln!("game: {} autosaves {}", game.name, if at_pauses { "only when play stops" } else { "every 10 s of play, and when play stops" });
+    }
 
     // Counted in frames played, so time paused doesn't count.
     let check_frames = (CHECK_INTERVAL.as_secs_f64() * fps) as u32;
@@ -448,11 +460,12 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         };
         if let Some(cmd) = cmd {
             match cmd {
-                Cmd::Pause(p) => {
+                Cmd::Pause { paused: p, save } => {
                     paused = p;
                     frontend::with(|f| f.pause_rumble(p));
                     pacer.paused();
                     cpu.pause(p);
+                    if p && save && at_pauses { game.write_autosave(); }
                 }
                 Cmd::Reset => unsafe { (game.core.reset)() },
                 Cmd::SaveState(path, reply) => game.save_state(path, reply),
@@ -473,6 +486,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         unsafe { (game.core.run)() };
         let took = t.elapsed();
         pacer.ran(took);
+        if std::mem::take(&mut game.state_made) { cpu.state_made(); }
         if let Some(gap) = gap { cpu.frame(gap, pacer.period); }
         {
             let mut r = runs.lock().unwrap();
@@ -500,7 +514,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
         frames_to_check -= 1;
         if frames_to_check == 0 {
             if game.write_save(false) { (out.on_save)(); }
-            game.write_autosave();
+            if !at_pauses { game.write_autosave(); }
             frames_to_check = check_frames;
         }
     }
@@ -523,6 +537,8 @@ struct Game {
     /// next written, which checks it (see `LaunchSpec::states_restore_save`).
     loaded_state: Option<LoadedState>,
     autosave: Option<PathBuf>,
+    /// A save state was made since the CPU minimum was last told (`CpuSpeed::state_made`).
+    state_made: bool,
     writer: Writer,
     /// Kept for the core, which may hold on to the ROM's path, and open or map the file there (an
     /// unzipped ROM's file goes when this does). (The ROM's contents are freed once the core has
@@ -582,7 +598,7 @@ impl Game {
         let writer = Writer::new(write_failed).map_err(|e| format!("starting the save writer: {e}"))?;
         let mut g = Game { core, name, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
                            states_restore_save: spec.states_restore_save, loaded_state: None,
-                           autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
+                           autosave: spec.autosave.clone(), state_made: false, writer, _rom: (rom_path, unzipped) };
         drop(rom);
         g.log_discs();
         g.read_save();
@@ -663,7 +679,7 @@ impl Game {
     fn drop_autosave(&mut self, why: &str) {
         let Some(path) = self.autosave.take() else { return eprintln!("game: {} {why}", self.name) };
         eprintln!("game: {} {why}; its autosave {} is removed, and no longer written", self.name, path.display());
-        let _ = self.writer.0.send(Job::Remove(path));
+        let _ = self.writer.jobs.send(Job::Remove(path));
     }
 
     /// Writes a save state to `path`, then sends `reply` once it is on the card.
@@ -687,7 +703,12 @@ impl Game {
     /// the save on the card to tell whether the game saved after the state was made.
     fn queue_state(&mut self, path: PathBuf) -> io::Result<()> {
         let size = unsafe { (self.core.serialize_size)() };
-        let mut data = vec![0u8; size];
+        // The last state's buffer, if the writer is done with it: a new one must be allocated and
+        // zeroed, which takes SwanStation's 11.5 MB up to 9.5 ms on the Brick. Bytes the core
+        // leaves unwritten keep the last state's.
+        let mut data = self.writer.spare.try_recv().unwrap_or_default();
+        data.resize(size, 0);
+        self.state_made = true;
         if size == 0 || !unsafe { (self.core.serialize)(data.as_mut_ptr().cast(), size) } {
             return Err(io::Error::other("the core could not save its state"));
         }
@@ -794,7 +815,11 @@ impl Drop for MappedFile {
 /// Writes files on a thread of its own, in the order queued, so the game's thread never waits
 /// for the card: flushing a write to an SD card can take longer than a frame. Once dropped, its
 /// thread finishes the writes queued, then ends; `Job::Reply` is how to wait for them.
-struct Writer(mpsc::Sender<Job>);
+struct Writer {
+    jobs: mpsc::Sender<Job>,
+    /// Each save state's buffer, handed back once written, for the next state to reuse.
+    spare: mpsc::Receiver<Vec<u8>>,
+}
 
 enum Job {
     /// A battery save, written as it is. With `loaded_state`, a different save already on the
@@ -811,6 +836,7 @@ enum Job {
 impl Writer {
     fn new(failed_one: Box<dyn Fn(&io::Error) + Send>) -> io::Result<Self> {
         let (jobs, rx) = mpsc::channel();
+        let (give_back, spare) = mpsc::channel();
         std::thread::Builder::new().name("game-saves".into()).spawn(move || {
             let mut failed = None;
             for job in rx {
@@ -823,8 +849,9 @@ impl Writer {
                     Job::State { path, data, tags } => {
                         // Level 1, the fastest of zstd's usual levels: higher ones shrink a GBA
                         // state only about 4 % more.
-                        let data = zstd::bulk::compress(&data, 1).map(|z| with_tags(z, &tags));
-                        let written = data.and_then(|data| write_atomically(&path, &data));
+                        let compressed = zstd::bulk::compress(&data, 1).map(|z| with_tags(z, &tags));
+                        let _ = give_back.send(data);
+                        let written = compressed.and_then(|z| write_atomically(&path, &z));
                         (path, written)
                     }
                     Job::Remove(path) => {
@@ -846,19 +873,20 @@ impl Writer {
                 }
             }
         })?;
-        Ok(Self(jobs))
+        Ok(Self { jobs, spare })
     }
 
     /// Writes a battery save uncompressed, which other emulators and tools must be able to read.
     fn write_save(&self, path: PathBuf, data: Vec<u8>, loaded_state: Option<LoadedState>) {
-        let _ = self.0.send(Job::Save { path, data, loaded_state });
+        let _ = self.jobs.send(Job::Save { path, data, loaded_state });
     }
-    /// Writes a save state, zstd-compressed, to wear the storage less (an autosave is written
+    /// Writes a save state, zstd-compressed, to wear the storage less (an autosave can be written
     /// every 10 s of play): a Pokémon Emerald state shrinks about 11 times, 516 KiB to 45 KiB.
+    /// `data` comes back through `spare` once compressed.
     fn write_state(&self, path: PathBuf, data: Vec<u8>, tags: StateTags) {
-        let _ = self.0.send(Job::State { path, data, tags });
+        let _ = self.jobs.send(Job::State { path, data, tags });
     }
-    fn reply(&self, reply: mpsc::Sender<io::Result<()>>) { let _ = self.0.send(Job::Reply(reply)); }
+    fn reply(&self, reply: mpsc::Sender<io::Result<()>>) { let _ = self.jobs.send(Job::Reply(reply)); }
 }
 
 /// The first bytes of every zstd frame. A core's own state format starting with them by chance

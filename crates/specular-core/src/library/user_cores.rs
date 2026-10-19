@@ -214,7 +214,7 @@ fn decl(id: &str, path: PathBuf, made: &Made, systems: Vec<&'static str>) -> &'s
         defaults: &[], rom_by_path: false, controller: None,
         // Assumed: Specular can't tell whether its states hold the save memory, and assuming they do
         // keeps a newer battery save rather than letting a state roll it back.
-        states_restore_save: true, cpu_start: None,
+        states_restore_save: true, cpu_start: None, autosave: super::Autosave::Every10s,
         bios: bios.leak(), user: Some(Box::leak(Box::new(user))),
     }))
 }

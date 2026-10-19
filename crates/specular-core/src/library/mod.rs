@@ -82,11 +82,24 @@ pub struct CoreDecl {
     /// for a core the system's own choice of speed leaves short of full speed; None: the system's
     /// default.
     pub cpu_start: Option<u32>,
+    /// When its games are autosaved.
+    pub autosave: Autosave,
     /// The BIOS files it looks for in `bios/`.
     pub bios: &'static [Bios],
     /// For a core the user added, what its `.info` says and where it is; None for one Specular
     /// builds, which is in Specular's own cores folder.
     pub user: Option<&'static user_cores::UserCore>,
+}
+
+/// When a core's games are autosaved (`LaunchSpec::autosave_when` in specular-runtime). Either way
+/// the autosave is also written when play stops: the game menu opening, sleep, and quitting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Autosave {
+    /// Also every 10 s of play.
+    Every10s,
+    /// Only when play stops: for a core whose state takes so long to make, on the game's thread,
+    /// that one made during play costs a frame (docs/runtime.md, Findings).
+    AtPauses,
 }
 
 /// BIOS files a core looks for in `bios/` for some of its games.
@@ -164,7 +177,7 @@ impl CoreDecl {
 const MGBA: &CoreDecl = &CoreDecl {
     name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
     defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,
-    controller: None, states_restore_save: false, cpu_start: None, bios: &[], user: None,
+    controller: None, states_restore_save: false, cpu_start: None, autosave: Autosave::Every10s, bios: &[], user: None,
 };
 
 /// Nestopia, for the NES and the Famicom Disk System. Its NTSC filter is off: it widens the
@@ -173,7 +186,7 @@ const MGBA: &CoreDecl = &CoreDecl {
 const NESTOPIA: &CoreDecl = &CoreDecl {
     name: "Nestopia", library: "nestopia_libretro", options: nestopia::LIST,
     defaults: &[(nestopia::BLARGG_NTSC_FILTER, nestopia::blargg_ntsc_filter::DISABLED)], rom_by_path: false,
-    controller: None, states_restore_save: true, cpu_start: None,
+    controller: None, states_restore_save: true, cpu_start: None, autosave: Autosave::Every10s,
     bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }], user: None,
 };
 
@@ -186,10 +199,12 @@ const NESTOPIA: &CoreDecl = &CoreDecl {
 /// know it sees a plain pad, and the d-pad drives it in analog mode too (its default options). On
 /// the Brick it reaches full speed only with the CPU at 1.8 GHz or more, which the system's governor
 /// never picks for it (docs/runtime.md, Findings), so its games start with that as the minimum.
+/// Its 11.5 MB state takes 13–21 ms of the game's thread to make there, so it autosaves only when
+/// play stops.
 const SWANSTATION: &CoreDecl = &CoreDecl {
     name: "SwanStation", library: "swanstation_libretro", options: swanstation::LIST,
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
-    controller: Some(PS_DUALSHOCK), states_restore_save: true, cpu_start: Some(1800),
+    controller: Some(PS_DUALSHOCK), states_restore_save: true, cpu_start: Some(1800), autosave: Autosave::AtPauses,
     bios: &[Bios { games: "PlayStation games", extensions: &[],
         files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }], user: None,
 };

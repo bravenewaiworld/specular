@@ -67,6 +67,7 @@ impl Playing {
             rom: data.roms().join(&game.path),
             save: game.save_path(&data.saves(), "srm"),
             autosave: Some(game.state_path(&data.roms(), "autosave")),
+            autosave_when: core.autosave,
             system_dir: data.bios(),
             options,
             // Only to log how a core differs from its list: a user core's list is what it declared
@@ -132,10 +133,11 @@ impl Playing {
         self.session.set_buttons(held);
     }
 
-    /// Pauses or resumes the game. Pausing releases every button, so none stays held in the game.
-    pub fn pause(&self, paused: bool) {
+    /// Pauses or resumes the game (`save`: as for `Session::pause`). Pausing releases every
+    /// button, so none stays held in the game.
+    pub fn pause(&self, paused: bool, save: bool) {
         if paused { self.held.set(0); self.session.set_buttons(0); }
-        self.session.pause(paused);
+        self.session.pause(paused, save);
     }
 }
 
