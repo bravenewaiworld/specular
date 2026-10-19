@@ -74,6 +74,13 @@ pub const TIME_ZONE_LOOKUP: &str = "time.zone_lookup_allowed";
 /// start level: `cpu::CpuMin`), `cpu::OFF` (the system's choice), or a speed in MHz (one of the
 /// Brick's steps). Only in the config files.
 pub const CPU_MIN: &str = "power.cpu_min";
+/// When a game is autosaved during play: `AUTOSAVE_CORE` (its core's `CoreDecl::autosave`),
+/// `AUTOSAVE_EVERY_10S` or `AUTOSAVE_AT_PAUSES` (see `library::Autosave`). Only in the config
+/// files.
+pub const AUTOSAVE: &str = "game.autosave";
+pub const AUTOSAVE_CORE: &str = "core default";
+pub const AUTOSAVE_EVERY_10S: &str = "every 10 s";
+pub const AUTOSAVE_AT_PAUSES: &str = "at pauses";
 /// Shows the settings and details meant for developers.
 pub const DEVELOPER_DETAILS: &str = "ui.developer_details";
 
@@ -147,6 +154,10 @@ pub fn settings() -> Vec<SettingDecl> {
             kind: SettingKind::Choice(&[(cpu::AUTO, "Automatic"), (cpu::OFF, "Off"), ("408", "408 MHz"), ("600", "600 MHz"), ("816", "816 MHz"),
                 ("1008", "1008 MHz"), ("1200", "1200 MHz"), ("1416", "1416 MHz"), ("1608", "1608 MHz"), ("1800", "1800 MHz"), ("2000", "2000 MHz")]),
             default: json!(cpu::AUTO), visibility: Visibility::ConfigFiles, deepest: Scope::Game, core: None, system: None },
+        SettingDecl { key: AUTOSAVE, section: "Saves", label: "Autosave during play",
+            help: "When the game is saved automatically, to resume from where it was left. It always is as the game menu opens, before sleep and on quitting. \"every 10 s\" also saves every 10 seconds of play; \"at pauses\" doesn't, as making the save can make a game stutter for a frame (PlayStation games do); \"core default\" is the emulator's own choice (\"at pauses\" for SwanStation, \"every 10 s\" for the others). With \"at pauses\", a crash or a failing card loses the play since the game menu was last opened.",
+            kind: SettingKind::Choice(&[(AUTOSAVE_CORE, "Emulator's choice"), (AUTOSAVE_EVERY_10S, "Every 10 s"), (AUTOSAVE_AT_PAUSES, "When play stops")]),
+            default: json!(AUTOSAVE_CORE), visibility: Visibility::ConfigFiles, deepest: Scope::Game, core: None, system: None },
         SettingDecl { key: DEVELOPER_DETAILS, section: "System", label: "Developer details",
             help: "Also shows, in Specular's menus, the settings and technical details meant for developers.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },

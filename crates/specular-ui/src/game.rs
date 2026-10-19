@@ -15,7 +15,7 @@ use specular_core::cpu::CpuMin;
 use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
-use specular_core::library::{CoreDecl, Game, user_cores};
+use specular_core::library::{Autosave, CoreDecl, Game, user_cores};
 use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
 
 use crate::{AppWindow, Runner};
@@ -57,7 +57,7 @@ impl Playing {
     /// save, and the app if the core's built-in BIOS halts the game (`Msg::GameStopped`). Before opening the game's output, that thread waits for the interface sounds to close
     /// theirs. A core the user added has the options it declares learned, once the game has
     /// started (`user_cores::learn`).
-    pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, cpu_min: CpuMin,
+    pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, cpu_min: CpuMin, autosave: Autosave,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let (data, output, rumble) = (&r.data, r.output.borrow().clone(), r.rumble.clone());
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
@@ -67,7 +67,7 @@ impl Playing {
             rom: data.roms().join(&game.path),
             save: game.save_path(&data.saves(), "srm"),
             autosave: Some(game.state_path(&data.roms(), "autosave")),
-            autosave_when: core.autosave,
+            autosave_when: autosave,
             system_dir: data.bios(),
             options,
             // Only to log how a core differs from its list: a user core's list is what it declared

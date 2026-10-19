@@ -1199,7 +1199,9 @@ impl Runner {
         let options = self.app.borrow().core_options();
         let (cpu_min, why) = self.app.borrow().cpu_min(self.cpu_steps.get().cloned().unwrap_or_default());
         eprintln!("cpu: {why}");
-        game::Playing::start(self, game, core, options, cpu_min, move |r| on_ui(move |me| me.started(launch, r)));
+        let (autosave, why) = self.app.borrow().autosave();
+        eprintln!("game: {why}");
+        game::Playing::start(self, game, core, options, cpu_min, autosave, move |r| on_ui(move |me| me.started(launch, r)));
     }
 
     /// Launch number `launch` (see `launches`) is running, or couldn't start.

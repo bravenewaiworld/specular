@@ -538,6 +538,26 @@ impl App {
         (min, line)
     }
 
+    /// When the running game is autosaved during play: as `builtin::AUTOSAVE` says for it (as for
+    /// `cpu_min`), else as its core's `CoreDecl::autosave` does; with a line for the log saying
+    /// which and why. With no game, `Every10s`.
+    pub fn autosave(&self) -> (library::Autosave, String) {
+        let Some((game, core)) = self.playing.as_ref().zip(self.playing_core()) else { return (library::Autosave::Every10s, "no game is playing".into()) };
+        let (value, from) = self.ctx.settings.get(builtin::AUTOSAVE, &game.settings_layer()).unwrap_or((&serde_json::Value::Null, None));
+        let setting = value.as_str().unwrap_or(builtin::AUTOSAVE_CORE);
+        let when = match setting {
+            builtin::AUTOSAVE_EVERY_10S => library::Autosave::Every10s,
+            builtin::AUTOSAVE_AT_PAUSES => library::Autosave::AtPauses,
+            _ => core.autosave,
+        };
+        let what = match when {
+            library::Autosave::Every10s => "every 10 s of play, and when play stops",
+            library::Autosave::AtPauses => "only when play stops",
+        };
+        let file = from.map_or("its default".into(), |l| format!("in {}", l.file().display()));
+        (when, format!("{} autosaves {what} ({} = \"{setting}\", {file})", core.name, builtin::AUTOSAVE))
+    }
+
     /// The core that plays the running game: its system's, as its "Core" setting chooses
     /// (`settings::core_of`).
     pub fn playing_core(&self) -> Option<&'static library::CoreDecl> {

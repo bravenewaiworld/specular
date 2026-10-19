@@ -96,7 +96,7 @@ fn open_a_system_play_and_come_back() {
     assert_eq!(a.parent_title().as_deref(), Some("Library"));
     tap(&mut a, Button::Down, 10);
     assert_eq!(focused(&a), "Mother 3");
-    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Apply { key: builtin::AUTOSAVE, value: json!(builtin::AUTOSAVE_CORE) }, Effect::Redraw(None)]);
     assert_eq!(a.input_target(), InputTarget::Game);
     a.handle(Msg::GameEnded(None));
     assert_eq!(a.input_target(), InputTarget::App);
@@ -293,7 +293,7 @@ fn search_finds_games_in_every_system_best_first_and_plays_them() {
     a.handle(Msg::Library(vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")]));
     assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
     assert_eq!(focused(&a), "Super Metroid");
-    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Apply { key: builtin::AUTOSAVE, value: json!(builtin::AUTOSAVE_CORE) }, Effect::Redraw(None)]);
     a.handle(Msg::GameEnded(None));
     assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(focused(&a), "Search");
@@ -1409,6 +1409,32 @@ fn a_games_cpu_minimum_starts_at_its_cores_level_unless_a_config_file_says_other
     let (min, line) = a.cpu_min(STEPS.into());
     assert_eq!(min.current(), Some(1608));
     assert!(line.ends_with("power.cpu_min = \"1608\", in games/ps1/Vagrant Story.json)"), "{line}");
+}
+
+#[test]
+fn a_games_autosave_is_its_cores_unless_a_config_file_says_otherwise() {
+    use crate::library::Autosave::{AtPauses, Every10s};
+    let mut a = app();
+    a.handle(Msg::Library(vec![game("ps1", "Vagrant Story"), game("gba", "Golden Sun")]));
+    tap(&mut a, Button::A, 0); // Game Boy Advance
+    tap(&mut a, Button::A, 10);
+    assert_eq!(a.autosave(), (Every10s, "mGBA autosaves every 10 s of play, and when play stops (game.autosave = \"core default\", its default)".into()));
+    a.handle(Msg::GameEnded(None));
+    tap(&mut a, Button::B, 20);
+    tap(&mut a, Button::Down, 30); // PlayStation
+    tap(&mut a, Button::A, 40);
+    tap(&mut a, Button::A, 50);
+    assert_eq!(a.autosave().0, AtPauses, "SwanStation's own");
+    // Each layer overrides the less specific ones.
+    let set = |a: &mut App, layer: Layer, v: &str| { a.handle(Msg::SettingsLoaded(layer, serde_json::Map::from_iter([(builtin::AUTOSAVE.into(), json!(v))]))); };
+    set(&mut a, Layer::Global, builtin::AUTOSAVE_EVERY_10S);
+    assert_eq!(a.autosave(), (Every10s, "SwanStation autosaves every 10 s of play, and when play stops (game.autosave = \"every 10 s\", in specular.json)".into()));
+    set(&mut a, Layer::System("ps1".into()), builtin::AUTOSAVE_CORE);
+    assert_eq!(a.autosave().0, AtPauses);
+    set(&mut a, game("ps1", "Vagrant Story").settings_layer(), builtin::AUTOSAVE_EVERY_10S);
+    let (when, line) = a.autosave();
+    assert_eq!(when, Every10s);
+    assert!(line.ends_with("(game.autosave = \"every 10 s\", in games/ps1/Vagrant Story.json)"), "{line}");
 }
 
 #[test]

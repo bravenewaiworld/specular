@@ -57,7 +57,7 @@ pub struct LaunchSpec {
     /// zstd-compressed, like every save state, so other frontends can't read it as it is.
     pub autosave: Option<PathBuf>,
     /// `Autosave::Every10s`: the autosave is also written every 10 s of play (time paused
-    /// doesn't count). `Autosave::AtPauses`: it isn't.
+    /// doesn't count). `Autosave::AtPauses`: it isn't. (`App::autosave` in specular-core.)
     pub autosave_when: Autosave,
     /// Where cores look for BIOS files (the card's `bios/`): libretro's system directory.
     pub system_dir: PathBuf,
@@ -444,9 +444,6 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     // Dropped as this returns, setting the system's default again.
     let mut cpu = cpu::CpuSpeed::start(out.cpu_min, out.set_cpu_min);
     let at_pauses = spec.autosave_when == Autosave::AtPauses;
-    if game.autosave.is_some() {
-        eprintln!("game: {} autosaves {}", game.name, if at_pauses { "only when play stops" } else { "every 10 s of play, and when play stops" });
-    }
 
     // Counted in frames played, so time paused doesn't count.
     let check_frames = (CHECK_INTERVAL.as_secs_f64() * fps) as u32;

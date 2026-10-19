@@ -217,9 +217,11 @@ fn a_setting_only_for_the_config_files_is_in_their_schemas_but_on_no_screen() {
     let s = schema::schema(&decls, &ps1, &[], "", "");
     assert_eq!(s["properties"][builtin::CPU_MIN]["default"], "auto");
     assert_eq!(s["properties"][builtin::CPU_MIN]["enum"].as_array().unwrap()[..3], [json!("auto"), json!("off"), json!("408")]);
+    assert_eq!(s["properties"][builtin::AUTOSAVE]["default"], "core default");
+    assert_eq!(s["properties"][builtin::AUTOSAVE]["enum"], json!(["core default", "every 10 s", "at pauses"]));
     let settings = Settings::new(decls);
     for at in [Layer::Global, ps1] {
-        assert!(settings.rows(&at, Visibility::Developer, None).iter().all(|r| r.id.0 != builtin::CPU_MIN));
+        assert!(settings.rows(&at, Visibility::Developer, None).iter().all(|r| r.id.0 != builtin::CPU_MIN && r.id.0 != builtin::AUTOSAVE));
     }
 }
 
