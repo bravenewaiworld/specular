@@ -62,7 +62,8 @@ fn unzip(path: &Path, extensions: &[String], core: &str) -> Result<Unzipped, Str
     }
     let t = Instant::now();
     let name = std::ffi::CString::new(rom.name.replace('\0', "")).unwrap_or_default();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+    // The system call itself: the Brick's C library predates its wrapper (glibc 2.27).
+    let fd = unsafe { libc::syscall(libc::SYS_memfd_create, name.as_ptr(), libc::MFD_CLOEXEC) } as i32;
     if fd < 0 { let e = std::io::Error::last_os_error(); return Err(fail(format!("memfd_create: {e}"), format!("unzipping failed ({e})"))); }
     let mut file = unsafe { File::from_raw_fd(fd) };
     zip::unpack(path, rom, &mut file).map_err(|e| fail(format!("{}: {e}", rom.name), format!("the zip is damaged ({e})")))?;
