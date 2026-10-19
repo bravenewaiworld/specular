@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
+use crate::art::{self, ArtKind};
 use crate::device::{Battery, Output, Rgb};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
@@ -912,13 +913,19 @@ fn open_search(text: &str) -> Outcome {
     if query.is_empty() { Outcome::None } else { Outcome::Push(ScreenState::new(screens::SEARCH, Some(query.into()))) }
 }
 
-/// A game's row, with its box art and `detail` beside the title. Its id is the game's path under
-/// `roms/`.
-fn game_row(g: &Game, detail: Option<String>) -> Row {
-    Row::new(g.path.to_string_lossy(), &g.title, RowKind::Image { image: ImageRef::Art { system: g.system, rom: g.path.clone() }, detail })
+/// A game's row, with its picture and `detail` beside the title. Its id is the game's path under
+/// `roms/`. `art` is each system's kind of picture and its shape (`art_by_system`).
+fn game_row(g: &Game, detail: Option<String>, art: &HashMap<&str, (ArtKind, (u32, u32))>) -> Row {
+    let (kind, shape) = art.get(g.system).copied().unwrap_or((ArtKind::BoxArt, (1, 1)));
+    Row::new(g.path.to_string_lossy(), &g.title, RowKind::Image { image: ImageRef::Art { system: g.system, rom: g.path.clone(), kind, shape }, detail })
 }
 
-/// Whether games are shown as a grid of box art (else as a list beside the focused game's art).
+/// Each system's `ArtKind` and its pictures' shape, looked up once per screen rather than per game.
+fn art_by_system(ctx: &Ctx) -> HashMap<&'static str, (ArtKind, (u32, u32))> {
+    ctx.systems.iter().map(|s| { let kind = art::kind(&ctx.settings, s.id); (s.id, (kind, kind.shape(s))) }).collect()
+}
+
+/// Whether games are shown as a grid of pictures (else as a list beside the focused game's picture).
 fn games_grid(ctx: &Ctx) -> bool { ctx.settings.get(builtin::LIBRARY_VIEW, &Layer::Global).is_some_and(|(v, _)| v == "grid") }
 
 /// A screen of games, as a list or a grid (`games_grid`).
@@ -957,7 +964,8 @@ impl Screen for Games {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let system = state.params.as_deref().unwrap_or_default();
         let title = ctx.systems.iter().find(|s| s.id == system).map_or(system, |s| s.name).to_string();
-        games_view(ctx, title, ctx.games.iter().filter(|g| g.system == system).map(|g| game_row(g, None)).collect())
+        let art = art_by_system(ctx);
+        games_view(ctx, title, ctx.games.iter().filter(|g| g.system == system).map(|g| game_row(g, None, &art)).collect())
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome { games_press(ctx, focused, p) }
@@ -975,7 +983,8 @@ struct Search;
 impl Screen for Search {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let query = state.params.as_deref().unwrap_or_default();
-        let rows: Vec<Row> = library::search(&ctx.games, query).into_iter().map(|g| game_row(g, Some(g.system.to_uppercase()))).collect();
+        let art = art_by_system(ctx);
+        let rows: Vec<Row> = library::search(&ctx.games, query).into_iter().map(|g| game_row(g, Some(g.system.to_uppercase()), &art)).collect();
         let title = format!("“{query}”");
         if !rows.is_empty() { return games_view(ctx, title, rows); }
         // No matches: a plain list, as a grid or the picture beside the list would be empty.

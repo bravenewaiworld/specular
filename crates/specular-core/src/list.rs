@@ -1,7 +1,7 @@
 //! Moving the focus through a screen's rows, and laying them out: the same rules on every list
 //! and grid.
 
-use crate::model::{Row, RowKind};
+use crate::model::{ImageRef, Row, RowKind};
 
 /// The focus after moving `delta` focusable rows from `focus` (negative = up). Headers are
 /// skipped. At either end, a real press wraps around to the other end; a repeat (a held button)
@@ -95,13 +95,23 @@ fn row_height(row: &Row, width: f32) -> f32 {
     }
 }
 
-/// Grid cells: square pictures at least this wide, this far apart, with a label underneath (u).
+/// Grid cells: pictures at least this wide, this far apart, with a label underneath (u).
 pub const CELL_MIN_WIDTH: f32 = 210.0;
 pub const CELL_GAP: f32 = 28.0;
 pub const CELL_LABEL_HEIGHT: f32 = 52.0;
 
 /// How many grid columns fit in `width` u.
 pub fn grid_columns(width: f32) -> usize { (((width + CELL_GAP) / (CELL_MIN_WIDTH + CELL_GAP)) as usize).max(1) }
+
+/// How tall the pictures of `rows` are drawn, as a fraction of their width (in a grid's cells,
+/// and beside a list): their `ImageRef::Art` shape, if they all have the same, else square; never
+/// taller than square.
+pub fn picture_shape(rows: &[Row]) -> f32 {
+    let mut shapes = rows.iter().filter_map(|r| match &r.kind { RowKind::Image { image: ImageRef::Art { shape, .. }, .. } => Some(*shape), _ => None });
+    let Some(first) = shapes.next() else { return 1.0 };
+    if shapes.any(|s| s != first) { return 1.0; }
+    (first.1 as f32 / first.0 as f32).min(1.0)
+}
 
 /// Where a row or cell sits, in u from the top left of the unscrolled list.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -121,28 +131,29 @@ pub struct ListLayout {
 }
 
 /// How many rows can ever be in `ListLayout::drawn` for a view `width` × `height` u, so a UI can
-/// keep this many row elements and reuse them.
-pub fn max_drawn(width: f32, height: f32, grid: bool) -> usize {
-    if grid {
+/// keep this many row elements and reuse them. `grid` as for `layout`.
+pub fn max_drawn(width: f32, height: f32, grid: Option<f32>) -> usize {
+    if let Some(shape) = grid {
         let cols = grid_columns(width);
         let cell = (width - (cols - 1) as f32 * CELL_GAP) / cols as f32;
-        cols * ((height * 3.0 / (cell + CELL_LABEL_HEIGHT + CELL_GAP)).ceil() as usize + 2)
+        cols * ((height * 3.0 / (cell * shape + CELL_LABEL_HEIGHT + CELL_GAP)).ceil() as usize + 2)
     } else {
         // No row is shorter than a header (a one-line note is as tall).
         (height * 3.0 / HEADER_HEIGHT).ceil() as usize + 2
     }
 }
 
-/// Lays out `rows` in a view `width` × `height` u, as a list or as a grid of `grid_columns(width)`
-/// columns, so the focused row sits about 40 % of the way down, without scrolling past either
-/// end. In a grid every row is a cell, headers included (grid screens have none).
-pub fn layout(rows: &[Row], focus: usize, width: f32, height: f32, grid: bool) -> ListLayout {
-    let rects: Vec<Rect> = if grid {
+/// Lays out `rows` in a view `width` × `height` u, as a list, or as a grid of `grid_columns(width)`
+/// columns whose pictures are `Some(shape)` (`picture_shape`) times as tall as wide, so the
+/// focused row sits about 40 % of the way down, without scrolling past either end. In a grid
+/// every row is a cell, headers included (grid screens have none).
+pub fn layout(rows: &[Row], focus: usize, width: f32, height: f32, grid: Option<f32>) -> ListLayout {
+    let rects: Vec<Rect> = if let Some(shape) = grid {
         let cols = grid_columns(width);
         let cell = (width - (cols - 1) as f32 * CELL_GAP) / cols as f32;
-        let pitch = cell + CELL_LABEL_HEIGHT + CELL_GAP;
+        let pitch = cell * shape + CELL_LABEL_HEIGHT + CELL_GAP;
         (0..rows.len()).map(|i| Rect {
-            x: (i % cols) as f32 * (cell + CELL_GAP), y: CELL_GAP + (i / cols) as f32 * pitch, width: cell, height: cell + CELL_LABEL_HEIGHT,
+            x: (i % cols) as f32 * (cell + CELL_GAP), y: CELL_GAP + (i / cols) as f32 * pitch, width: cell, height: cell * shape + CELL_LABEL_HEIGHT,
         }).collect()
     } else {
         rows.iter().scan(0.0, |y, r| {
@@ -153,7 +164,7 @@ pub fn layout(rows: &[Row], focus: usize, width: f32, height: f32, grid: bool) -
         }).collect()
     };
     // A grid has a gap above and below its cells, room for the focused cell to lift into.
-    let total = rects.last().map_or(0.0, |r| r.y + r.height) + if grid { CELL_GAP } else { 0.0 };
+    let total = rects.last().map_or(0.0, |r| r.y + r.height) + if grid.is_some() { CELL_GAP } else { 0.0 };
     let scroll = rects.get(focus).map_or(0.0, |r| (r.y + r.height / 2.0 - height * 0.4).clamp(0.0, (total - height).max(0.0)));
     let (from, to) = (scroll - height, scroll + 2.0 * height);
     let first = rects.iter().position(|r| r.y + r.height > from).unwrap_or(rects.len());
@@ -220,25 +231,25 @@ mod tests {
     #[test]
     fn layout_keeps_the_focus_in_view_and_clamps() {
         let r: Vec<Row> = (0..20).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
-        let l = layout(&r, 0, 900.0, 500.0, false);
+        let l = layout(&r, 0, 900.0, 500.0, None);
         assert_eq!((l.rects[1].y, l.scroll), (92.0, 0.0));
-        let l = layout(&r, 10, 900.0, 500.0, false);
+        let l = layout(&r, 10, 900.0, 500.0, None);
         assert_eq!(l.scroll, 10.0 * 92.0 + 46.0 - 200.0);
-        let l = layout(&r, 19, 900.0, 500.0, false);
+        let l = layout(&r, 19, 900.0, 500.0, None);
         assert_eq!(l.scroll, 20.0 * 92.0 - 500.0);
-        assert_eq!(layout(&r[..3], 2, 900.0, 500.0, false).scroll, 0.0); // short lists don't scroll
+        assert_eq!(layout(&r[..3], 2, 900.0, 500.0, None).scroll, 0.0); // short lists don't scroll
     }
 
     #[test]
     fn visible_rows_cover_the_view_and_a_margin() {
         let r: Vec<Row> = (0..3000).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
-        for grid in [false, true] {
+        for grid in [None, Some(1.0), Some(0.5)] {
             let l = layout(&r, 1500, 928.0, 500.0, grid);
             let (top, bottom) = (l.scroll, l.scroll + 500.0);
             let v = l.drawn.clone();
             let (first, last) = (l.rects[v.start], l.rects[v.end - 1]);
             assert!(first.y <= top - 500.0 + first.height && last.y + last.height >= bottom + 500.0);
-            assert!(v.len() <= max_drawn(928.0, 500.0, grid), "{grid}");
+            assert!(v.len() <= max_drawn(928.0, 500.0, grid), "{grid:?}");
             assert_eq!(layout(&r, 0, 928.0, 500.0, grid).drawn.start, 0);
             assert_eq!(layout(&r, 2999, 928.0, 500.0, grid).drawn.end, 3000);
         }
@@ -255,17 +266,28 @@ mod tests {
         assert_eq!(note_lines("Checking the internal storage", Some("Done"), 600.0), ["Checking the internal", "storage"]);
         assert_eq!(note_lines("", None, 1024.0), [""]);
         let r = [Row::note("a", text), Row::new("b", "x", RowKind::Action { value: None })];
-        let l = layout(&r, 1, 1024.0, 500.0, false);
+        let l = layout(&r, 1, 1024.0, 500.0, None);
         assert_eq!(l.rects[1].y, 2.0 * NOTE_LINE + 2.0 * NOTE_PADDING);
         assert_eq!(NOTE_LINE + 2.0 * NOTE_PADDING, HEADER_HEIGHT); // see max_drawn
         assert_eq!(first(&r), Some(1)); // notes never take the focus
     }
 
     #[test]
+    fn pictures_take_the_shape_their_rows_share() {
+        let art = |shape| Row::new("g", "g", RowKind::Image { image: ImageRef::Art { system: "gba", rom: "g".into(), kind: crate::art::ArtKind::TitleScreen, shape }, detail: None });
+        assert_eq!(picture_shape(&[art((240, 160)), art((240, 160))]), 160.0 / 240.0);
+        assert_eq!(picture_shape(&[art((240, 160)), art((1, 1))]), 1.0); // mixed: square
+        assert_eq!(picture_shape(&[art((224, 288))]), 1.0); // never taller than square
+        assert_eq!(picture_shape(&rows()), 1.0);
+        let l = layout(&[art((240, 160))], 0, 928.0, 500.0, Some(0.5));
+        assert_eq!(l.rects[0].height, l.rects[0].width * 0.5 + CELL_LABEL_HEIGHT);
+    }
+
+    #[test]
     fn grid_cells_fill_the_width() {
         let r: Vec<Row> = (0..9).map(|i| Row::new(i.to_string(), "x", RowKind::Text { detail: None })).collect();
         assert_eq!(grid_columns(928.0), 4); // the Brick: 1024 u less two 48 u gutters
-        let l = layout(&r, 0, 928.0, 500.0, true);
+        let l = layout(&r, 0, 928.0, 500.0, Some(1.0));
         let cols = grid_columns(928.0);
         let last_in_row = l.rects[cols - 1];
         assert!((last_in_row.x + last_in_row.width - 928.0).abs() < 0.01);

@@ -188,4 +188,4 @@ Before v0, settings were in `configs/`, laid out as v0 less the schemas and `cor
 | `saves/` | Battery saves (`.srm`), mirroring `roms/` and named after the ROM: `roms/gba/Golden Sun.gba` → `saves/gba/Golden Sun.srm`. Also `saves/.specular-saves.json`, which lets saves follow renamed ROMs (see [runtime.md](runtime.md)). |
 | `cores/` | Cores the user adds: `<name>_libretro.so` beside its `<name>_libretro.info` (see [runtime.md](runtime.md)) |
 | `config/v0/` | Settings, as above |
-| `cache/` | Things Specular can rebuild, safe to delete: `cache/art/` (box art, mirroring `roms/`), `cache/identify/` (what is known about each ROM), `cache/cores/` (the options learned of the cores the user added) |
+| `cache/` | Things Specular can rebuild, safe to delete: `cache/art/<kind>/` (box art, title screens, screenshots and where each game was left off, each mirroring `roms/`), `cache/identify/` (what is known about each ROM), `cache/cores/` (the options learned of the cores the user added) |

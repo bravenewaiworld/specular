@@ -1,14 +1,17 @@
-//! Box art: which game a ROM is, where its picture is kept, and where pictures come from.
+//! Art: which game a ROM is, where its pictures are kept, and where pictures come from.
 //!
 //! A ROM is identified offline, from its system's game table (`GameDb`): by checksum, then by
-//! the game code in its header or its disc's serial, then by file name. Art comes from the user's
-//! own image next to the ROM, else from `cache/art/`, which `ArtSource`s (such as the libretro
-//! thumbnail server) fill. This module has no network or image code; the UI crate's art service
-//! does that work.
+//! the game code in its header or its disc's serial, then by file name. Each system's games are
+//! shown with one `ArtKind` (box art, say, or title screens), else with their box art. Box art
+//! comes from the user's own image next to the ROM, else from `cache/art/boxart/`. Each kind's
+//! pictures are cached in `cache/art/<kind>/`, filled by `ArtSource`s (such as the libretro
+//! thumbnail server), or for `ArtKind::LeftOff` by Specular. This module has no network or image
+//! code; the UI crate's art service does that work.
 
 mod db;
 mod disc;
 mod index;
+mod kind;
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -17,6 +20,7 @@ use std::path::{Path, PathBuf};
 pub use db::{GameDb, NoMatch};
 pub use disc::ps1_serial;
 pub use index::{ArtIndex, Entry};
+pub use kind::{ArtKind, cached_image, files, kind, move_old_cache, pictures};
 
 use crate::library::{Game, SystemDecl, extension, zip};
 
@@ -140,10 +144,6 @@ pub fn user_image(roms: &Path, rom: &Path) -> Option<PathBuf> {
     ["png", "jpg", "jpeg"].into_iter().map(|ext| rom.with_extension(ext)).find(|p| p.is_file())
 }
 
-/// Where the picture for the game at `rom` is cached, shrunk to `IMAGE_SIZE`: `cache/art/`
-/// mirrors `roms/`.
-pub fn cached_image(cache: &Path, rom: &Path) -> PathBuf { cache.join("art").join(rom).with_extension("png") }
-
 /// Where a system's `ArtIndex` is kept.
 pub fn index_path(cache: &Path, system: &str) -> PathBuf { cache.join("identify").join(format!("{system}.json")) }
 
@@ -159,20 +159,22 @@ pub enum ArtError {
     Failed(String),
 }
 
-/// Somewhere box art comes from. Sources are asked in order, for games with no picture yet.
+/// Somewhere pictures come from. Sources are asked in order, for games with no picture of a kind
+/// yet (never for `ArtKind::LeftOff`, which Specular makes).
 pub trait ArtSource: Send {
     /// A short name, for logs.
     fn name(&self) -> &'static str;
-    /// The game's picture as an image file's bytes (PNG or JPEG), or None if this source has none.
-    fn find(&self, game: &Game, identity: Option<&Identity>, system: &SystemDecl) -> Result<Option<Vec<u8>>, ArtError>;
+    /// The game's picture of `kind` as an image file's bytes (PNG or JPEG), or None if this source
+    /// has none.
+    fn find(&self, game: &Game, identity: Option<&Identity>, system: &SystemDecl, kind: ArtKind) -> Result<Option<Vec<u8>>, ArtError>;
 }
 
-/// The address of a game's box art on the libretro thumbnail server, for its libretro-database
-/// `name`. Characters the server's file names can't hold (`&*/:`<>?\|"`) are replaced by `_`,
-/// as libretro's own tools do.
-pub fn thumbnail_url(system: &SystemDecl, name: &str) -> String {
+/// The address of a game's picture of `kind` on the libretro thumbnail server, for its
+/// libretro-database `name`; None for a kind the server doesn't have. Characters the server's
+/// file names can't hold (`&*/:`<>?\|"`) are replaced by `_`, as libretro's own tools do.
+pub fn thumbnail_url(system: &SystemDecl, kind: ArtKind, name: &str) -> Option<String> {
     let file: String = name.chars().map(|c| if "&*/:`<>?\\|\"".contains(c) { '_' } else { c }).collect();
-    format!("http://thumbnails.libretro.com/{}/Named_Boxarts/{}.png", percent_encode(system.libretro_name), percent_encode(&file))
+    Some(format!("http://thumbnails.libretro.com/{}/{}/{}.png", percent_encode(system.libretro_name), kind.thumbnails()?, percent_encode(&file)))
 }
 
 /// `s` with every byte other than letters, digits and `-._~` written as `%XX`, for a URL path.

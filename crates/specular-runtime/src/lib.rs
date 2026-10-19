@@ -139,18 +139,29 @@ struct Runs {
 pub struct Frame { pub width: u32, pub height: u32, pub rgba: Vec<u8> }
 
 /// The newest frame, handed from the game's thread to the UI. Neither side waits for the other:
-/// a frame the UI hasn't taken yet is replaced by a newer one. Frames are reused.
+/// a frame the UI hasn't taken yet is replaced by a newer one. Frames are reused, except the one
+/// the UI gave back last (`take_shown`).
 #[derive(Default)]
-pub struct FrameSlot { inner: Mutex<(Option<Frame>, Vec<Frame>)> }
+pub struct FrameSlot { inner: Mutex<Frames> }
+
+#[derive(Default)]
+struct Frames { newest: Option<Frame>, shown: Option<Frame>, spare: Vec<Frame> }
 
 impl FrameSlot {
-    /// The newest frame, if there is one the UI hasn't taken. Give it back when done with it.
-    pub fn take(&self) -> Option<Frame> { self.inner.lock().unwrap().0.take() }
-    pub fn give_back(&self, f: Frame) { self.inner.lock().unwrap().1.push(f); }
-    fn spare(&self) -> Frame { self.inner.lock().unwrap().1.pop().unwrap_or_default() }
+    /// The newest frame, if there is one the UI hasn't taken. Give it back once it is shown.
+    pub fn take(&self) -> Option<Frame> { self.inner.lock().unwrap().newest.take() }
+    /// Hands back a frame taken, once shown: it is kept as the shown one, and the one shown
+    /// before becomes a spare.
+    pub fn give_back(&self, f: Frame) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(old) = inner.shown.replace(f) { inner.spare.push(old); }
+    }
+    /// The frame given back last: the one on screen.
+    pub fn take_shown(&self) -> Option<Frame> { self.inner.lock().unwrap().shown.take() }
+    fn spare(&self) -> Frame { self.inner.lock().unwrap().spare.pop().unwrap_or_default() }
     fn publish(&self, f: Frame) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(old) = inner.0.replace(f) { inner.1.push(old); }
+        if let Some(old) = inner.newest.replace(f) { inner.spare.push(old); }
     }
 }
 

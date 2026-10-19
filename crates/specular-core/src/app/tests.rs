@@ -80,7 +80,7 @@ fn open_a_system_play_and_come_back() {
     assert_eq!(a.parent_title().as_deref(), Some("Library"));
     tap(&mut a, Button::Down, 10);
     assert_eq!(focused(&a), "Mother 3");
-    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Redraw(None)]);
     assert_eq!(a.input_target(), InputTarget::Game);
     a.handle(Msg::GameEnded(None));
     assert_eq!(a.input_target(), InputTarget::App);
@@ -212,7 +212,7 @@ fn time_focus_moves_in_a_long_list() {
     for i in 0..1000 {
         tap(&mut a, Button::Down, 10 + i);
         let (v, f) = (a.view(), a.focus());
-        std::hint::black_box((crate::list::layout(&v.rows, f, 1024.0, 512.0, false), a.parent_title()));
+        std::hint::black_box((crate::list::layout(&v.rows, f, 1024.0, 512.0, None), a.parent_title()));
     }
     println!("per move (press, view, focus, layout, breadcrumb; not the UI's drawing): {:?}", t.elapsed() / 1000);
 }
@@ -261,7 +261,7 @@ fn search_finds_games_in_every_system_best_first_and_plays_them() {
     a.handle(Msg::Library { games: vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")], card_found: true });
     assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
     assert_eq!(focused(&a), "Super Metroid");
-    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Redraw(None)]);
     a.handle(Msg::GameEnded(None));
     assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(focused(&a), "Search");
@@ -1102,6 +1102,25 @@ fn no_sounds_while_muted_or_at_volume_zero() {
     assert_eq!(sounds(tap(&mut a, Button::Down, 300)), [Sound::Move]);
     a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::from_iter([("sound.volume".into(), json!(0))])));
     assert_eq!(sounds(tap(&mut a, Button::Down, 400)), []);
+}
+
+#[test]
+fn games_show_the_kind_of_picture_set_for_their_system_in_its_shape() {
+    let mut a = app();
+    let art = |a: &App| a.view().rows.iter().map(|r| match &r.kind {
+        RowKind::Image { image: ImageRef::Art { kind, shape, .. }, .. } => (*kind, *shape),
+        _ => panic!("{r:?}"),
+    }).collect::<Vec<_>>();
+    tap(&mut a, Button::A, 0); // Game Boy Advance
+    assert_eq!(art(&a), [(ArtKind::BoxArt, (1, 1)); 2]);
+    a.handle(Msg::SettingsLoaded(Layer::System("gba".into()), serde_json::Map::from_iter([(builtin::ART.into(), json!("title"))])));
+    assert_eq!(art(&a), [(ArtKind::TitleScreen, (240, 160)); 2]);
+    // Search results across systems: each its own.
+    a.handle(Msg::Library { games: vec![game("gba", "Metroid Fusion"), game("snes", "Super Metroid")], card_found: true });
+    tap(&mut a, Button::X, 10);
+    type_text(&mut a, "metroid");
+    tap(&mut a, Button::Start, 20);
+    assert_eq!(art(&a), [(ArtKind::TitleScreen, (240, 160)), (ArtKind::BoxArt, (1, 1))]);
 }
 
 #[test]

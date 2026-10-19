@@ -56,8 +56,10 @@ pub const TINT_BY_SYSTEM: &str = "appearance.tint_by_system";
 /// Sleep after this many seconds without a button press, outside a running game ("never" for
 /// never).
 pub const SLEEP_AFTER: &str = "power.sleep_after_seconds";
-/// How a system's games are shown: "list" (beside the focused game's box art) or "grid".
+/// How a system's games are shown: "list" (beside the focused game's picture) or "grid".
 pub const LIBRARY_VIEW: &str = "library.view";
+/// What a system's games are shown with: an `art::ArtKind`'s id.
+pub const ART: &str = "library.art";
 /// Shows the game's frame rate and the core's time per frame over the game (a developer setting).
 pub const FRAME_STATS: &str = "dev.frame_stats";
 /// Shows the settings and details meant for developers.
@@ -117,9 +119,13 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "Whether the glowing bar along the top of the screen, and the lights that show the main accent colour, take each system's own colour while its games are listed or one of them is played.",
             kind: SettingKind::Bool, default: json!(true), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: LIBRARY_VIEW, section: "Library", label: "Games shown as",
-            help: "How a system's games are shown: \"list\" lists them beside the selected game's box art; \"grid\" shows their box art side by side.",
+            help: "How a system's games are shown: \"list\" lists them beside the selected game's picture (see \"Art\"); \"grid\" shows their pictures side by side.",
             kind: SettingKind::Choice(&[("list", "List"), ("grid", "Grid")]), default: json!("list"),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
+        SettingDecl { key: ART, section: "Library", label: "Art",
+            help: "What games are shown with: \"boxart\", their box art (an image of your own beside the game, with the same name, counts as box art); \"title\", their title screen; \"screenshot\", a moment of play; \"left-off\", the last thing on screen when you last quit the game. A game without that picture shows its box art, else a cover made from its name. Title screens and screenshots are downloaded like box art.",
+            kind: SettingKind::Choice(&[("boxart", "Box art"), ("title", "Title screen"), ("screenshot", "Screenshot"), ("left-off", "Where you left off")]), default: json!("boxart"),
+            visibility: Visibility::User, deepest: Scope::System, core: None, system: None },
         SettingDecl { key: SLEEP_AFTER, section: "Power", label: "Sleep after",
             help: "Sleep after this many seconds without a button press: \"30\", \"60\", \"180\", \"300\" or \"600\" (in quotes), or \"never\". The device never goes to sleep by itself while a game is being played.",
             kind: SettingKind::Choice(&[("never", "Never"), ("30", "30 sec"), ("60", "1 min"), ("180", "3 min"), ("300", "5 min"), ("600", "10 min")]), default: json!("30"),

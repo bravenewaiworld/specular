@@ -116,7 +116,7 @@ fn index_keeps_entries_for_unchanged_files_and_version() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("identify/gba.json");
     let rom = Path::new("gba/Emerald Rogue.gba");
-    let e = Entry { size: 10, modified: 20, identity: Some(Identity { name: "Pokemon".into(), by: Method::HeaderCode }), missing_since: Some(30) };
+    let e = Entry { size: 10, modified: 20, identity: Some(Identity { name: "Pokemon".into(), by: Method::HeaderCode }), missing: [Some(31), Some(30), None, None] };
     let mut index = ArtIndex::load(path.clone(), "v1");
     index.set(rom, &e);
     index.save().unwrap();
@@ -128,9 +128,60 @@ fn index_keeps_entries_for_unchanged_files_and_version() {
 
 #[test]
 fn thumbnail_addresses() {
-    assert_eq!(thumbnail_url(&gba(), "Pokemon - Emerald Version (USA, Europe)"),
+    assert_eq!(thumbnail_url(&gba(), ArtKind::BoxArt, "Pokemon - Emerald Version (USA, Europe)").unwrap(),
         "http://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts/Pokemon%20-%20Emerald%20Version%20%28USA%2C%20Europe%29.png");
-    assert!(thumbnail_url(&gba(), "Tom & Jerry: Tales").ends_with("/Tom%20_%20Jerry_%20Tales.png"));
+    assert!(thumbnail_url(&gba(), ArtKind::BoxArt, "Tom & Jerry: Tales").unwrap().ends_with("/Tom%20_%20Jerry_%20Tales.png"));
+    assert!(thumbnail_url(&gba(), ArtKind::TitleScreen, "X").unwrap().ends_with("/Named_Titles/X.png"));
+    assert!(thumbnail_url(&gba(), ArtKind::Screenshot, "X").unwrap().ends_with("/Named_Snaps/X.png"));
+    assert_eq!(thumbnail_url(&gba(), ArtKind::LeftOff, "X"), None);
+}
+
+#[test]
+fn kinds_are_the_art_settings_values_and_fall_back_to_box_art() {
+    let decls = crate::settings::declarations(&builtin_systems());
+    let decl = decls.iter().find(|d| d.key == crate::settings::builtin::ART).unwrap();
+    let crate::settings::SettingKind::Choice(values) = decl.kind else { panic!() };
+    assert_eq!(values.iter().map(|(v, _)| *v).collect::<Vec<_>>(), ArtKind::ALL.map(ArtKind::id));
+    let mut settings = crate::settings::Settings::new(decls);
+    assert_eq!(kind(&settings, "gba"), ArtKind::BoxArt);
+    settings.set(crate::settings::builtin::ART, &crate::settings::Layer::System("gba".into()), "left-off".into()).unwrap();
+    assert_eq!((kind(&settings, "gba"), kind(&settings, "nes")), (ArtKind::LeftOff, ArtKind::BoxArt));
+    for k in ArtKind::ALL { assert_eq!(k.fallbacks()[0], k); assert_eq!(k.fallbacks().last(), Some(&ArtKind::BoxArt)); }
+    assert_eq!((ArtKind::BoxArt.shape(&gba()), ArtKind::Screenshot.shape(&gba())), ((1, 1), (240, 160)));
+}
+
+#[test]
+fn pictures_are_the_kinds_then_box_art_with_the_users_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let (roms, cache, rom) = (dir.path().join("roms"), dir.path().join("cache"), Path::new("gba/Golden Sun.gba"));
+    let cached = |k| cache.join("art").join(k).join("gba/Golden Sun.png");
+    assert_eq!(cached_image(&cache, ArtKind::TitleScreen, rom), cached("title"));
+    assert_eq!(pictures(&roms, &cache, rom, ArtKind::BoxArt), [cached("boxart")]);
+    std::fs::create_dir_all(roms.join("gba")).unwrap();
+    std::fs::write(roms.join("gba/Golden Sun.jpg"), b"").unwrap();
+    assert_eq!(pictures(&roms, &cache, rom, ArtKind::LeftOff), [cached("left-off"), roms.join("gba/Golden Sun.jpg"), cached("boxart")]);
+}
+
+#[test]
+fn old_cache_moves_into_the_box_art_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cache, art) = (dir.path(), dir.path().join("art"));
+    move_old_cache(cache); // no cache yet
+    assert!(!art.exists());
+    for f in ["gba/Golden Sun.png", "nes/Zelda.png", "Top.png", "title/Odd.png", "boxart/nes/Zelda.png"] {
+        std::fs::create_dir_all(art.join(f).parent().unwrap()).unwrap();
+        std::fs::write(art.join(f), f).unwrap();
+    }
+    move_old_cache(cache);
+    let entries = |dir: &Path| { let mut e: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name()).collect(); e.sort(); e };
+    assert_eq!(entries(&art), ["boxart", "title"]);
+    assert_eq!(entries(&art.join("boxart")), ["Top.png", "gba", "nes"]);
+    assert_eq!(std::fs::read_to_string(art.join("boxart/gba/Golden Sun.png")).unwrap(), "gba/Golden Sun.png");
+    assert!(art.join("title/Odd.png").exists());
+    // One already moved (or downloaded since) wins.
+    assert_eq!(std::fs::read_to_string(art.join("boxart/nes/Zelda.png")).unwrap(), "boxart/nes/Zelda.png");
+    move_old_cache(cache);
+    assert_eq!(entries(&art), ["boxart", "title"]);
 }
 
 #[test]

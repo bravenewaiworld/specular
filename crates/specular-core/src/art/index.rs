@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
-use super::{IDENTIFY_VERSION, Identity, Method};
+use super::{ArtKind, IDENTIFY_VERSION, Identity, Method};
 use crate::settings::store;
 
 /// What is known about one ROM file, valid while its size and modification time are unchanged.
@@ -17,9 +17,9 @@ pub struct Entry {
     pub modified: u64,
     /// None: checked, and the game table doesn't know it.
     pub identity: Option<Identity>,
-    /// When every art source last said it has no image (seconds since 1970), so it isn't asked
-    /// again for a while.
-    pub missing_since: Option<u64>,
+    /// By `ArtKind as usize`: when every art source last said it has no picture of that kind
+    /// (seconds since 1970), so they aren't asked again for a while.
+    pub missing: [Option<u64>; ArtKind::ALL.len()],
 }
 
 /// One system's entries, by ROM path under `roms/`.
@@ -53,7 +53,8 @@ impl ArtIndex {
             name: name.to_string(),
             by: Method::ALL.into_iter().find(|m| Some(m.name()) == e.get("by").and_then(Value::as_str)).unwrap_or(Method::Name),
         });
-        Some(Entry { size, modified, identity, missing_since: n("missing_since") })
+        let missing = ArtKind::ALL.map(|k| e.get("missing").and_then(|m| m.get(k.id())).and_then(Value::as_u64));
+        Some(Entry { size, modified, identity, missing })
     }
 
     /// Records `e` for `rom`, to be written by the next `save`.
@@ -61,7 +62,8 @@ impl ArtIndex {
         let Some(key) = rom.to_str() else { return };
         let mut v = json!({ "size": e.size, "modified": e.modified });
         if let Some(id) = &e.identity { v["name"] = id.name.clone().into(); v["by"] = id.by.name().into(); }
-        if let Some(t) = e.missing_since { v["missing_since"] = t.into(); }
+        let missing: Map<String, Value> = ArtKind::ALL.iter().filter_map(|&k| Some((k.id().to_string(), e.missing[k as usize]?.into()))).collect();
+        if !missing.is_empty() { v["missing"] = missing.into(); }
         self.games.insert(key.to_string(), v);
         self.dirty = true;
     }

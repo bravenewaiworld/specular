@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
+use crate::art::ArtKind;
 use crate::device::{Battery, Rgb};
 use crate::input::Button;
 use crate::wireless::bluetooth::BtKind;
@@ -20,9 +21,11 @@ pub struct RowId(pub String);
 /// A picture for a row, loaded by the UI off its thread.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageRef {
-    /// A game's box art, by its system and its ROM's path under `roms/`. The UI's art service
-    /// finds it; while there is none, the UI draws a generated cover.
-    Art { system: &'static str, rom: PathBuf },
+    /// A game's picture of `kind` (else its box art), by its system and its ROM's path under
+    /// `roms/`. The UI's art service finds it; while there is none, the UI draws a generated
+    /// cover. `shape` (width, height) is the shape of the place it is drawn in
+    /// (`ArtKind::shape`).
+    Art { system: &'static str, rom: PathBuf, kind: ArtKind, shape: (u32, u32) },
 }
 
 /// A small symbol, drawn by the UI in the accent colours: beside a row's label, or in the status

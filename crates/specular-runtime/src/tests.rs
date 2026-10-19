@@ -70,6 +70,22 @@ fn runs_a_gba_game_with_frames_sound_saves_and_states() {
 }
 
 #[test]
+fn the_frame_shown_last_is_kept_until_taken() {
+    let slot = FrameSlot::default();
+    let frame = |w| Frame { width: w, height: 1, rgba: vec![0; 4] };
+    slot.publish(frame(1));
+    slot.publish(frame(2)); // replaces 1, never taken
+    let shown = slot.take().unwrap();
+    assert_eq!(shown.width, 2);
+    slot.give_back(shown);
+    // The game draws into a spare frame (1), not into the one on screen.
+    assert_eq!(slot.spare().width, 1);
+    assert_eq!(slot.spare().width, 0);
+    assert_eq!(slot.take_shown().map(|f| f.width), Some(2));
+    assert!(slot.take_shown().is_none());
+}
+
+#[test]
 fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();

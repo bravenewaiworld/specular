@@ -2,13 +2,13 @@
 
 Status: In progress · Updated: 2026-10-18
 
-How Specular finds the games on the card, works out their systems, identifies each ROM, and finds its box art. Art makes the library feel finished, but it must come from somewhere we may use, work offline once fetched, and never cost the UI a frame.
+How Specular finds the games on the card, works out their systems, identifies each ROM, and finds its box art (or title screen, screenshot, or the frame you left it on). Art makes the library feel finished, but it must come from somewhere we may use, work offline once fetched, and never cost the UI a frame.
 
 ## Decisions
 
 - **The library is scanned from `roms/`, in any folder layout** (2026-10-12). A game's system is worked out from its file extension, and from its header where an extension is shared. The folder name only breaks a tie the header leaves, for extensions several systems share (e.g. `.bin`, `.iso`, `.chd`) (2026-10-18). Rejected: always using folder names (cards are organised in too many ways).
 - **Systems without a core are left out of the library** (2026-10-13). A core the user adds to the card counts (2026-10-18): the SNES and the Mega Drive appear once one serves them (see [runtime.md](runtime.md)). Rejected: listing their games and failing when one is launched.
-- **Box art comes from libretro-thumbnails, downloaded on the device over WiFi** (2026-10-12). Box art only to start with; no PC companion yet. The art is the publishers' copyright, so it is never bundled or mirrored; RetroArch's on-demand download is the precedent we follow. Rejected: LaunchBox (no licence for third-party use), IGDB (its secret can't ship in open source), MobyGames (paid), TheGamesDB (name search only).
+- **Box art comes from libretro-thumbnails, downloaded on the device over WiFi** (2026-10-12), as are title screens and screenshots (2026-10-18). No PC companion yet. The art is the publishers' copyright, so it is never bundled or mirrored; RetroArch's on-demand download is the precedent we follow. Rejected: LaunchBox (no licence for third-party use), IGDB (its secret can't ship in open source), MobyGames (paid), TheGamesDB (name search only).
 - **Plain HTTP** (2026-10-13). The server sends the same files either way. Rejected: TLS (about 1.5 MB more, root certificates to keep current, and a dependence on the clock being set).
 - **Identification is offline, from tables compiled in** (2026-10-13). `tools/trim-db.py` trims libretro-database, pinned to one commit, to checksum, serial and name per system, in `data/db/`. The data is CC-BY-SA: it is credited in `data/db/NOTICE`, and the trimmed tables keep that licence.
 - **The user's own art goes next to the ROM, with the same name** (2026-10-13): `roms/gba/Golden Sun.png`. PNG or JPEG (2026-10-18): `.png`, else `.jpg`, else `.jpeg`, so a PNG wins if several are there (it is lossless, and most likely made for the purpose). It is never replaced by downloaded art. Decoding uses the `image` crate with only its PNG and JPEG features, which Slint already builds in. Rejected: the JPEG decoder (`zune-jpeg`) on its own beside the `png` crate (the same code, plus our own glue for each format).
@@ -25,6 +25,11 @@ How Specular finds the games on the card, works out their systems, identifies ea
 - **ScreenScraper is not used in V0** (2026-10-18). It may become an optional source later; it needs a developer ID for the project, each user's own account, and quota handling (see Findings).
 - **Search covers every system, and shows its results on a screen of their own** (2026-10-18). Search on Home, or X in any game list, opens the on-screen keyboard; confirming the text (Start) shows the matching games, best first, each with its system, as a list or grid like a system's games. Rejected: searching only the system being shown (narrower, and the game you search for is often one whose system you don't remember), filtering the list as you type (needs a new layout with the keyboard and a list on one screen).
 - **Search matches titles the way people type them** (2026-10-18). Case, accents, spaces and punctuation are ignored. Titles that start with the query come first, then those with a word that starts with it (or, for several words, a word starting with each, in any order), then those that contain it anywhere, even across words; by title within each.
+- **A system's games may be shown with their title screens, screenshots, or where you left them, instead of their box art** (2026-10-18). One setting, "Art" (Library), settable per system (arcade games, say, are known by their title screens): Box art (the default), Title screen (libretro-thumbnails' `Named_Titles`), Screenshot (`Named_Snaps`) or Where you left off (the last frame shown when the game was quit). A game without a picture of its kind shows its box art, else its generated cover; the user's own image beside the ROM counts as box art. Rejected: a setting per game (a game's own box art can already be put beside it); falling back through every kind (which picture a game shows would be harder to predict, and more would be downloaded).
+- **Only the kind each system shows is downloaded, then box art for the games without one** (2026-10-18), with the same queue rules (online only, a minute's wait after a network error, 30 days before asking again for a kind a game has none of). Changing the setting makes the worker go through the library again. Rejected: fetching every kind for every game (three times the downloads and the cache, for pictures that may never be shown).
+- **The frame on screen as a game is quit is kept as where you left off** (2026-10-18), for every game whatever the setting, so choosing "Where you left off" shows pictures at once. The art worker shrinks and stores it like other art, before any other work, so the quit animation never waits; it is written as other cached pictures are (under another name, then renamed, but not flushed to the card): one lost to a power cut is replaced at the next quit. A game quit during its splash, before it was shown, keeps its previous picture of where it was left off. With "Where you left off" shown, the game shrinks into that frame, and the list shows it at once. Rejected: keeping it on sleep too (the game is resumed after waking, and its quit keeps the frame then; only a battery that dies while asleep leaves the older picture); keeping it only for systems set to show it (choosing it would show nothing until each game was played again).
+- **Each kind has its own folder, `cache/art/<kind>/`, mirroring `roms/`** (2026-10-18): `boxart/`, `title/`, `screenshot/` and `left-off/`. Box art cached when `cache/art/` held only box art is moved into `cache/art/boxart/` at start-up, one entry of `cache/art/` at a time (one rename each, so a power cut leaves the rest for the next start). Rejected: box art staying in `cache/art/` beside the other kinds' folders (a folder in `roms/` could have a kind's name); downloading the box art again (a library's worth of downloads).
+- **Pictures are drawn in their kind's shape** (2026-10-18): box art in squares (boxes vary in shape), the other kinds in the shape of their system's screen, in the grid's cells and beside the list, so title screens and screenshots fill their places and fly into the running game without changing shape (see [look-and-motion.md](look-and-motion.md)).
 - **Game lists have a letter index** (2026-10-18): L2 and R2 jump to the previous or next first letter (see [look-and-motion.md](look-and-motion.md)). Search results are ranked rather than in title order, so they have none.
 
 ## Design
@@ -101,21 +106,34 @@ pub trait Identifier: Send + Sync { fn identify(&self, rom: &RomFile, db: &GameD
 
 ### Finding the art
 
-Sources are tried in order; the first hit wins.
+A game shows the first picture there is of its system's kind (the "Art" setting), then of box art, then a generated cover. Each kind's pictures come from:
 
-1. The user's image, next to the ROM (PNG or JPEG).
-2. `cache/art/`, which mirrors `roms/`.
-3. *Planned:* art inside the ROM, for systems that have any: PSP `ICON0`/`PIC1`, DS and 3DS icons, the GameCube banner. Cartridge systems up to the SNES and Mega Drive have none.
-4. libretro-thumbnails (needs the network).
-5. *Planned:* a screenshot Specular takes when you leave a game.
+| Kind (setting value) | From, in order |
+|---|---|
+| Box art (`boxart`) | The user's image next to the ROM (PNG or JPEG); `cache/art/boxart/`; *planned:* art inside the ROM, for systems that have any (PSP `ICON0`/`PIC1`, DS and 3DS icons, the GameCube banner; cartridge systems up to the SNES and Mega Drive have none); libretro-thumbnails' `Named_Boxarts` (needs the network) |
+| Title screen (`title`) | `cache/art/title/`; libretro-thumbnails' `Named_Titles` |
+| Screenshot (`screenshot`) | `cache/art/screenshot/`; libretro-thumbnails' `Named_Snaps` |
+| Where you left off (`left-off`) | `cache/art/left-off/`, the frame on screen when the game was last quit |
 
-Images are shrunk to at most 400×400 px as they are stored (as PNG), so the UI only loads small, ready-to-use files; the user's own are shrunk as they are loaded. A loader thread decodes them for display, always working on the newest request, so scrolling never queues stale work. A picture that would take more than 64 MB to decode (a large photo) is refused.
+Each folder in `cache/art/` mirrors `roms/`: `roms/gba/Golden Sun.gba`'s title screen is `cache/art/title/gba/Golden Sun.png`. Images are shrunk to at most 400×400 px as they are stored (as PNG), so the UI only loads small, ready-to-use files; the user's own are shrunk as they are loaded. A loader thread decodes them for display, always working on the newest request, so scrolling never queues stale work. A picture that would take more than 64 MB to decode (a large photo) is refused.
 
 ```rust
+pub enum ArtKind { BoxArt, TitleScreen, Screenshot, LeftOff }
+impl ArtKind {
+    pub fn id(self) -> &'static str;                        // the setting's value and the cache folder: "boxart", "title", …
+    pub fn thumbnails(self) -> Option<&'static str>;        // "Named_Boxarts", …; None for LeftOff
+    pub fn fallbacks(self) -> &'static [ArtKind];           // [self, BoxArt]
+    pub fn shape(self, system: &SystemDecl) -> (u32, u32);  // (1, 1) for box art, else the system's screen
+}
+pub fn kind(settings: &Settings, system: &str) -> ArtKind;
+pub fn files(roms: &Path, cache: &Path, rom: &Path, kind: ArtKind) -> Vec<PathBuf>;     // where one kind's picture may be
+pub fn pictures(roms: &Path, cache: &Path, rom: &Path, kind: ArtKind) -> Vec<PathBuf>;  // `files` of each fallback, in order
+pub fn move_old_cache(cache: &Path);  // box art from cache/art/ into cache/art/boxart/ (logged)
+
 pub trait ArtSource: Send {
     fn name(&self) -> &'static str;   // for logs
-    /// The game's picture as PNG or JPEG bytes, or None if this source has none.
-    fn find(&self, game: &Game, identity: Option<&Identity>, system: &SystemDecl) -> Result<Option<Vec<u8>>, ArtError>;
+    /// The game's picture of `kind` as PNG or JPEG bytes, or None if this source has none.
+    fn find(&self, game: &Game, identity: Option<&Identity>, system: &SystemDecl, kind: ArtKind) -> Result<Option<Vec<u8>>, ArtError>;
 }
 pub enum ArtError {
     Offline(String),  // network or server unreachable, or a download cut off: ask again later
@@ -123,14 +141,17 @@ pub enum ArtError {
 }
 ```
 
-The thumbnail address is `http://thumbnails.libretro.com/<libretro system name>/Named_Boxarts/<name>.png`, where each of `` &*/:`<>?\|" `` in the name is replaced by `_`.
+The thumbnail address is `http://thumbnails.libretro.com/<libretro system name>/<Named_Boxarts, Named_Titles or Named_Snaps>/<name>.png`, where each of `` &*/:`<>?\|" `` in the name is replaced by `_`.
 
 How the download queue behaves:
 
 - Missing art is fetched whenever WiFi is up; with WiFi on Auto, the queue asks for WiFi while it has downloads waiting (see [wireless.md](wireless.md)).
+- Each game's system's kind is fetched, then box art if no source has that kind's picture; nothing more once the game has a picture of either. The UI tells the worker each system's kind (`ArtCmd::Kinds`) whenever they change.
 - Downloads go one at a time, with an identifying User-Agent. *Planned:* honour ETags, so stored art can be refreshed without fetching unchanged images.
-- After a network error the queue waits a minute. A game every source said it has no image for isn't asked about again for 30 days.
-- A game with the user's own image is skipped before it is identified, so no match, fuzzy or not, replaces it.
+- After a network error the queue waits a minute. A game every source said it has no picture of a kind for isn't asked for that kind again for 30 days (the index keeps a date per kind: `"missing": {"title": <seconds>}`).
+- A game with the user's own image is skipped before it is identified, so no match, fuzzy or not, replaces it, unless its system shows another kind.
+
+As a game is quit, the UI takes the frame on screen from the runtime (`FrameSlot::take_shown`: the frame the UI drew last is kept aside, not reused) and sends it to the art worker (`ArtCmd::LeftOff`), which stores it before any other work.
 
 ## Findings
 

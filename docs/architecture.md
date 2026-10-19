@@ -95,7 +95,7 @@ pub trait Screen {
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
 | Rumble | runs the motors, at the latest state asked for (`rumble::RumbleLine`) |
 | Installer | the device's installer |
-| Art worker, art loader | finding and storing box art; decoding pictures for display |
+| Art worker, art loader | finding and storing pictures (and the frame each game was left on); decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
 | Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written |
 | Vsync | in a display platform that paces animations by the display (the Brick's): after an animation's frame is presented, waits for the vsync that shows it and wakes the UI |

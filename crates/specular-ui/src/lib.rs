@@ -19,7 +19,8 @@ use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use slint::{ComponentHandle, Model, VecModel};
+use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
+use specular_core::art::ArtKind;
 use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
 use specular_core::device::{Accent, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble};
 use specular_core::effects::{self, Effects, Event};
@@ -190,12 +191,14 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     app.set_credits(Credits { projects: credits, texts });
     // Without WiFi, the network (if any) is assumed to be there.
     let online = wifi.is_none();
+    // Before the art threads start, so neither misses box art not yet in cache/art/boxart/.
+    specular_core::art::move_old_cache(&data.cache());
     // Every system Specular declares: one may get a core from the card later.
     let art_worker = art::worker(data.roms(), data.cache(), library::builtin_systems(), vec![Box::new(art::LibretroThumbnails::new())], online,
         |rom| on_ui(move |r| r.art_stored(rom)),
         |wanted| post(Msg::WifiNeed { need: WifiNeed::BoxArt, wanted, time: now() }));
     let art_loader = art::loader(data.roms(), data.cache(),
-        |rom, picture| on_ui(move |r| r.art_loaded(rom, picture.map(slint::Image::from_rgba8))));
+        |rom, kind, picture| on_ui(move |r| r.art_loaded((rom, kind), picture.map(slint::Image::from_rgba8))));
     let runner = Rc::new(Runner {
         app: RefCell::new(app),
         window: window.as_weak(),
@@ -247,6 +250,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         art_loader,
         on_screen: RefCell::default(),
         requested: RefCell::default(),
+        art_kinds: RefCell::default(),
     });
     runner.show_theme();
     window.set_rows(runner.rows.clone().into());
@@ -666,14 +670,15 @@ struct Runner {
     /// holding a row, those on screen) as of the last `refresh`.
     slots_changed: Cell<u64>,
     slots: Cell<(usize, usize, usize)>,
-    /// Pictures loaded so far, by ROM path: an image, or None if the game has none yet. A game
-    /// not in it hasn't been loaded (or was dropped, see `MAX_PICTURES`).
-    art: RefCell<HashMap<PathBuf, Option<slint::Image>>>,
+    /// Pictures loaded so far, by ROM path: the kind the game was shown as when it was loaded,
+    /// and an image, or None if the game has none yet. A game not in it, or in it with another
+    /// kind, hasn't been loaded (or was dropped, see `MAX_PICTURES`).
+    art: RefCell<HashMap<PathBuf, (ArtKind, Option<slint::Image>)>>,
     /// Whether the last message was a tick while a button was held (the presses it makes repeat).
     repeating: Cell<bool>,
     /// The game whose picture is beside the list. It follows the focus, but while a direction is
     /// held only once the focus rests (`PICTURE_DELAY`), so held scrolling doesn't load each one.
-    picture: RefCell<Option<PathBuf>>,
+    picture: RefCell<Option<ArtKey>>,
     picture_timer: slint::Timer,
     toast_timer: slint::Timer,
     volume_timer: slint::Timer,
@@ -704,12 +709,17 @@ struct Runner {
     art_worker: mpsc::Sender<art::ArtCmd>,
     /// Whether the art worker was last told the network is there.
     art_online: Cell<bool>,
-    art_loader: mpsc::Sender<Vec<PathBuf>>,
+    art_loader: mpsc::Sender<Vec<ArtKey>>,
     /// What the art worker and loader were last told (less the pictures loaded since), so
     /// unchanged lists aren't sent again.
     on_screen: RefCell<Vec<PathBuf>>,
-    requested: RefCell<Vec<PathBuf>>,
+    requested: RefCell<Vec<ArtKey>>,
+    /// What the art worker was last told each system's games are shown with (`tell_art_kinds`).
+    art_kinds: RefCell<HashMap<&'static str, ArtKind>>,
 }
+
+/// A game's picture as shown: its ROM path, and the kind it is shown as.
+type ArtKey = (PathBuf, ArtKind);
 
 /// The shortest time a launched game's splash shows: it hides the game until its first frame is
 /// in and this long after the launch. The game runs meanwhile; only showing it waits.
@@ -756,6 +766,7 @@ impl Runner {
         // restarts from this tick.
         if needs_clock { self.tick_clock(); }
         self.tell_art_online();
+        self.tell_art_kinds();
         let app = self.app.borrow();
         let (repeat, sleep, wifi) = (app.next_deadline(), app.sleep_deadline(), app.wifi_deadline());
         drop(app);
@@ -768,6 +779,18 @@ impl Runner {
     fn tell_art_online(&self) {
         let online = self.app.borrow().ctx().wifi.as_ref().is_none_or(|w| matches!(w.link, WifiLink::Connected { .. }));
         if online != self.art_online.replace(online) { let _ = self.art_worker.send(art::ArtCmd::Online(online)); }
+    }
+
+    /// Tells the art worker which kind of picture each system's games are shown with, when that
+    /// changes (a setting, or a system's settings loaded): it downloads only those.
+    fn tell_art_kinds(&self) {
+        let app = self.app.borrow();
+        let ctx = app.ctx();
+        let kinds: HashMap<&'static str, ArtKind> = ctx.systems.iter().map(|s| (s.id, specular_core::art::kind(&ctx.settings, s.id))).collect();
+        if kinds != *self.art_kinds.borrow() {
+            *self.art_kinds.borrow_mut() = kinds.clone();
+            let _ = self.art_worker.send(art::ArtCmd::Kinds(kinds));
+        }
     }
 
     fn apply(self: &Rc<Self>, e: Effect) {
@@ -812,7 +835,11 @@ impl Runner {
             }
             Effect::QuitGame => {
                 // (The game's texture is freed, and stops being shown, at the next draw.)
-                if let Some(p) = self.playing.borrow_mut().take() && let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
+                let playing = self.playing.borrow_mut().take();
+                if let Some(p) = playing {
+                    self.keep_left_off(&p);
+                    if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
+                }
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
                 self.tell_effects(Event::GameStopped);
             }
@@ -839,6 +866,23 @@ impl Runner {
     /// Tells the app the running game's discs, as its core says now.
     fn tell_discs(&self) {
         if let Some(p) = self.playing.borrow().as_ref() { post(Msg::Discs(p.session.discs())); }
+    }
+
+    /// Keeps the frame on screen as `p` is quit, as its game's picture of where it was left off:
+    /// the art worker stores it. If its system's games are shown that way, the game shrinks into
+    /// this frame, which the list shows from then on without waiting for the stored one. Nothing
+    /// is kept if the game hadn't been shown yet (quit during its splash).
+    fn keep_left_off(&self, p: &game::Playing) {
+        let Some(w) = self.window.upgrade() else { return };
+        if !w.get_game_revealed() { return; }
+        let Some(frame) = p.frames.take_shown() else { return };
+        let (rom, system) = (p.record.1.game.clone(), p.record.1.system.as_str());
+        if specular_core::art::kind(&self.app.borrow().ctx().settings, system) == ArtKind::LeftOff {
+            let image = slint::Image::from_rgba8(SharedPixelBuffer::clone_from_slice(&frame.rgba, frame.width, frame.height));
+            w.set_flyer(Cover { known: true, has_art: true, art: image.clone(), ..w.get_flyer() });
+            self.art.borrow_mut().insert(rom.clone(), (ArtKind::LeftOff, Some(image)));
+        }
+        let _ = self.art_worker.send(art::ArtCmd::LeftOff(rom, art::Picture { width: frame.width, height: frame.height, rgba: frame.rgba }));
     }
 
     /// Runs `f` on the game being played, if any, and shows what it says (nothing for "") or
@@ -1129,13 +1173,16 @@ impl Runner {
         w.set_layout(match view.layout { Layout::List => ScreenLayout::List, Layout::ListWithPicture => ScreenLayout::ListWithPicture, Layout::Grid => ScreenLayout::Grid, Layout::Keys => ScreenLayout::Keys });
         // Grids and the keyboard sit between the gutters; a list's rows reach the edges.
         let (width, height) = (if grid || keys { w.get_grid_width() } else { w.get_list_width() }, w.get_list_height());
-        let layout = if keys { keys::layout(&view.rows, width, height) } else { list::layout(&view.rows, focus, width, height, grid) };
+        let shape = list::picture_shape(&view.rows);
+        if w.get_picture_shape() != shape { w.set_picture_shape(shape); }
+        let cells = grid.then_some(shape);
+        let layout = if keys { keys::layout(&view.rows, width, height) } else { list::layout(&view.rows, focus, width, height, cells) };
         // Rows are drawn from a fixed set of slots, enough for every row near the view; a row
         // always uses slot `index % slots`, so while the list scrolls a row keeps its slot and
         // only the slots of rows coming into view change. A new screen or layout gets fresh
         // slots, so the old one's rows don't animate into the new one.
         // The keyboard draws every key at once, so it needs a slot per key.
-        let slots = if keys { view.rows.len() } else { list::max_drawn(width, height, grid) };
+        let slots = if keys { view.rows.len() } else { list::max_drawn(width, height, cells) };
         debug_assert!(layout.drawn.len() <= slots, "two drawn rows would share a slot");
         // `focus` is 0 on a screen where no row can take the focus: nothing is focused then.
         let focusable = view.rows.get(focus).is_some_and(|r| r.kind.focusable());
@@ -1199,13 +1246,13 @@ impl Runner {
     /// rows drawn, and the loader loads the pictures shown (a grid's, nearest the focus first, or
     /// the one beside the list, which waits for the focus to rest while `held`; see `picture`).
     fn update_art(&self, w: &AppWindow, view: &ScreenView, focus: usize, drawn: &std::ops::Range<usize>, held: bool) {
-        let rom = |i: usize| view.rows.get(i).and_then(art_of).map(|(_, rom)| rom.clone());
-        let on_screen: Vec<PathBuf> = drawn.clone().filter_map(rom).collect();
+        let rom = |i: usize| view.rows.get(i).and_then(art_of).map(|(_, rom, kind)| (rom.clone(), kind));
+        let on_screen: Vec<PathBuf> = drawn.clone().filter_map(rom).map(|(path, _)| path).collect();
         if *self.on_screen.borrow() != on_screen {
             let _ = self.art_worker.send(art::ArtCmd::OnScreen(on_screen.clone()));
             *self.on_screen.borrow_mut() = on_screen;
         }
-        let wanted: Vec<PathBuf> = match view.layout {
+        let wanted: Vec<ArtKey> = match view.layout {
             Layout::Keys => Vec::new(),
             Layout::Grid => {
                 let mut near: Vec<usize> = drawn.clone().collect();
@@ -1226,7 +1273,7 @@ impl Runner {
                     }
                 }
                 let picture = self.picture.borrow().clone();
-                let row = picture.as_ref().and_then(|p| view.rows.iter().find(|r| art_of(r).is_some_and(|(_, rom)| rom == p)));
+                let row = picture.as_ref().and_then(|p| view.rows.iter().find(|r| art_of(r).is_some_and(|(_, rom, kind)| (rom, kind) == (&p.0, p.1))));
                 // A picture still loading leaves the last one up, rather than blinking to nothing.
                 if let Some(cover) = row.map(|r| self.cover(r)) && cover.known { w.set_picture(cover); }
                 picture.into_iter().collect()
@@ -1234,7 +1281,7 @@ impl Runner {
             Layout::List => vec![],
         };
         let art = self.art.borrow();
-        let wanted: Vec<PathBuf> = wanted.into_iter().filter(|p| !art.contains_key(p)).collect();
+        let wanted: Vec<ArtKey> = wanted.into_iter().filter(|p| !art.get(&p.0).is_some_and(|(k, _)| *k == p.1)).collect();
         if !wanted.is_empty() && *self.requested.borrow() != wanted {
             let _ = self.art_loader.send(wanted.clone());
             *self.requested.borrow_mut() = wanted;
@@ -1242,13 +1289,13 @@ impl Runner {
     }
 
     /// A picture arrived from the loader.
-    fn art_loaded(&self, rom: PathBuf, picture: Option<slint::Image>) {
-        self.requested.borrow_mut().retain(|p| p != &rom);
+    fn art_loaded(&self, key: ArtKey, picture: Option<slint::Image>) {
+        self.requested.borrow_mut().retain(|p| p != &key);
         let mut art = self.art.borrow_mut();
-        art.insert(rom, picture);
+        art.insert(key.0, (key.1, picture));
         if art.len() > MAX_PICTURES {
             let (on_screen, picture) = (self.on_screen.borrow(), self.picture.borrow());
-            art.retain(|p, _| on_screen.contains(p) || picture.as_ref() == Some(p));
+            art.retain(|p, _| on_screen.contains(p) || picture.as_ref().is_some_and(|(rom, _)| rom == p));
         }
         drop(art);
         self.refresh(None);
@@ -1262,8 +1309,8 @@ impl Runner {
 
     /// The cover for a row with a picture: the picture if loaded, else a generated one.
     fn cover(&self, r: &Row) -> Cover {
-        let Some((system, rom)) = art_of(r) else { return empty_cover() };
-        let known = self.art.borrow().get(rom).cloned();
+        let Some((system, rom, kind)) = art_of(r) else { return empty_cover() };
+        let known = self.art.borrow().get(rom).filter(|(k, _)| *k == kind).map(|(_, p)| p.clone());
         let (top, bottom) = cover_colours(&r.label);
         Cover {
             known: known.is_some(), has_art: matches!(known, Some(Some(_))), art: known.flatten().unwrap_or_else(no_art),
@@ -1320,9 +1367,9 @@ impl Runner {
     }
 }
 
-/// The system and ROM of a row that shows a game's box art.
-fn art_of(r: &Row) -> Option<(&'static str, &PathBuf)> {
-    match &r.kind { RowKind::Image { image: ImageRef::Art { system, rom }, .. } => Some((system, rom)), _ => None }
+/// The system, ROM and kind of picture of a row that shows a game's picture.
+fn art_of(r: &Row) -> Option<(&'static str, &PathBuf, ArtKind)> {
+    match &r.kind { RowKind::Image { image: ImageRef::Art { system, rom, kind, .. }, .. } => Some((system, rom, *kind)), _ => None }
 }
 
 thread_local! {

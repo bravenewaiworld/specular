@@ -124,10 +124,10 @@ Completed:
  - The light bar, and the LEDs showing the accent, take each system's colour on its game list and while its games are played ("Tint by system", on by default)
  - Interface sounds, made in code from the mockup's tick: a quiet tick as the focus moves, short tones as screens open and close and switches turn on and off; none over a game, even paused. The output opens at the first sound and closes when idle. "Interface sounds" turns them off
  - Pluggable lights and rumble effects, each with a setting: the LEDs and light bar pulse red as the battery becomes low and flash when the game saves; rumble can follow the game's loud sounds (off by default). The light bar mirrors the LEDs, also during effects
+ - Title screens, screenshots or where you left off as games' pictures ("Art", per system), each falling back to box art. Only the kind shown is downloaded (then box art for games without one); the frame on screen is kept, off the UI thread, as each game is quit. Pictures take their kind's shape (the system's screen for all but box art) beside the list, in the grid and as they zoom into the game. Box art already cached moves into `cache/art/boxart/`
 
 TODO:
  - Interface sounds: to check on the Brick (how loud they are, and that the speaker doesn't pop as their output opens and closes)
- - Title screens and screenshots as art
  - Measure scrolling's cost on the Brick (about 47 % of a core before the fixes) with the frame statistics' `ui: CPU a frame` line (DEVELOPMENT.md)
 
 ## V1

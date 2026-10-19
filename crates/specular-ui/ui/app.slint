@@ -11,9 +11,9 @@ export enum Kind { header, note, text, toggle, choice, number, action, key }
 // How the screen's rows are arranged (the core's layouts).
 export enum ScreenLayout { list, list-with-picture, grid, keys }
 
-// A game's box art, or what stands in for it.
+// A game's picture (box art, a title screen…), or what stands in for it.
 export struct Cover {
-    // False until the loader has looked for the picture: a plain square is drawn meanwhile.
+    // False until the loader has looked for the picture: a plain surface is drawn meanwhile.
     known: bool,
     has-art: bool,
     art: image,
@@ -137,9 +137,9 @@ component Gauge inherits Rectangle {
     }
 }
 
-// Box art, fitted into a square with sharp top and rounded bottom corners (the Brick's case;
-// see docs/look-and-motion.md). Without art, a generated cover, with the top-edge highlight of a
-// raised surface.
+// A game's picture, fitted into its place (square, or shaped like the game's screen), with sharp
+// top and rounded bottom corners (the Brick's case; see docs/look-and-motion.md). Without one, a
+// generated cover, with the top-edge highlight of a raised surface.
 component CoverView inherits Rectangle {
     in property <Cover> cover;
     border-bottom-left-radius: Theme.radius;
@@ -160,11 +160,12 @@ component CoverView inherits Rectangle {
     if !cover.has-art : Rectangle { y: 0; height: Theme.line; background: #ffffff2e; }
 }
 
-// One cell of a grid: the cover, and the title underneath. The focused cell lifts and gets an
-// outline in the focus colour.
+// One cell of a grid: the cover, `shape` times as tall as wide, and the title underneath. The
+// focused cell lifts and gets an outline in the focus colour.
 component GridCell inherits Rectangle {
     in property <RowData> data;
     in property <bool> focused;
+    in property <float> shape;
     visible: data.shown;
     x: data.x * 1px * Theme.u;
     y: data.top * 1px * Theme.u - (focused ? 8px * Theme.u : 0);
@@ -174,13 +175,13 @@ component GridCell inherits Rectangle {
     opacity: focused ? 1 : 0.55;
     animate opacity { duration: Motion.fade; }
     if focused : Rectangle {
-        width: parent.width + 2 * Theme.line; height: parent.width + 2 * Theme.line; x: -Theme.line; y: -Theme.line;
+        width: parent.width + 2 * Theme.line; height: parent.width * root.shape + 2 * Theme.line; x: -Theme.line; y: -Theme.line;
         border-bottom-left-radius: Theme.radius + Theme.line; border-bottom-right-radius: Theme.radius + Theme.line;
         border-width: Theme.line; border-color: Theme.focus;
     }
-    CoverView { y: 0; width: parent.width; height: parent.width; cover: data.cover; }
+    CoverView { y: 0; width: parent.width; height: parent.width * root.shape; cover: data.cover; }
     Text {
-        y: parent.width + 10px * Theme.u; width: parent.width;
+        y: parent.width * root.shape + 10px * Theme.u; width: parent.width;
         text: data.label; overflow: elide; font-size: Theme.caption; color: focused ? Theme.fg : Theme.dim;
     }
 }
@@ -335,6 +336,9 @@ export component AppWindow inherits Window {
     in property <[RowData]> rows;
     // Beside a list with pictures: the focused row's picture.
     in property <Cover> picture;
+    // How tall pictures are drawn, as a fraction of their width (beside the list, in a grid's
+    // cells and flying to and from the game; see list::picture_shape).
+    in property <float> picture-shape: 1;
     // The focus plate (the focused row's or cell's place) and scroll offset, in u (from the
     // core's list layout).
     in property <float> plate-x;
@@ -399,6 +403,7 @@ export component AppWindow inherits Window {
     // (lifted 8px while focused, see GridCell).
     property <bool> in-grid: root.layout == ScreenLayout.grid;
     property <length> cover-size: root.in-grid ? root.plate-width * 1px * Theme.u : min(root.width * 0.42 - 16px * Theme.u - Theme.gutter, 400px * Theme.u);
+    property <length> cover-height: root.cover-size * root.picture-shape;
     property <length> cover-x: root.in-grid ? Theme.gutter + root.plate-x * 1px * Theme.u : root.width * 0.58 + 16px * Theme.u;
     property <length> cover-y: Theme.status-bar + (root.in-grid ? Theme.title-area + (root.plate-top - root.scroll - 8) * 1px * Theme.u : 24px * Theme.u);
     // The game shows once its cover has arrived and it is revealed.
@@ -516,7 +521,7 @@ export component AppWindow inherits Window {
                     for row in root.rows : RowView { data: row; focused: row.focused; }
                 }
                 if root.layout == ScreenLayout.grid : Rectangle {
-                    for row in root.rows : GridCell { data: row; focused: row.focused; }
+                    for row in root.rows : GridCell { data: row; focused: row.focused; shape: root.picture-shape; }
                 }
                 if root.layout == ScreenLayout.keys : Rectangle {
                     TextEntry {
@@ -551,7 +556,7 @@ export component AppWindow inherits Window {
         if root.layout == ScreenLayout.list-with-picture : Rectangle {
             x: list.width + 16px * Theme.u; y: 24px * Theme.u;
             width: parent.width - self.x - Theme.gutter;
-            CoverView { y: 0; width: min(parent.width, 400px * Theme.u); height: self.width; cover: root.picture; }
+            CoverView { y: 0; width: min(parent.width, 400px * Theme.u); height: self.width * root.picture-shape; cover: root.picture; }
         }
     }
 
@@ -571,7 +576,7 @@ export component AppWindow inherits Window {
         x: root.cover-x + (root.game-x - root.cover-x) * root.toward-game;
         y: root.cover-y + (root.game-y - root.cover-y) * root.toward-game;
         width: root.cover-size + (root.game-w - root.cover-size) * root.toward-game;
-        height: root.cover-size + (root.game-h - root.cover-size) * root.toward-game;
+        height: root.cover-height + (root.game-h - root.cover-height) * root.toward-game;
     }
     // Over the cover, from the launch until the game shows (or fails to start).
     SplashPlate {
