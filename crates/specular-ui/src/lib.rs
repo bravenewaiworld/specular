@@ -64,17 +64,6 @@ fn clock(id: libc::clockid_t) -> Duration {
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
-/// For the frame statistics: how many texts Slint has shaped, and how many times it broke a
-/// text's lines again, in `window` so far (its text layout cache's misses; a text measured for a
-/// layout's widths is cached apart, so its misses count as shaped too). Slint counts them
-/// only with i-slint-core's `testing` feature (which adds nothing else), and offers them only in
-/// its internal API, so this is tied to the Slint version pinned in Cargo.toml.
-fn text_layout_misses(window: &slint::Window) -> (u64, u64) {
-    let adapter = i_slint_core::window::WindowInner::from_pub(window).window_adapter();
-    adapter.renderer().text_layout_cache()
-        .map_or((0, 0), |c| (c.cache_miss_count() + c.content_widths_miss_count(), c.layout_miss_count()))
-}
-
 /// Gives Slint the fonts to fall back on for characters Geist lacks: Specular's emoji font
 /// (network and device names have emoji), then the font files in the SD card's `fonts/` (for
 /// scripts such as Japanese; see docs/look-and-motion.md). Slint looks for fallback fonts only
@@ -1181,8 +1170,7 @@ impl Runner {
     fn after_render(&self) {
         let mut times = self.frame_times.borrow_mut();
         let (Some(times), Some(w)) = (times.as_mut(), self.window.upgrade()) else { return };
-        let (shaped, broken) = text_layout_misses(w.window());
-        let work = frames::Work { shaped, broken, slots_changed: self.slots_changed.get(), slots: self.slots.get() };
+        let work = frames::Work { slots_changed: self.slots_changed.get(), slots: self.slots.get() };
         let lines = times.drawn(now(), cpu_time(), w.window().has_active_animations(), work);
         lines.into_iter().flatten().for_each(|line| eprintln!("ui: {line}"));
     }

@@ -8,12 +8,6 @@ use std::time::Duration;
 /// animation's line says how much each total grew from the frame before it started to its last.
 #[derive(Clone, Copy, Default)]
 pub struct Work {
-    /// Texts Slint shaped (to draw them or to measure them for a layout), and texts whose lines
-    /// it broke again: its text layout cache's misses. A text is shaped again only when a
-    /// property its shaping reads (text, font, size, weight) is marked changed, even to an equal
-    /// value.
-    pub shaped: u64,
-    pub broken: u64,
     /// Row slots given a new row, or a change to theirs.
     pub slots_changed: u64,
     /// The row slots, as of the last `Runner::refresh`: how many there are, how many hold a row
@@ -110,9 +104,9 @@ impl FrameTimes {
         Some([
             format!("{} frame times: median {:.1} ms, longest {:.1} ms; {} late, {} extra",
                 c.times, ms(time), ms(longest_time), c.late, c.extra),
-            format!("CPU a frame: median {:.1} ms, {:.1} ms of it drawing (longest {:.1}, {:.1}); {} texts shaped, {} line breaks, {} row slots changed; {slots} slots, {in_use} with rows, {on_screen} on screen",
+            format!("CPU a frame: median {:.1} ms, {:.1} ms of it drawing (longest {:.1}, {:.1}); {} row slots changed; {slots} slots, {in_use} with rows, {on_screen} on screen",
                 ms(cpu), ms(drawing), ms(longest_cpu), ms(longest_drawing),
-                work.shaped - start.shaped, work.broken - start.broken, work.slots_changed - start.slots_changed),
+                work.slots_changed - start.slots_changed),
         ])
     }
 
@@ -134,12 +128,12 @@ mod tests {
     #[test]
     fn counts_late_and_extra_frames_only_while_animating() {
         let mut f = FrameTimes::new(60.0);
-        let work = |shaped| Work { shaped, broken: 0, slots_changed: 0, slots: (23, 17, 7) };
+        let work = |slots_changed| Work { slots_changed, slots: (23, 17, 7) };
         // The CPU clock keeps pace with the wall clock (so the CPU time per frame is the frame
         // time); 2 ms of each frame is drawing.
-        let mut frame = |t: f64, animating, shaped| {
+        let mut frame = |t: f64, animating, slots_changed| {
             f.drawing(at(t + 1.0));
-            f.drawn(at(t), at(t + 3.0), animating, work(shaped))
+            f.drawn(at(t), at(t + 3.0), animating, work(slots_changed))
         };
         // A frame after idle time, then an animation: on time, one refresh missed, two frames
         // in one refresh, and its last frame.
@@ -150,8 +144,8 @@ mod tests {
         assert_eq!(frame(1052.0, true, 3), None);
         let lines = frame(1068.7, false, 4).unwrap();
         assert_eq!(lines[0], "4 frame times: median 16.7 ms, longest 33.3 ms; 1 late, 1 extra");
-        // The texts shaped from the end of the frame before the animation to its last.
-        assert_eq!(lines[1], "CPU a frame: median 16.7 ms, 2.0 ms of it drawing (longest 33.3, 2.0); 3 texts shaped, 0 line breaks, 0 row slots changed; 23 slots, 17 with rows, 7 on screen");
+        // The row slots changed from the end of the frame before the animation to its last.
+        assert_eq!(lines[1], "CPU a frame: median 16.7 ms, 2.0 ms of it drawing (longest 33.3, 2.0); 3 row slots changed; 23 slots, 17 with rows, 7 on screen");
         // Idle again: the next frame's time since the last isn't counted.
         assert_eq!(frame(5000.0, false, 4), None);
         assert_eq!(f.summary(), "UI: 4 frame times · 1 late · 1 extra · longest 33.3 ms\nlast animation: CPU 16.7 ms a frame, 2.0 ms drawing");
