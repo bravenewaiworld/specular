@@ -538,9 +538,9 @@ impl App {
         (min, line)
     }
 
-    /// When the running game is autosaved during play: as `builtin::AUTOSAVE` says for it (as for
-    /// `cpu_min`), else as its core's `CoreDecl::autosave` does; with a line for the log saying
-    /// which and why. With no game, `Every10s`.
+    /// When the running game is autosaved during play: as `builtin::AUTOSAVE` says for it (its own
+    /// file, else its system's, else the global one), its core's `CoreDecl::autosave` for "core
+    /// default"; with a line for the log saying which and why. With no game, `Every10s`.
     pub fn autosave(&self) -> (library::Autosave, String) {
         let Some((game, core)) = self.playing.as_ref().zip(self.playing_core()) else { return (library::Autosave::Every10s, "no game is playing".into()) };
         let (value, from) = self.ctx.settings.get(builtin::AUTOSAVE, &game.settings_layer()).unwrap_or((&serde_json::Value::Null, None));

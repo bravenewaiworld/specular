@@ -57,7 +57,7 @@ pub struct LaunchSpec {
     /// zstd-compressed, like every save state, so other frontends can't read it as it is.
     pub autosave: Option<PathBuf>,
     /// `Autosave::Every10s`: the autosave is also written every 10 s of play (time paused
-    /// doesn't count). `Autosave::AtPauses`: it isn't. (`App::autosave` in specular-core.)
+    /// doesn't count). `Autosave::AtPauses`: it isn't. Chosen by `App::autosave` in specular-core.
     pub autosave_when: Autosave,
     /// Where cores look for BIOS files (the card's `bios/`): libretro's system directory.
     pub system_dir: PathBuf,
