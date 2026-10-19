@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use specular_core::app::Discs;
-use specular_core::cpu::{CpuMin, UI_TIME};
+use specular_core::cpu::CpuMin;
 use specular_core::device::{SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
@@ -347,6 +347,10 @@ fn percentile(sorted: &[Duration], q: usize) -> Duration { sorted.get(sorted.len
 /// How much play passes between autosaves, and between checks for a changed battery save (for
 /// cores that don't say when the game writes it).
 const CHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The time the UI needs to draw and present a frame once the core has made it: the frame delay
+/// leaves this much of each refresh after the slowest runs.
+const UI_TIME: Duration = Duration::from_millis(6);
 
 /// Times the game's frames (see the module doc).
 struct Pacer {

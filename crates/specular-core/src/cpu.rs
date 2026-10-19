@@ -14,11 +14,6 @@ pub const AUTO: &str = "auto";
 /// `settings::builtin::CPU_MIN`'s value for no minimum: the speed is the system's choice.
 pub const OFF: &str = "off";
 
-/// The time the UI needs to draw and present a frame once the core has made it. The runtime's
-/// frame delay leaves this much of each refresh, and a step down is taken only if it would still
-/// leave this much after the slowest runs (see `HEADROOM`).
-pub const UI_TIME: Duration = Duration::from_millis(6);
-
 /// The lowest step `CpuMin::new` uses; it drops the steps below. So its first step up from the
 /// system's default is to this speed, and a step down from it goes back to the default. Chosen
 /// for the Brick: the steps up to 1008 MHz run at 900 mV and 1200 MHz at 937.5 mV (Crystaline OS's
@@ -31,9 +26,10 @@ const LOWEST_USEFUL_MHZ: u32 = 1200;
 const MISS_PAIR: Duration = Duration::from_secs(1);
 /// How long every frame must be on time before the minimum may drop a step.
 const ON_TIME: Duration = Duration::from_secs(10);
-/// A step down is taken only if the slowest runs, slowed to the lower speed, and `UI_TIME` would
-/// fit in this share of a refresh (percent).
-const HEADROOM: u32 = 75;
+/// A step down is taken only if the slowest runs, slowed to the lower speed, would fit in this
+/// share of a refresh (percent). The UI's drawing isn't counted: it runs on a thread of its own,
+/// beside the core's.
+const HEADROOM: u32 = 85;
 
 /// Chooses the CPU's minimum speed, among the CPU's speed steps, from the game's frames (see the
 /// module's documentation). Its levels are, lowest first, the system's default (None) and each
@@ -68,7 +64,7 @@ pub enum Decision {
     /// the log).
     Set(Option<u32>, String),
     /// Nothing can be done; only log this. Said once: frames still miss their refresh at the top
-    /// step (a heat limit may be holding the CPU below it).
+    /// step.
     Note(String),
 }
 
@@ -120,16 +116,18 @@ impl CpuMin {
         let up = self.level.map_or(0, |i| i + 1);
         if up == self.steps.len() {
             if std::mem::replace(&mut self.told_top, true) { return None; }
-            return Some(Decision::Note(format!("{why}, the top step: a heat limit may be holding the CPU below it")));
+            return Some(Decision::Note(format!("{why}, the top step: there is no faster one to set")));
         }
         self.level = Some(up);
         Some(Decision::Set(self.current(), why))
     }
 
     /// After `ON_TIME` on time: the level a step down, if the slowest runs (the 95th percentile),
-    /// slowed in proportion to the lower speed, plus `UI_TIME`, fit in `HEADROOM` percent of a
-    /// refresh. From the lowest step to the system's default, the runs are judged at the lowest
-    /// step's speed, as the governor runs a busy game about that fast (see `LOWEST_USEFUL_MHZ`).
+    /// slowed in proportion to the lower speed, fit in `HEADROOM` percent of a refresh. Work bound
+    /// by memory slows less than the clock, so this errs towards stepping down; if frames then
+    /// miss, they step back up, and the next step down is `ON_TIME` later. From the lowest step to
+    /// the system's default, the runs are judged at the lowest step's speed, as the governor runs
+    /// a busy game about that fast (see `LOWEST_USEFUL_MHZ`).
     fn step_down(&mut self, period: Duration) -> Option<Decision> {
         let i = self.level?;
         let lower = i.checked_sub(1);
@@ -137,7 +135,7 @@ impl CpuMin {
         self.runs.sort();
         let slowest = self.runs[self.runs.len() * 95 / 100];
         let slowed = slowest * speed / lower_speed;
-        if slowed + UI_TIME >= period * HEADROOM / 100 { return None; }
+        if slowed >= period * HEADROOM / 100 { return None; }
         self.level = lower;
         let ms = |d: Duration| d.as_secs_f64() * 1e3;
         Some(Decision::Set(self.current(), format!("{} s on time; slowest runs {:.1} ms, about {:.1} ms at {}",
@@ -250,23 +248,28 @@ mod tests {
 
     #[test]
     fn ten_seconds_on_time_with_room_to_spare_step_down() {
-        let mut c = CpuMin::new(STEPS.into(), Some(1800));
-        // 4 ms at 1800 MHz is about 4.5 ms at 1608: with the UI's 6 ms, well within 75 % of a refresh.
-        let decisions = on_time(&mut c, ms(10_000), ms(4));
-        let [Decision::Set(Some(1608), why)] = &decisions[..] else { panic!("{decisions:?}") };
-        assert_eq!(why, "10 s on time; slowest runs 4.0 ms, about 4.5 ms at 1608 MHz");
+        // Symphony of the Night on the Brick: 12 ms at 2000 MHz is about 13.3 ms at 1800, within
+        // 85 % of a refresh (14.1 ms).
+        let mut c = CpuMin::new(STEPS.into(), Some(2000));
+        let decisions = on_time(&mut c, ms(10_000), ms(12));
+        let [Decision::Set(Some(1800), why)] = &decisions[..] else { panic!("{decisions:?}") };
+        assert_eq!(why, "10 s on time; slowest runs 12.0 ms, about 13.3 ms at 1800 MHz");
         // And again after another 10 s, not before.
         assert!(on_time(&mut c, ms(9_000), ms(4)).is_empty());
-        assert_eq!(c.current(), Some(1608));
+        assert!(matches!(&on_time(&mut c, ms(1_000), ms(4))[..], [Decision::Set(Some(1608), _)]));
     }
 
     #[test]
     fn no_step_down_without_room_to_spare() {
-        let mut c = CpuMin::new(STEPS.into(), Some(1800));
-        // 6 ms at 1800 is 6.7 ms at 1608, and with the UI's 6 ms over 75 % of a refresh (12.5 ms).
-        let decisions = on_time(&mut c, ms(30_000), ms(6));
+        // Metal Gear Solid on the Brick: 14.5 ms at 2000 MHz is about 16.1 ms at 1800, over 85 %
+        // of a refresh (14.1 ms).
+        let mut c = CpuMin::new(STEPS.into(), Some(2000));
+        let decisions = on_time(&mut c, ms(30_000), Duration::from_micros(14_500));
         assert!(decisions.is_empty(), "{decisions:?}");
-        assert_eq!(c.current(), Some(1800));
+        assert_eq!(c.current(), Some(2000));
+        // Symphony of the Night once at 1800: 13.3 ms is about 14.9 ms at 1608.
+        let mut c = CpuMin::new(STEPS.into(), Some(1800));
+        assert!(on_time(&mut c, ms(30_000), Duration::from_micros(13_300)).is_empty());
         // A miss restarts the 10 s: none is taken 10 s after the start if a miss came meanwhile.
         let mut c = CpuMin::new(STEPS.into(), Some(1800));
         on_time(&mut c, ms(5_000), ms(4));

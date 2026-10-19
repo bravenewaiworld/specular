@@ -1148,7 +1148,8 @@ impl Runner {
             let rumble = r.rumble.as_ref().map(|l| l.wanted()).filter(|&m| m != Motors::STILL)
                 .map_or(String::new(), |m| format!(" · rumble {} %", m.strong.max(m.weak) as u32 * 100 / 0xffff));
             let cpu = s.cpu_min.map_or(String::new(), |mhz| format!(" · CPU ≥ {mhz} MHz"));
-            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms · {sound}{rumble}{cpu}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
+            // Two lines, so that all of it fits across the Brick's screen.
+            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms\n{sound}{rumble}{cpu}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
         });
     }
 
