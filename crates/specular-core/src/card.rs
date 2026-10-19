@@ -1,6 +1,7 @@
 //! The SD card, as the system reports it. On Crystaline OS the system mounts the card as it comes
-//! and goes and writes how it stands to a state file (`Card::parse` reads it); a device whose
-//! system doesn't (the desktop) reports `Card::mounted()`. A device reports it through a
+//! and goes and writes how it stands to a state file (`Card::parse` reads it); without a card
+//! service (the desktop, by default) the card counts as `Card::mounted()`. A device reports it
+//! through a
 //! `CardService`, the same kind of service as the radios (`wireless::Wireless`), so the wireless
 //! trace and scenarios cover it too.
 
@@ -12,6 +13,7 @@ use crate::wireless::Wireless;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Card {
+    /// How the card stands (the state file's first word).
     pub status: CardStatus,
     /// Why, for `ReadOnly` and `Failed`: a stable word, e.g. "damaged", "write-protected",
     /// "no-partition", "system-card-removed".
@@ -19,7 +21,7 @@ pub struct Card {
     /// What to tell the user, as the system words it (what happened, what still works, what to
     /// do); may be empty (see `text`).
     pub message: String,
-    /// The card's identity (its CID): tells whether the same card came back after a removal.
+    /// The card's identity (its CID, the identification number built into the card): tells whether the same card came back after a removal.
     pub id: Option<String>,
     /// How the filesystem check before mounting went: "clean", "unclean", "repaired",
     /// "errors-left" or "not-run".
@@ -31,7 +33,7 @@ pub struct Card {
 pub enum CardStatus {
     /// No card in the slot.
     Absent,
-    /// A card was found and is being checked (on a first start, also partitioned).
+    /// A card was found and is being checked (the first time the system starts from a new card, it is also partitioned).
     Checking,
     /// Mounted read-write.
     #[default]
@@ -69,8 +71,8 @@ impl Card {
     /// ```
     ///
     /// Unknown keys on line 3 are ignored, and empty values are None. A first line it doesn't
-    /// know (from a newer system, or a damaged file) reads as `Failed`, with that line as the
-    /// reason, so the message is still shown and the library isn't used.
+    /// know (from a newer system, or a damaged file) reads as `Failed`, with the reason
+    /// `unknown state: <line>`, so the message is still shown and the library isn't used.
     pub fn parse(text: &str) -> Self {
         let mut lines = text.lines();
         let first = lines.next().unwrap_or_default().trim();

@@ -51,8 +51,8 @@ pub enum Msg {
     /// `GameEnded`, `GameStopped` and at startup: the idle count starts from the first tick after
     /// those.
     Tick(Duration),
-    /// A library scan (`Effect::ScanLibrary`) finished, or rescanned after the games changed.
-    /// Ignored while the card can't be read.
+    /// A library scan of the card finished: the first of an `Effect::ReadCard`, or another after
+    /// the card's files changed. Ignored while the card can't be read.
     Library(Vec<Game>),
     /// The cores changed (cores the user added were found or removed, or one's options learned):
     /// the systems Specular plays now, with their cores, every setting with those cores' options
@@ -123,12 +123,13 @@ pub enum Effect {
     SaveSettings(Layer),
     /// Read the SD card afresh: its settings files (`Msg::SettingsLoaded`, the global one first),
     /// then its cores (`Msg::Cores`) and games (`Msg::Library`), watching its folders anew
-    /// (watches on a card that was released never fire again) and reading them again whenever
-    /// they change. Nothing from an earlier reading may arrive after this. Only a `writable`
-    /// card has its config folder brought up to date and files Specular generates written.
+    /// (watches on a card that was unmounted never fire again) and reading them again whenever
+    /// they change. The UI must drop anything from an earlier reading that arrives after this.
+    /// Only a `writable` card has its config folder brought up to date and files Specular
+    /// generates written.
     ReadCard { writable: bool },
-    /// Stop reading and watching the card: it is gone. Nothing from its reading may arrive after
-    /// this.
+    /// Stop reading and watching the card: it is gone. The UI must drop anything from its reading
+    /// that arrives after this.
     ForgetCard,
     /// One of Specular's settings has this value where it applies now: at the running game's layer
     /// while one is played, else the global one. Sent for every setting once the global settings
@@ -166,7 +167,7 @@ pub enum Effect {
     /// still carries it.
     Mute(bool),
     /// Sleep. A running game is paused first, and its saves written if the card can be written
-    /// (`Ctx::card`): power can fail while asleep.
+    /// (`Ctx::card_writable`): power can fail while asleep.
     Sleep,
     /// Turn the device off. If a game is being played, the app sends `QuitGame` just before this
     /// (in the same list), so its saves are written first (`AbandonGame` if the card can't be
@@ -191,6 +192,7 @@ pub enum Effect {
     Sound(Sound),
     /// A command for the UI's time zone thread. The UI redraws the clock once a zone is set.
     TimeZone(ZoneCmd),
+    /// Send this to the card service (`Recheck` after a write failed as read-only).
     Card(CardCmd),
 }
 
@@ -754,9 +756,9 @@ impl App {
 
     /// A settings layer was read: once the global one is, every setting is applied.
     fn layer_loaded(&mut self, layer: Layer, values: serde_json::Map<String, serde_json::Value>) -> Vec<Effect> {
-        // A change made before the file was loaded was saved without the file's values (and
-        // replaced it; the load was asked for first, so it read the file before): save the two
-        // together.
+        // A change made before this layer's file was loaded has been saved on its own,
+        // overwriting the file. The load was asked for first, so it read the file before that
+        // save; saving the merged values now puts the file's own values back.
         let save = (!self.ctx.settings.layer(&layer).is_empty()).then(|| Effect::SaveSettings(layer.clone()));
         let global = layer == Layer::Global;
         self.ctx.settings.set_layer(layer, values);

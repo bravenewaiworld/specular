@@ -32,7 +32,7 @@ pub fn read(path: &Path) -> Card {
     match std::fs::read_to_string(path) {
         Ok(text) => Card::parse(&text),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Card::mounted(),
-        // Taken as there, rather than keeping the library from a card that may well be fine.
+        // Treated as mounted, rather than hiding the library of a card that may well be fine.
         Err(e) => { eprintln!("card: can't read {}, so the card counts as mounted: {e}", path.display()); Card::mounted() }
     }
 }
@@ -69,7 +69,8 @@ fn watch(path: &Path) -> io::Result<(OwnedFd, Vec<u8>)> {
     if fd < 0 { return Err(io::Error::last_os_error()); }
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
     let dir = CString::new(dir.as_os_str().as_encoded_bytes()).map_err(io::Error::other)?;
-    // Renamed into place (the system's way), or written in place (by hand, on a desktop).
+    // Renamed into place (the system's way), written in place (by hand, on a desktop), or deleted
+    // (which reads as mounted).
     if unsafe { libc::inotify_add_watch(fd.as_raw_fd(), dir.as_ptr(), libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE | libc::IN_DELETE) } < 0 {
         return Err(io::Error::last_os_error());
     }

@@ -1,16 +1,18 @@
 //! Following the SD card as the device reports it (`Msg::Card`). The library and the settings
 //! live on the card, so:
 //!
-//! - A card that can be read and wasn't before (or another card) is read afresh: its settings
-//!   replace those in memory, and its library is scanned (`Effect::ReadCard`).
+//! - A card that becomes readable, changes between mounted and read-only, or is another card
+//!   (another id) is read afresh: its settings replace those in memory, and its library is
+//!   scanned (`Effect::ReadCard`).
 //! - A card that can't be read (absent, being checked, failed) empties the library, and home
 //!   shows the system's message in its place. A read-only card's message stays above the
-//!   library; a repair is told once, until dismissed.
+//!   library. After a repair, its message shows above the library until dismissed (for that
+//!   mounting only).
 //! - Nothing is written to a card that can't be written: settings stay in memory, a game can't
 //!   save its state, and quitting doesn't write its saves.
 //! - A game whose card goes is paused under `screens::CARD_WAIT`, which asks for the card back.
-//!   The same card back (by id) and writable saves the game and returns to the library; quitting
-//!   instead loses what wasn't saved. Playing on isn't offered: disc games stream from the card.
+//!   When the same card (matched by id) is back and writable, the game is saved and the app
+//!   returns to the library; quitting instead loses what wasn't saved. Playing on isn't offered: disc games stream from the card.
 //! - A write that fails as read-only while the card counts as writable means the kernel turned
 //!   it read-only after an error, which it announces nowhere: the device is asked to look again
 //!   (`CardCmd::Recheck`), which reports it read-only.
@@ -43,7 +45,8 @@ impl App {
             if before.as_ref().is_some_and(Card::readable) { e.push(Effect::ForgetCard); }
             self.ctx.games.clear();
             self.ctx.card_note = false;
-            // Started without a card: the device runs on the default settings meanwhile.
+            // No settings loaded (started without a readable card, or the card went before its
+            // settings were read): the defaults apply until a card is read.
             if !self.settings_loaded { e.extend(self.layer_loaded(Layer::Global, Default::default())); }
             // A system's game list has nothing left to show; home says why.
             if self.playing.is_none() && self.nav.top().id == screens::GAMES { e.extend(self.go(|nav| nav.home())); }

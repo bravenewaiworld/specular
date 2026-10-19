@@ -565,7 +565,8 @@ enum Io {
 fn io_thread(data: DataRoot) -> (mpsc::Sender<Io>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel::<Io>();
     let handle = std::thread::spawn(move || {
-        // The card's scan, and whether settings may be written to its config folder.
+        // The card's scan, whether settings may be written to its config folder, and whether the
+        // next reading is the run's first (see `read_card`).
         let (mut scan, mut writable, mut first) = (None::<watch::Stop>, false, true);
         let mut saves = HashMap::new();
         while let Ok(cmd) = rx.recv() {
@@ -594,11 +595,11 @@ fn store_settings(saves: &mut HashMap<PathBuf, serde_json::Map<String, serde_jso
 /// Reads the card, as reading number `reading`: brings its config folder up to date (only if
 /// `writable`), loads its settings files, then starts its scan (`scan_thread`). Returns what
 /// stops the scan (None if the card can't be watched: then it scans once), and whether settings
-/// can be written to the card. `first`: the run's first reading, which reports the launch record
-/// an earlier run left behind.
+/// can be written to the card. `first`: whether this is the run's first reading; only that one
+/// reports the launch record an earlier run left behind.
 fn read_card(data: &DataRoot, reading: u32, writable: bool, first: bool) -> (Option<watch::Stop>, bool) {
-    // False if migrating failed: then nothing is written to the config folder (see `migrate`),
-    // and changes stay in memory.
+    // False if the card isn't writable or migrating failed: then nothing is written to the config
+    // folder (see `migrate`), and changes stay in memory.
     let migrated = writable && settings::migrate::migrate(&data.0);
     if writable && !migrated { on_ui(|r| r.toast("Settings can't be saved until the SD card is inserted again. The log says why.")); }
     let (config, systems) = (data.config(), playable_systems());
@@ -623,7 +624,7 @@ fn read_card(data: &DataRoot, reading: u32, writable: bool, first: bool) -> (Opt
 /// afresh or forgotten since (see `Runner::reading`).
 fn post_reading(reading: u32, msg: Msg) { on_ui(move |r| if r.reading.get() == reading { r.handle(msg) }); }
 
-/// Logs a failed write to the card (`what` failed: `e`), and tells the app if the card refused it
+/// Logs `<what>: <e>` for a failed write to the card, and tells the app if the card refused it
 /// as read-only (`Msg::CardReadOnly`).
 fn wrote_to_card(what: &str, e: &std::io::Error) {
     eprintln!("{what}: {e}");
@@ -637,8 +638,8 @@ fn tell_if_read_only(e: &std::io::Error) {
 
 /// The library scan of reading number `reading` of the card, on a thread of its own: looks for
 /// the card's cores, then scans the games and moves the saves of renamed ROMs; again whenever the
-/// files on the card change (`watch`), until it is stopped. Schemas are written only if the
-/// config folder is `writable` (see `read_card`).
+/// files on the card change (`watch`), until it is stopped. Schemas are written, and
+/// `cache/cores/` made, only if the config folder is `writable` (see `read_card`).
 fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch::CardWatch>) {
     let (config, roms, saves, cores_dir, learned) = (data.config(), data.roms(), data.saves(), data.cores(), data.learned_options());
     // The games whose settings files are loaded, and the files found to be for no game.
@@ -649,7 +650,8 @@ fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch
     let (mut systems, mut decls) = (Vec::new(), Vec::new());
     loop {
         // `cache/cores/` is made beforehand so it can be watched: options learned are written
-        // there as a core plays its first game, and become settings at the next look.
+        // there as a core plays its first game, and become settings at the next look. (Only on
+        // a writable card.)
         if writable && let Err(e) = std::fs::create_dir_all(&learned) { wrote_to_card(&format!("cores: can't make {}", learned.display()), &e); }
         if let Some(w) = &watch { w.watch(&roms, &[&cores_dir, &learned]); }
         let now = on_card.find(&cores_dir, &learned, &all);
@@ -676,7 +678,7 @@ fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch
         load_games_layers(reading, &config, &decls, &games, &mut loaded, &mut orphans);
         post_reading(reading, Msg::Library(games));
         // (Dropping the watch on the way out lets go of the card's folders, so a card pulled can
-        // be released.)
+        // be unmounted.)
         if !watch.as_ref().is_some_and(watch::CardWatch::wait_for_change) { return; }
     }
 }
@@ -1004,7 +1006,8 @@ impl Runner {
         }
     }
 
-    /// Starts a new reading of the card (or none, the card being gone), making the last stale.
+    /// Advances the reading number, so messages from earlier readings are dropped
+    /// (`post_reading`); returns the new number.
     fn next_reading(&self) -> u32 {
         self.reading.set(self.reading.get() + 1);
         self.reading.get()

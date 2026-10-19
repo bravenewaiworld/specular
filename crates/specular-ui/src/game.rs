@@ -100,7 +100,7 @@ impl Playing {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
-            // (The runtime logs them.)
+            // The runtime logs failed save writes; this only tells the app of one refused as read-only.
             let write_failed = Box::new(crate::tell_if_read_only);
             let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt, write_failed };
             // So its saves can follow it if it is renamed (see `library::saves`).

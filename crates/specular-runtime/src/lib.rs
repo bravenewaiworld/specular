@@ -101,7 +101,7 @@ pub struct Outputs {
     /// resuming one would halt again, even with a BIOS file added since.
     pub on_bios_halt: Box<dyn Fn() + Send>,
     /// Called on the save writer's thread for each save that couldn't be written (it is also
-    /// logged), including those written in the background, which no call returns.
+    /// logged), including background writes, whose errors no `Session` method returns.
     pub write_failed: Box<dyn Fn(&io::Error) + Send>,
 }
 

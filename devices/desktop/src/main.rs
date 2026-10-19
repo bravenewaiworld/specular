@@ -5,7 +5,8 @@
 //! Usage: specular [data folder, with roms/ and config/ (default ./sdcard)]
 //! Cores are looked for in `cores/` next to the binary, or in $SPECULAR_CORES. The SD card's
 //! state is read from the file $SPECULAR_CARD_STATE names, if set (format:
-//! `specular_core::card::Card::parse`), else from the scenario's, else it is always mounted.
+//! `specular_core::card::Card::parse`), else from the scenario's `"card"`
+//! script, if it has one, else it is always mounted.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,7 +51,8 @@ impl Device for Desktop {
 
 /// What the system's `mount-card` does when asked to look at the card again, for a card whose
 /// state is in the file `state`: a mounted card whose data folder (`data`) has turned read-only
-/// (remounted so; see DEVELOPMENT.md) is reported `read-only damaged`, as the kernel's doing.
+/// (remounted so; see DEVELOPMENT.md) is reported `read-only damaged`, as if the kernel had
+/// turned it read-only after an error.
 fn simulated_mount_card(state: &Path, data: &Path) -> io::Result<()> {
     let read_only = {
         let path = std::ffi::CString::new(data.as_os_str().as_encoded_bytes()).map_err(io::Error::other)?;
