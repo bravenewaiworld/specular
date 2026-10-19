@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::art::{self, ArtKind};
 use crate::card::{Card, CardCmd};
+use crate::cpu;
 use crate::device::{Battery, Output, Rgb, SshCmd, SshStatus};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
@@ -520,6 +521,20 @@ impl App {
     pub fn core_options(&self) -> Vec<(String, String)> {
         let Some((game, core)) = self.playing.as_ref().zip(self.playing_core()) else { return vec![] };
         crate::settings::core_options::values(&self.ctx.settings, core, &game.settings_layer())
+    }
+
+    /// The running game's CPU minimum (`cpu::for_game`, as `builtin::CPU_MIN` says at its layer),
+    /// given the CPU's speed steps (empty: the speed can't be set, and none is), with a line for
+    /// the log saying what it starts at and why. With no game, none.
+    pub fn cpu_min(&self, steps: Vec<u32>) -> (cpu::CpuMin, String) {
+        let Some((game, core)) = self.playing.as_ref().zip(self.playing_core()) else { return (cpu::CpuMin::default(), "no game is playing".into()) };
+        if steps.is_empty() { return (cpu::CpuMin::default(), "no minimum: the CPU's speed steps aren't known (it can't be set here, or not yet)".into()); }
+        let (value, from) = self.ctx.settings.get(builtin::CPU_MIN, &game.settings_layer()).unwrap_or((&serde_json::Value::Null, None));
+        let setting = value.as_str().unwrap_or(cpu::AUTO);
+        let (min, why) = cpu::for_game(setting, core.cpu_start, steps);
+        let file = from.map_or("its default".into(), |l| format!("in {}", l.file().display()));
+        let line = format!("{} starts with a minimum of {} ({why}; {} = \"{setting}\", {file})", core.name, cpu::text(min.current()), builtin::CPU_MIN);
+        (min, line)
     }
 
     /// The core that plays the running game: its system's, as its "Core" setting chooses

@@ -211,6 +211,19 @@ fn schemas_document_what_each_file_may_hold() {
 }
 
 #[test]
+fn a_setting_only_for_the_config_files_is_in_their_schemas_but_on_no_screen() {
+    let decls = builtin::settings();
+    let ps1 = Layer::Game { system: "ps1".into(), game: "ps1/Vagrant Story".into() };
+    let s = schema::schema(&decls, &ps1, &[], "", "");
+    assert_eq!(s["properties"][builtin::CPU_MIN]["default"], "auto");
+    assert_eq!(s["properties"][builtin::CPU_MIN]["enum"].as_array().unwrap()[..3], [json!("auto"), json!("off"), json!("408")]);
+    let settings = Settings::new(decls);
+    for at in [Layer::Global, ps1] {
+        assert!(settings.rows(&at, Visibility::Developer, None).iter().all(|r| r.id.0 != builtin::CPU_MIN));
+    }
+}
+
+#[test]
 fn files_point_to_their_schema_which_is_not_a_setting() {
     assert_eq!(Layer::Global.schema_ref(), "specular.schema.json");
     assert_eq!(gba().schema_ref(), "gba.schema.json");

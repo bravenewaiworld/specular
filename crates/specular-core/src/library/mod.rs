@@ -78,6 +78,10 @@ pub struct CoreDecl {
     /// Its save states hold the save memory too, so loading one rolls the battery save back (see
     /// `LaunchSpec::states_restore_save` in specular-runtime).
     pub states_restore_save: bool,
+    /// The CPU's minimum speed its games start at (MHz; `cpu::CpuMin` then follows their frames),
+    /// for a core the system's own choice of speed leaves short of full speed; None: the system's
+    /// default.
+    pub cpu_start: Option<u32>,
     /// The BIOS files it looks for in `bios/`.
     pub bios: &'static [Bios],
     /// For a core the user added, what its `.info` says and where it is; None for one Specular
@@ -160,7 +164,7 @@ impl CoreDecl {
 const MGBA: &CoreDecl = &CoreDecl {
     name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
     defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,
-    controller: None, states_restore_save: false, bios: &[], user: None,
+    controller: None, states_restore_save: false, cpu_start: None, bios: &[], user: None,
 };
 
 /// Nestopia, for the NES and the Famicom Disk System. Its NTSC filter is off: it widens the
@@ -169,7 +173,7 @@ const MGBA: &CoreDecl = &CoreDecl {
 const NESTOPIA: &CoreDecl = &CoreDecl {
     name: "Nestopia", library: "nestopia_libretro", options: nestopia::LIST,
     defaults: &[(nestopia::BLARGG_NTSC_FILTER, nestopia::blargg_ntsc_filter::DISABLED)], rom_by_path: false,
-    controller: None, states_restore_save: true,
+    controller: None, states_restore_save: true, cpu_start: None,
     bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }], user: None,
 };
 
@@ -179,11 +183,13 @@ const NESTOPIA: &CoreDecl = &CoreDecl {
 /// goes by name only, so it may log a missing BIOS that the core then finds. Its states hold the
 /// memory card (docs/runtime.md). Player 1 has a DualShock: SwanStation's default pad has no
 /// motors, so games couldn't rumble. A DualShock starts in digital mode, so a game that doesn't
-/// know it sees a plain pad, and the d-pad drives it in analog mode too (its default options).
+/// know it sees a plain pad, and the d-pad drives it in analog mode too (its default options). On
+/// the Brick it reaches full speed only with the CPU at 1.8 GHz or more, which the system's governor
+/// never picks for it (docs/runtime.md, Findings), so its games start with that as the minimum.
 const SWANSTATION: &CoreDecl = &CoreDecl {
     name: "SwanStation", library: "swanstation_libretro", options: swanstation::LIST,
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
-    controller: Some(PS_DUALSHOCK), states_restore_save: true,
+    controller: Some(PS_DUALSHOCK), states_restore_save: true, cpu_start: Some(1800),
     bios: &[Bios { games: "PlayStation games", extensions: &[],
         files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }], user: None,
 };

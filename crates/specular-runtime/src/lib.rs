@@ -8,8 +8,10 @@
 //! next refresh; starting late means buttons are read late, so a press reaches the screen
 //! sooner), then runs the core once and hands the frame to the UI. Without a vsync, or when the
 //! display's rate is far from the game's, the core is run by a timer at its own frame rate.
+//! Paced by the vsync, the frames also choose the CPU's minimum speed (see `cpu`).
 
 mod core;
+mod cpu;
 mod discs;
 mod frontend;
 mod log;
@@ -26,6 +28,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use specular_core::app::Discs;
+use specular_core::cpu::{CpuMin, UI_TIME};
 use specular_core::device::{SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
@@ -106,6 +109,13 @@ pub struct Outputs {
     /// Called on the save writer's thread for each save that couldn't be written (it is also
     /// logged), including background writes, whose errors no `Session` method returns.
     pub write_failed: Box<dyn Fn(&io::Error) + Send>,
+    /// Chooses the CPU's minimum speed while the game plays, from its frames (only those paced by
+    /// the vsync: a timer has no missed refreshes to see). `CpuMin::default()` sets none.
+    pub cpu_min: CpuMin,
+    /// Called on the game's thread to set the CPU's minimum speed (MHz; None: the system's
+    /// default): as the game starts, as `cpu_min` changes it, on pausing and resuming, and as the
+    /// game ends. It mustn't block: the device sets it on another thread.
+    pub set_cpu_min: Box<dyn Fn(Option<u32>) + Send>,
 }
 
 /// About the running game.
@@ -129,6 +139,9 @@ pub struct Stats {
     /// How much sound was waiting to play at the last frame (None without sound): rate control
     /// keeps it near half the output's queue.
     pub sound_queued: Option<Duration>,
+    /// The CPU's minimum speed while the game plays (MHz; None: the system's default; see
+    /// `Outputs::cpu_min`).
+    pub cpu_min: Option<u32>,
 }
 
 /// How many of the latest frames `Stats` covers.
@@ -142,6 +155,7 @@ struct Runs {
     /// When the core's current run began; None between runs (see `Session::watch`).
     running_since: Option<Instant>,
     sound_queued: Option<Duration>,
+    cpu_min: Option<u32>,
     /// The loudest sample since `Session::take_sound_peak` last took it.
     sound_peak: u16,
 }
@@ -253,7 +267,7 @@ impl Session {
         let mut sorted: Vec<Duration> = runs.recent.iter().copied().collect();
         sorted.sort();
         let worst = sorted.last().copied().unwrap_or_default();
-        Stats { frames: runs.count, median: percentile(&sorted, 50), p95: percentile(&sorted, 95), worst, sound_queued: runs.sound_queued }
+        Stats { frames: runs.count, median: percentile(&sorted, 50), p95: percentile(&sorted, 95), worst, sound_queued: runs.sound_queued, cpu_min: runs.cpu_min }
     }
 
     /// Calls `stuck`, once, if one run of the core (one frame, normally milliseconds) goes on for
@@ -333,8 +347,6 @@ fn percentile(sorted: &[Duration], q: usize) -> Duration { sorted.get(sorted.len
 /// How much play passes between autosaves, and between checks for a changed battery save (for
 /// cores that don't say when the game writes it).
 const CHECK_INTERVAL: Duration = Duration::from_secs(10);
-/// The UI's time to draw and present a frame once it has it; the frame delay leaves this much.
-const UI_TIME: Duration = Duration::from_millis(6);
 
 /// Times the game's frames (see the module doc).
 struct Pacer {
@@ -344,18 +356,26 @@ struct Pacer {
     delay: Duration,
     /// How long the latest runs of the core took.
     runs: Vec<Duration>,
+    /// When the last wait for the vsync returned; None before the first, and after a pause.
+    last_vsync: Option<Instant>,
 }
 
 impl Pacer {
     fn new(vsync: Option<Box<dyn Vsync>>, hz: f64) -> Self {
-        Self { vsync, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new() }
+        Self { vsync, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new(), last_vsync: None }
     }
 
-    /// Waits until the core should run.
-    fn wait(&mut self) {
+    /// Waits until the core should run. With a vsync, returns how long after the previous wait
+    /// this one's vsync came (None for the first, after a pause, and on a timer).
+    fn wait(&mut self) -> Option<Duration> {
         if let Some(v) = self.vsync.as_mut() {
             match v.wait() {
-                Ok(()) => { std::thread::sleep(self.delay); return; }
+                Ok(()) => {
+                    let now = Instant::now();
+                    let gap = self.last_vsync.replace(now).map(|last| now - last);
+                    std::thread::sleep(self.delay);
+                    return gap;
+                }
                 Err(e) => { eprintln!("game: waiting for the display failed ({e}); pacing by a timer"); self.vsync = None; }
             }
         }
@@ -363,6 +383,17 @@ impl Pacer {
         if self.next > now { std::thread::sleep(self.next - now); }
         // After a stall (or a pause), start again from now rather than rushing to catch up.
         self.next = (self.next + self.period).max(now);
+        None
+    }
+
+    /// The game paused or resumed: the next wait's gap would count the pause.
+    fn paused(&mut self) { self.last_vsync = None; }
+
+    /// Measures the frame delay afresh, from none (the CPU's speed changed, so runs take another
+    /// time: a delay sized for a faster CPU would make the next frames miss their refresh).
+    fn remeasure(&mut self) {
+        self.delay = Duration::ZERO;
+        self.runs.clear();
     }
 
     /// With a vsync, records how long a run took, and every 60 runs sets the frame delay to what
@@ -405,6 +436,9 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     let g = av.geometry;
     let options = frontend::with(|f| f.options.declared.clone()).unwrap_or_default();
     let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps, options }));
+    // Dropped as this returns, setting the system's default again.
+    let mut cpu = cpu::CpuSpeed::start(out.cpu_min, out.set_cpu_min);
+    runs.lock().unwrap().cpu_min = cpu.level();
 
     // Counted in frames played, so time paused doesn't count.
     let check_frames = (CHECK_INTERVAL.as_secs_f64() * fps) as u32;
@@ -421,6 +455,8 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                 Cmd::Pause(p) => {
                     paused = p;
                     frontend::with(|f| f.pause_rumble(p));
+                    pacer.paused();
+                    cpu.pause(p);
                 }
                 Cmd::Reset => unsafe { (game.core.reset)() },
                 Cmd::SaveState(path, reply) => game.save_state(path, reply),
@@ -435,14 +471,16 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
             }
             continue;
         }
-        pacer.wait();
+        let gap = pacer.wait();
         let t = Instant::now();
         runs.lock().unwrap().running_since = Some(t);
         unsafe { (game.core.run)() };
         let took = t.elapsed();
         pacer.ran(took);
+        if let Some(gap) = gap && cpu.frame(gap, took, pacer.period) { pacer.remeasure(); }
         {
             let mut r = runs.lock().unwrap();
+            r.cpu_min = cpu.level();
             r.running_since = None;
             r.count += 1;
             r.recent.push_back(took);

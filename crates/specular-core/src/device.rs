@@ -212,6 +212,18 @@ pub trait Ssh: Send {
     fn send(&self, cmd: SshCmd) -> Result<SshStatus, String>;
 }
 
+/// The CPU's speed: a minimum Specular sets while a game plays (see `cpu::CpuMin`), above which
+/// the system's governor still chooses.
+pub trait Cpu: Send {
+    /// Readies the CPU for `set_min` (on the Brick, applies the balanced power profile, which
+    /// setting a minimum needs) and returns its speed steps (MHz, ascending). Called once, before
+    /// any `set_min`. Err: why not, in the system's words; no minimum is set then.
+    fn prepare(&self) -> Result<Vec<u32>, String>;
+    /// Sets the lowest speed the CPU may run at (MHz, rounded up to a step; None: the system's
+    /// default). A heat limit can still hold the CPU below it. Err: why not, in the system's words.
+    fn set_min(&self, mhz: Option<u32>) -> Result<(), String>;
+}
+
 /// A device's hardware services.
 pub struct Hardware {
     pub power: Box<dyn Power>,
@@ -238,6 +250,8 @@ pub struct Hardware {
     /// None on devices where the app doesn't manage SSH. Whether the user may switch it is
     /// reported at run time (`SshStatus::switchable`).
     pub ssh: Option<Box<dyn Ssh>>,
+    /// None on devices whose CPU speed Specular can't set.
+    pub cpu: Option<Box<dyn Cpu>>,
 }
 
 /// A device: what it is, and its hardware.
@@ -263,7 +277,7 @@ pub trait Device {
 /// "bluetooth": <script>}`, else a built-in one with a few networks and devices. File transfer and
 /// SSH are pretend (see `SimTransfer`, `SimSsh`). Its time zone is `timezone::Simulated`. A
 /// scenario with a `"card"` script also plays the SD card's states (its events are
-/// `card::Card`s); without one, the card is always mounted.
+/// `card::Card`s); without one, the card is always mounted. Its CPU has the Brick's speed steps.
 pub mod simulated {
     use std::time::Instant;
 
@@ -333,6 +347,21 @@ pub mod simulated {
         }
     }
 
+    /// A CPU with the Brick's speed steps (`STEPS`).
+    struct SimCpu;
+
+    /// The Brick's CPU speed steps (MHz).
+    const STEPS: [u32; 9] = [408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000];
+
+    impl Cpu for SimCpu {
+        fn prepare(&self) -> Result<Vec<u32>, String> { eprintln!("simulated: CPU profile balanced"); Ok(STEPS.into()) }
+        fn set_min(&self, mhz: Option<u32>) -> Result<(), String> {
+            let step = mhz.map(|m| STEPS.into_iter().find(|&s| s >= m).unwrap_or(STEPS[STEPS.len() - 1]));
+            eprintln!("simulated: CPU minimum {}", crate::cpu::text(step));
+            Ok(())
+        }
+    }
+
     pub fn hardware() -> Hardware {
         let t = Instant::now();
         let script = scenario().unwrap_or_else(|e| panic!("$SPECULAR_SCENARIO: {e}"));
@@ -349,6 +378,7 @@ pub mod simulated {
             rumble: Some(Box::new(Sim(t))),
             file_transfer: Some(Box::new(SimTransfer)),
             ssh: Some(Box::new(SimSsh(ssh.into()))),
+            cpu: Some(Box::new(SimCpu)),
         }
     }
 

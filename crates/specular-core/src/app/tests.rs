@@ -96,7 +96,7 @@ fn open_a_system_play_and_come_back() {
     assert_eq!(a.parent_title().as_deref(), Some("Library"));
     tap(&mut a, Button::Down, 10);
     assert_eq!(focused(&a), "Mother 3");
-    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 20), vec![Effect::Launch(game("gba", "Mother 3")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Redraw(None)]);
     assert_eq!(a.input_target(), InputTarget::Game);
     a.handle(Msg::GameEnded(None));
     assert_eq!(a.input_target(), InputTarget::App);
@@ -293,7 +293,7 @@ fn search_finds_games_in_every_system_best_first_and_plays_them() {
     a.handle(Msg::Library(vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")]));
     assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
     assert_eq!(focused(&a), "Super Metroid");
-    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Redraw(None)]);
+    assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Redraw(None)]);
     a.handle(Msg::GameEnded(None));
     assert_eq!(tap(&mut a, Button::B, 0), vec![Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(focused(&a), "Search");
@@ -1383,6 +1383,36 @@ fn a_games_settings_over_its_menu_apply_as_it_plays() {
     a.handle(Msg::GameEnded(None));
     tap(&mut a, Button::Up, 100);
     assert!(tap(&mut a, Button::A, 110).contains(&scaling("fit")));
+}
+
+#[test]
+fn a_games_cpu_minimum_starts_at_its_cores_level_unless_a_config_file_says_otherwise() {
+    const STEPS: [u32; 9] = [408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000];
+    let mut a = app();
+    a.handle(Msg::Library(vec![game("ps1", "Vagrant Story"), game("gba", "Golden Sun")]));
+    assert_eq!(a.cpu_min(STEPS.into()).0.current(), None, "no game");
+    tap(&mut a, Button::A, 0); // Game Boy Advance
+    tap(&mut a, Button::A, 10);
+    assert_eq!(a.cpu_min(STEPS.into()).0.current(), None, "mGBA has no start level");
+    a.handle(Msg::GameEnded(None));
+    tap(&mut a, Button::B, 20);
+    tap(&mut a, Button::Down, 30); // PlayStation
+    tap(&mut a, Button::A, 40);
+    tap(&mut a, Button::A, 50);
+    let (min, line) = a.cpu_min(STEPS.into());
+    assert_eq!(min.current(), Some(1800));
+    assert!(line.starts_with("SwanStation starts with a minimum of 1800 MHz") && line.ends_with("power.cpu_min = \"auto\", its default)"), "{line}");
+    assert_eq!(a.cpu_min(vec![]).0.current(), None, "where the speed can't be set");
+    // A game's own file overrides it; it isn't on its settings screen.
+    let layer = game("ps1", "Vagrant Story").settings_layer();
+    a.handle(Msg::SettingsLoaded(layer, serde_json::Map::from_iter([(builtin::CPU_MIN.into(), json!("1608"))])));
+    let (min, line) = a.cpu_min(STEPS.into());
+    assert_eq!(min.current(), Some(1608));
+    assert!(line.ends_with("power.cpu_min = \"1608\", in games/ps1/Vagrant Story.json)"), "{line}");
+    tap(&mut a, Button::Menu, 60);
+    focus_on(&mut a, "Game settings");
+    tap(&mut a, Button::A, 70);
+    assert!(!labels(&a).iter().any(|l| l.contains("CPU")), "{:?}", labels(&a));
 }
 
 #[test]

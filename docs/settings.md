@@ -1,6 +1,6 @@
 # Settings
 
-Status: Implemented · Updated: 2026-10-18
+Status: Implemented · Updated: 2026-10-19
 
 How settings are declared, shown, layered and stored on the SD card, how cores' options become settings, how their files change format over time, and how the card is laid out. The UI shows only the few settings people genuinely disagree on; everything else is still reachable, documented, in plain files on the card.
 
@@ -8,6 +8,7 @@ How settings are declared, shown, layered and stored on the SD card, how cores' 
 
 - **Settings are declared once** (2026-10-12): a key, type, default, label, section and who sees it. The settings screens are generated from the declarations, so a setting needs no hand-written UI.
 - **A setting is shown only where people genuinely disagree** (2026-10-12). Everything else has a good default or is detected automatically. Internals (frame time, GPU, memory, file paths) appear only when "Developer details" is on; battery, storage and WiFi are shown in plain words.
+- **A setting can be for the config files alone, shown on no screen** (2026-10-19; the project owner's choice): its visibility is `ConfigFiles`, and its schema documents it like any other. The first is `power.cpu_min`, the CPU's lowest speed while a game plays (see [runtime.md](runtime.md), CPU speed): `"auto"` (the default: Specular follows the game's frames), `"off"` (the system's choice) or a speed in MHz, per system or per game. Its speeds are a choice of the Brick's steps (`"408"` … `"2000"`), as Sleep after's are of times, so the schema lists them and an editor offers them; a device with other steps takes the next one up. Rejected: a free number (a setting kind of its own, for one setting); a developer setting in the UI (the controller is meant to be right without one).
 - **Layers: built-in default < global < per system < per game** (2026-10-12). Each setting says how specific it may be (brightness is global only; scaling may differ per game).
 - **Only values that differ from the default are stored** (2026-10-12), so changing a default in a new version reaches everyone who never changed it. Unknown keys (a plugin not loaded, a newer version's settings) are kept untouched. A stored value of the wrong type or out of range is ignored, as if absent. Rejected: filling every default into the files (a later default change couldn't be told apart from a user's choice); the schemas carry the defaults instead.
 - **Writes survive a power cut on FAT32** (2026-10-12). FAT32 has no journal, so a file is never rewritten in place: write a temporary file, fsync it, rename it over the original, then fsync the folder.
@@ -51,7 +52,7 @@ pub enum SettingKind {
     Colour { same_as: Option<&'static str> },          // a palette id, or "same" as another colour setting
     Int { min: i64, max: i64, step: i64, unit: &'static str },
 }
-pub enum Visibility { User, Developer, OwnScreen }    // OwnScreen: shown by a screen of its own (Wi-Fi)
+pub enum Visibility { User, Developer, OwnScreen, ConfigFiles }  // OwnScreen: shown by a screen of its own (Wi-Fi); ConfigFiles: never shown
 pub enum Scope { Global, System, Game }
 pub enum Layer { Global, Core(String), System(String), Game { system: String, game: String } }
 

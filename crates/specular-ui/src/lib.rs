@@ -18,7 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
@@ -191,7 +191,8 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     app.has_installer(installer.is_some());
     app.has_file_transfer(hardware.file_transfer.is_some());
     app.has_ssh(hardware.ssh.is_some());
-    let (hardware, hardware_thread) = hardware_thread(hardware);
+    let cpu_steps = Arc::new(OnceLock::new());
+    let (hardware, hardware_thread) = hardware_thread(hardware, cpu_steps.clone());
     app.has_time_zone(time_zone.is_some());
     // Beside the binary, where `make install` puts it (and the build does, for development).
     let texts = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("licences.txt"))).filter(|p| p.is_file());
@@ -215,6 +216,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         status_icons: Rc::new(VecModel::default()),
         profile,
         hardware,
+        cpu_steps,
         wifi: wifi.map(|s| radio_thread("wifi", s, Msg::Wifi)),
         bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
         installer: installer.map(installer_thread),
@@ -397,6 +399,8 @@ enum HwCmd {
     /// Start (true) or stop the file transfer server.
     FileTransfer(bool),
     Ssh(SshCmd),
+    /// Set the CPU's minimum speed (MHz; None: the system's default; see `device::Cpu`).
+    CpuMin(Option<u32>),
 }
 
 /// The volume as the hardware thread keeps it: the level for each volume setting
@@ -440,11 +444,17 @@ const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
 /// It ends once the sender is dropped. File transfer is stopped when it starts and when it ends,
 /// so the SD card isn't left open to the network by a run of Specular that quit or crashed with
 /// the file transfer screen open. Commands are carried out in order, so a stop sent before a
-/// sleep is done before it.
-fn hardware_thread(hw: Hardware) -> (mpsc::Sender<HwCmd>, std::thread::JoinHandle<()>) {
+/// sleep is done before it. As it starts, it readies the CPU (`Cpu::prepare`) and puts its speed
+/// steps in `cpu_steps` (left empty if it can't).
+fn hardware_thread(hw: Hardware, cpu_steps: Arc<OnceLock<Vec<u32>>>) -> (mpsc::Sender<HwCmd>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
     let handle = std::thread::spawn(move || {
         stop_transfer(&hw);
+        match hw.cpu.as_ref().map(|c| c.prepare()) {
+            Some(Ok(steps)) => { eprintln!("cpu: speed steps {steps:?} MHz"); let _ = cpu_steps.set(steps); }
+            Some(Err(e)) => eprintln!("cpu: no minimum speed can be set: {e}"),
+            None => eprintln!("cpu: this device's speed can't be set"),
+        }
         let mut next_battery = Instant::now();
         let mut volume = Volume { levels: HashMap::new(), output: Output::Speaker, muted: false };
         loop {
@@ -472,6 +482,10 @@ fn hardware_thread(hw: Hardware) -> (mpsc::Sender<HwCmd>, std::thread::JoinHandl
                         if let Err(e) = &result { eprintln!("transfer: {}: {e}", if start { "starting" } else { "stopping" }); }
                         post(Msg::FileTransfer { start, result });
                     }
+                    Ok(())
+                }
+                Ok(HwCmd::CpuMin(mhz)) => {
+                    if let Some(cpu) = &hw.cpu && let Err(e) = cpu.set_min(mhz) { eprintln!("cpu: setting the minimum to {}: {e}", specular_core::cpu::text(mhz)); }
                     Ok(())
                 }
                 Ok(HwCmd::Ssh(cmd)) => {
@@ -767,6 +781,9 @@ struct Runner {
     status_icons: Rc<VecModel<IconData>>,
     profile: DeviceProfile,
     hardware: mpsc::Sender<HwCmd>,
+    /// The CPU's speed steps (MHz), once the hardware thread has them; never, where its speed
+    /// can't be set.
+    cpu_steps: Arc<OnceLock<Vec<u32>>>,
     /// The radios' threads (None for a radio the device doesn't have).
     wifi: Option<mpsc::Sender<specular_core::wireless::wifi::WifiCmd>>,
     bluetooth: Option<mpsc::Sender<specular_core::wireless::bluetooth::BtCmd>>,
@@ -1130,7 +1147,8 @@ impl Runner {
             // (What the motors are told now, the game's and the effects' together.)
             let rumble = r.rumble.as_ref().map(|l| l.wanted()).filter(|&m| m != Motors::STILL)
                 .map_or(String::new(), |m| format!(" · rumble {} %", m.strong.max(m.weak) as u32 * 100 / 0xffff));
-            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms · {sound}{rumble}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
+            let cpu = s.cpu_min.map_or(String::new(), |mhz| format!(" · CPU ≥ {mhz} MHz"));
+            w.set_stats(format!("{fps} fps · core {:.1} ms, 95 % under {:.1} ms · {sound}{rumble}{cpu}", s.median.as_secs_f64() * 1e3, s.p95.as_secs_f64() * 1e3).into());
         });
     }
 
@@ -1175,7 +1193,9 @@ impl Runner {
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
         if let Err(why) = core.check_bios(&self.data.roms().join(&game.path), extensions, &self.data.bios()) { return self.started(launch, Err(why)); }
         let options = self.app.borrow().core_options();
-        game::Playing::start(self, game, core, options, move |r| on_ui(move |me| me.started(launch, r)));
+        let (cpu_min, why) = self.app.borrow().cpu_min(self.cpu_steps.get().cloned().unwrap_or_default());
+        eprintln!("cpu: {why}");
+        game::Playing::start(self, game, core, options, cpu_min, move |r| on_ui(move |me| me.started(launch, r)));
     }
 
     /// Launch number `launch` (see `launches`) is running, or couldn't start.

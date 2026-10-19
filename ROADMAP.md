@@ -49,7 +49,8 @@ Completed:
  - Watchdog: a core stuck on one frame for 6 s restarts Specular
  - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)
  - Screen scaling: integer, fit, stretch
- - Measured on the Brick: Nestopia at full speed (Contra 6.8 ms a frame, Zelda 5.7 ms) SwanStation reaches full speed only with the CPU at 1.8 GHz or more (Metal Gear Solid, Castlevania: Symphony of the Night), its drawing thread helping; not yet held there (see TODO; docs/runtime.md)
+ - Measured on the Brick: Nestopia at full speed (Contra 6.8 ms a frame, Zelda 5.7 ms) SwanStation reaches full speed only with the CPU at 1.8 GHz or more (Metal Gear Solid, Castlevania: Symphony of the Night), its drawing thread helping (docs/runtime.md)
+ - The CPU's speed held up from the game's own frames, through the OS's `brick-power cpu-min`: PS1 games start with a minimum of 1.8 GHz; two frames that miss their refresh within a second raise it a step, and 10 s on time with room to spare lower it a step; the system's default in the game's menu and outside games. `power.cpu_min` in the config files turns it off or fixes it, per system or per game. Logged with each change's reason, and shown in the frame statistics
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play, Famicom Disk System games too: the ROM is unzipped into memory, never onto the card, and given to the core under the zip's name; a zip that can't be played says why
  - Cores' own log messages go into Specular's log (debug messages left out, and at most 30 a second)
@@ -62,7 +63,7 @@ Completed:
 
 TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
- - PS1 games at full speed on the Brick: SwanStation needs the CPU at 1.8 GHz or more, which the `ondemand` governor never picks for it (it stays at 1.2–1.4 GHz: 48–56 fps). Hold the CPU's speed up while a PS1 game runs: with Crystaline OS's `brick-power cpu-min 1800` both games run at full speed under `ondemand` (docs/runtime.md, Findings)
+ - PS1 games at full speed on the Brick with the CPU minimum: check it (see DEVELOPMENT.md), and measure what it costs in battery (docs/runtime.md, Open questions)
 
 ### Library and Game Management
 
@@ -141,7 +142,7 @@ TODO:
 
 TODO:
  - USB audio output (headset dongles, USB-C DACs)
- - CPU profile chosen by Specular for what is running, never a setting in the UI (the OS's `brick-power profile performance|balanced|saver`); overridable only in the config files
+ - CPU profile chosen by Specular for the menus and for saving power (the OS's `brick-power profile performance|balanced|saver`; games already get a minimum speed of their own), never a setting in the UI; overridable only in the config files
  - The top USB-C port's power on or off (`brick-power usb-top on|off`, which refuses while a device is attached)
  - At 3 % battery, the game is saved and quit (the OS powers off at 1 %)
  - A power-saving mode: dimming, the screen off, WiFi and Bluetooth off while unused, the LEDs off, a lower refresh rate

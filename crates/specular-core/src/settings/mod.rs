@@ -26,9 +26,10 @@ use crate::palette::{self, PALETTE};
 
 /// Who a setting is for. Settings screens show user settings, and developer ones too while the
 /// "Developer details" setting is on. `OwnScreen` settings are never listed: a screen of their
-/// own shows them (as the Wi-Fi screen shows the Wi-Fi setting).
+/// own shows them (as the Wi-Fi screen shows the Wi-Fi setting). `ConfigFiles` settings are never
+/// shown at all: they are set only by editing the config files, which their schemas document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Visibility { User, Developer, OwnScreen }
+pub enum Visibility { User, Developer, OwnScreen, ConfigFiles }
 
 /// How specific a layer is; also how deep a setting may be overridden.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,7 +76,7 @@ impl Layer {
     pub fn path(&self, config: &Path) -> PathBuf { config.join(self.file()) }
 
     /// Relative to the config folder.
-    fn file(&self) -> PathBuf {
+    pub(crate) fn file(&self) -> PathBuf {
         match self {
             Layer::Global => "specular.json".into(),
             Layer::Core(c) => Path::new("cores").join(format!("{c}.json")),

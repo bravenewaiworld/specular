@@ -64,6 +64,7 @@ impl Device for Brick {
             rumble: Some(Box::new(specular_linux::rumble::EvdevRumble::new())),
             file_transfer: Some(Box::new(crate::transfer::BrickTransfer)),
             ssh: Some(Box::new(crate::ssh::BrickSsh)),
+            cpu: Some(Box::new(crate::cpu::BrickCpu)),
         }
     }
 

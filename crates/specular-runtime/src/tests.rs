@@ -26,7 +26,7 @@ impl SoundOut for Count {
 /// callbacks that do nothing. A test sets the fields it checks over these (`..outputs()`).
 fn outputs() -> Outputs {
     Outputs { sound: None, vsync: None, display_hz: 60.0, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}),
-              write_failed: Box::new(|_| {}) }
+              write_failed: Box::new(|_| {}), cpu_min: CpuMin::default(), set_cpu_min: Box::new(|_| {}) }
 }
 
 #[test]
@@ -272,6 +272,58 @@ fn the_frame_delay_leaves_room_for_the_slowest_runs_and_the_ui() {
     let mut p = Pacer::new(None, 60.0);
     for _ in 0..60 { p.ran(ms(1.0)); }
     assert_eq!(p.delay, Duration::ZERO);
+}
+
+#[test]
+fn the_pacer_times_the_vsyncs_but_not_across_a_pause_and_measures_the_delay_afresh_when_told() {
+    let mut p = Pacer::new(Some(Box::new(Instant0)), 60.0);
+    assert_eq!(p.wait(), None, "the first");
+    std::thread::sleep(Duration::from_millis(30));
+    assert!(p.wait().is_some_and(|gap| gap >= Duration::from_millis(30)));
+    p.paused();
+    assert_eq!(p.wait(), None, "the first after a pause");
+    for _ in 0..60 { p.ran(Duration::from_millis(1)); }
+    assert!(p.delay > Duration::ZERO);
+    p.remeasure();
+    assert_eq!(p.delay, Duration::ZERO);
+    assert_eq!(Pacer::new(None, 60.0).wait(), None, "a timer");
+}
+
+/// A vsync that comes 1 ms after each wait starts, but 60 ms (more than three refreshes at 60 Hz)
+/// on the waits numbered in `late`.
+struct Refreshes { waits: u32, late: &'static [u32] }
+impl Vsync for Refreshes {
+    fn wait(&mut self) -> io::Result<()> {
+        self.waits += 1;
+        std::thread::sleep(Duration::from_millis(if self.late.contains(&self.waits) { 60 } else { 1 }));
+        Ok(())
+    }
+}
+
+#[test]
+fn the_cpu_minimum_rises_after_two_missed_refreshes_and_is_the_default_while_paused_and_after() {
+    let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(core) = mgba() else { eprintln!("skipped: no host mGBA build"); return };
+    let dir = tempfile::tempdir().unwrap();
+    let rom_path = dir.path().join("loop.gba");
+    std::fs::write(&rom_path, rom(&[0xeaff_fffe /* b . */])).unwrap();
+    let set = Arc::new(Mutex::new(Vec::new()));
+    let s = set.clone();
+    let session = Session::start(
+        LaunchSpec { core, rom: rom_path, save: dir.path().join("loop.srm"), autosave: None, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, controller: None, states_restore_save: false, record: None },
+        Outputs { vsync: Some(Box::new(Refreshes { waits: 0, late: &[30, 32] })), cpu_min: CpuMin::new(vec![1800, 2000], Some(1800)),
+                  set_cpu_min: Box::new(move |mhz| s.lock().unwrap().push(mhz)), ..outputs() },
+    ).unwrap();
+    std::thread::sleep(Duration::from_millis(600));
+    // (A refresh missed by chance on a busy PC can only bring the step up sooner.)
+    assert_eq!(*set.lock().unwrap(), [Some(1800), Some(2000)]);
+    assert_eq!(session.stats().cpu_min, Some(2000));
+    session.pause(true);
+    std::thread::sleep(Duration::from_millis(100));
+    session.pause(false);
+    std::thread::sleep(Duration::from_millis(100));
+    session.quit().unwrap();
+    assert_eq!(*set.lock().unwrap(), [Some(1800), Some(2000), None, Some(2000), None]);
 }
 
 #[test]

@@ -16,6 +16,7 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 - **Battery saves are protected from cores whose save states also restore save memory** (2026-10-18). Loading such a state rolls the save memory back, and writing it would lose newer in-game saves. Each save state is stored with the crc32 of the save memory as it was when the state was made. For the cores flagged (`CoreDecl::states_restore_save`: Nestopia and SwanStation; not mGBA), the first time the `.srm` is written after a state was loaded, an `.srm` on the card that is neither the state's (by its crc32) nor what is about to be written is a newer save, and is first renamed to `<name>.newer.srm`, so it isn't lost. A state without a crc32 counts as not matching. Rejected: RetroArch's copy-back of the save memory after loading (restores only the bytes, not the core's own save-chip state; see Findings); blocking writes after a load.
 - **Games are paced by the display's vsync, with an adaptive frame delay** (2026-10-12). Latency comes from when frames are started, not from the toolkit. The core runs once per vsync, started as late as it safely can, so buttons are read late and a press reaches the screen sooner. On the Brick this cuts start-to-screen from 32 ms to about 6 ms (see [brick.md](brick.md)). Rejected: draw-then-swap, as toolkits do by default (frames queue for two vsyncs); a core on its own clock (it drifts against the display, and its frames sometimes wait a whole refresh).
 - **The game's speed is matched to the display** (2026-10-13). A game within 5 % of the display's rate runs at the display's rate, its sound resampled to match (a Game Boy game at 59.73 fps plays 0.8 % fast on a 60.2 Hz panel). Further off, a timer paces it at its own rate.
+- **Specular holds the CPU's speed up from the game's own frames: a minimum, raised when frames miss their refresh, lowered when they have time to spare** (2026-10-19). On the Brick, `ondemand` leaves PS1 games at 53–56 fps: a game paced by the vsync idles for part of every refresh, and a missed refresh adds a whole refresh of idle, so the governor settles near 1.2 GHz (see Findings). Only Specular sees a missed refresh. A game starts at its core's start level (SwanStation 1800 MHz; the others the system's default). Two frames that miss their refresh within 1 s raise the minimum a step; one alone (a scene loading) doesn't. After 10 s with none missed it drops a step, if the slowest runs (the 95th percentile), slowed in proportion to the lower speed, plus the UI's 6 ms, would fit in 75 % of a refresh; below the lowest step is the system's default. The frame delay is measured afresh at each change: one sized for the faster speed would make frames miss at the slower one, and the minimum would swing. In the game's menu, asleep and outside games, the minimum is the system's default. Above it the governor still chooses, and a heat limit still caps it. A config-file setting (`power.cpu_min`, per system or per game) turns it off or fixes it. Rejected: lowering `ondemand`'s `up_threshold` (58.5–59.1 fps at 60, the clock jumping to 2 GHz and straight back hundreds of times a minute); a fixed speed per system in the OS (it can't see what a game needs, and would hold it in the menus too); the OS's profiles alone (they set the range `ondemand` works in, not where it settles: even `performance`'s minimum, 1.2 GHz, is short of SwanStation's 1.8).
 - **Sound goes through libasound, loaded at runtime** (2026-10-13), like the GPU libraries, so the same code runs on the Brick and on a desktop, and runs silently without it.
 - **Battery saves are written when the game writes them** (2026-10-13), on a thread of their own, never the game's: flushing to an SD card can take longer than a frame.
 - **An autosave every 10 s of play; games resume from it** (2026-10-13). Also written on sleep and on quit.
@@ -66,6 +67,8 @@ pub struct Outputs {
     pub rumble: Option<RumbleLine>,      // None: the core is offered no rumble
     pub on_save: Box<dyn Fn() + Send>,   // the game saved in-game (for the effects)
     pub on_bios_halt: Box<dyn Fn() + Send>, // the core's built-in BIOS halted the game for good (its autosave is removed)
+    pub cpu_min: CpuMin,                 // chooses the CPU's minimum speed from the frames (see CPU speed)
+    pub set_cpu_min: Box<dyn Fn(Option<u32>) + Send>, // sets it, without blocking (None: the system's default)
 }
 pub struct GameInfo { pub width: u32, pub height: u32, pub aspect: f32, pub fps: f64,
                       pub options: CoreOptions }  // what the core declared as it loaded the game (to learn a user core's)
@@ -104,6 +107,34 @@ Each display refresh, the game's thread waits for the vsync, then sleeps for the
 - Every 60 frames the delay is set to the period minus the slowest runs (the 95th percentile) and 6 ms for the UI to draw and present, capped at half the period.
 - If waiting for the vsync fails, the game falls back to a timer.
 - On a timer, after a stall or a pause, timing restarts from now rather than rushing to catch up.
+- When the CPU's minimum speed changes, the delay goes back to none and is measured again.
+
+### CPU speed
+
+```rust
+// specular-core's cpu module: the rules, apart from the clock and the device
+pub struct CpuMin { /* the CPU's steps, the level now, the 10 s on-time window */ }
+pub enum Decision { Set(Option<u32>, String), Note(String) }  // a new minimum and why; or only a line for the log
+impl CpuMin {
+    pub fn new(steps: Vec<u32>, start: Option<u32>) -> Self;   // follows the frames, from `start` (rounded up to a step)
+    pub fn fixed(steps: Vec<u32>, mhz: Option<u32>) -> Self;   // stays at `mhz`
+    pub fn frame(&mut self, now: Duration, missed: bool, run: Duration, period: Duration) -> Option<Decision>;
+    pub fn current(&self) -> Option<u32>;                      // MHz; None: the system's default
+}
+pub fn for_game(setting: &str, start: Option<u32>, steps: Vec<u32>) -> (CpuMin, &'static str);  // as power.cpu_min says
+impl App { pub fn cpu_min(&self, steps: Vec<u32>) -> (CpuMin, String); }  // the running game's, at its layer, and a line for the log
+
+// specular-core's device module: Hardware::cpu (None where the speed can't be set)
+pub trait Cpu: Send {
+    fn prepare(&self) -> Result<Vec<u32>, String>;     // once, before any set_min: the speed steps (MHz, ascending)
+    fn set_min(&self, mhz: Option<u32>) -> Result<(), String>;
+}
+// CoreDecl::cpu_start: Option<u32>                     // its games' start level: SwanStation Some(1800)
+```
+
+At start-up the hardware thread readies the CPU (on the Brick, `brick-power profile balanced`, which `cpu-min` needs since boot, then its status's `cpu-steps`) and keeps its steps. At a launch the app gives the game's controller: by default `CpuMin::new` from the core's `cpu_start`; `power.cpu_min` (a config-file setting, see [settings.md](settings.md)) set to `"off"` or a speed gives a fixed one. The game's thread sets its start level, then hands it each frame paced by the vsync: the time of play (the gaps between the vsync's returns added up, a pause left out), whether the frame missed its refresh (more than 1.5 periods between two returns), and the core's run. A timer has no missed refreshes to see, so on one the start level stays. Pausing sets the system's default and resuming the game's level again; so does the game's end (`Drop`). `set_cpu_min` sends each change to the hardware thread, which calls `Cpu::set_min` there (`brick-power cpu-min <MHz>|default` on the Brick, which rounds up to a step); the game's thread never waits for it. On the desktop the simulated CPU has the Brick's steps and prints what it would set (`simulated: CPU minimum 1800 MHz`).
+
+The log has the steps at start-up (`cpu: speed steps [408, …, 2000] MHz`), or why none can be set; at each launch, the start level and where it comes from (`cpu: SwanStation starts with a minimum of 1800 MHz (the emulator's start level, then as the frames need; power.cpu_min = "auto", its default)`); each change with why (`cpu: minimum 2000 MHz (2 frames missed their refresh in 0.4 s at 1800 MHz)`, `cpu: minimum 1608 MHz (10 s on time; slowest runs 4.0 ms, about 4.5 ms at 1608 MHz)`, `cpu: minimum the system's default (while the game is paused)`); once a game, frames still missing their refresh at the top step (a heat limit may be holding the CPU back); each `brick-power` run with its exit status and output, and why a run failed. The frame statistics show the minimum while it is set (`CPU ≥ 1800 MHz`).
 
 ### Sound
 
@@ -142,6 +173,7 @@ pub struct CoreDecl {        // specular-core's library module: how Specular run
     pub rom_by_path: bool,
     pub controller: Option<u32>,                          // libretro device for player 1: SwanStation's DualShock; None: the core's default
     pub states_restore_save: bool,                        // see Saves and states
+    pub cpu_start: Option<u32>,                           // the CPU's minimum its games start at (MHz; see CPU speed): SwanStation's 1800
     pub bios: &'static [Bios],
     pub user: Option<&'static UserCore>,                  // a core the user added (see Cores the user adds)
 }
@@ -258,4 +290,4 @@ mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-w
 ## Open questions
 
 - A PS1 game resumed from an autosave made without a BIOS goes on running OpenBIOS once a BIOS file is added (its states hold the BIOS), until the autosave goes. Should a BIOS added make such games start afresh, or offer to? A state tag naming the BIOS it was made on would tell them apart.
-- How Specular holds the CPU's speed up for PS1 games (see Findings): a minimum speed per core (1.8 GHz for SwanStation) asked of the device while its games run, through the OS's `brick-power` (the V1 roadmap's CPU profile chosen by Specular); or the OS's governor tuned for games paced by the vsync. A measurement of the battery cost at 1.8 and 2.0 GHz would decide between a fixed speed and a higher floor. The traces (see Findings) support a controller driven by the game's own frames rather than by load: overruns are what a governor can't see and Specular can (a frame that took two refreshes, or runs near the refresh), and they come in bursts of seconds (one scene). That suggests starting PS1 games at 1.8 GHz, stepping up at once on an overrun, and stepping down only after some 10 s with the 95th percentile, scaled to the lower speed, under about 75 % of a refresh (at 1.6 GHz, Metal Gear Solid's would be about 15 ms, too close).
+- What the CPU minimum costs in battery: PS1 games at 1.8–2.0 GHz against the 1.2 GHz `ondemand` settles at. With the UI's 6 ms counted, SwanStation's slowest runs (11–13 ms at 2 GHz) never leave room for a step down, so its games stay at 1.8 GHz or above. A measurement on the Brick, and a check that its games then run at full speed, would say whether that is right.

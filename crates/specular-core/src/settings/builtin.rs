@@ -4,6 +4,7 @@
 use serde_json::json;
 
 use super::{Scope, SettingDecl, SettingKind, Visibility};
+use crate::cpu;
 
 pub const BRIGHTNESS: &str = "display.brightness";
 /// How a game's picture fills the screen: "integer" (the largest whole multiple of its size),
@@ -69,6 +70,10 @@ pub const TIME_ZONE: &str = "time.zone";
 /// Whether the user allowed telling the lookup service (ipinfo.io) the network's public address,
 /// to find the time zone (see `app::timezone`).
 pub const TIME_ZONE_LOOKUP: &str = "time.zone_lookup_allowed";
+/// The CPU's lowest speed while a game plays: `cpu::AUTO` (chosen from its frames, from its core's
+/// start level: `cpu::CpuMin`), `cpu::OFF` (the system's choice), or a speed in MHz (one of the
+/// Brick's steps). Only in the config files.
+pub const CPU_MIN: &str = "power.cpu_min";
 /// Shows the settings and details meant for developers.
 pub const DEVELOPER_DETAILS: &str = "ui.developer_details";
 
@@ -137,6 +142,11 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "Sleep after this many seconds without a button press: \"30\", \"60\", \"180\", \"300\" or \"600\" (in quotes), or \"never\". The device never goes to sleep by itself while a game is being played.",
             kind: SettingKind::Choice(&[("never", "Never"), ("30", "30 sec"), ("60", "1 min"), ("180", "3 min"), ("300", "5 min"), ("600", "10 min")]), default: json!("30"),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
+        SettingDecl { key: CPU_MIN, section: "Power", label: "Lowest CPU speed while playing",
+            help: "The lowest speed the CPU may run at while a game plays (in menus, and while a game is paused, the system chooses). \"auto\" lets Specular choose: it starts at the emulator's own level (1800 MHz for SwanStation, which plays PlayStation games; the system's choice for the others), goes a step faster when frames come late, and a step slower once they have been on time for 10 s with time to spare. \"off\" leaves the speed to the system. A speed in MHz, in quotes, holds that minimum for the whole game: the TrimUI Brick's speeds are listed; another device takes its next speed up. A heat limit can still slow the CPU.",
+            kind: SettingKind::Choice(&[(cpu::AUTO, "Automatic"), (cpu::OFF, "Off"), ("408", "408 MHz"), ("600", "600 MHz"), ("816", "816 MHz"),
+                ("1008", "1008 MHz"), ("1200", "1200 MHz"), ("1416", "1416 MHz"), ("1608", "1608 MHz"), ("1800", "1800 MHz"), ("2000", "2000 MHz")]),
+            default: json!(cpu::AUTO), visibility: Visibility::ConfigFiles, deepest: Scope::Game, core: None, system: None },
         SettingDecl { key: DEVELOPER_DETAILS, section: "System", label: "Developer details",
             help: "Also shows, in Specular's menus, the settings and technical details meant for developers.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },

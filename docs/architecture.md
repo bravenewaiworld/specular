@@ -90,7 +90,7 @@ pub trait Screen {
 | UI | Slint, the app, uploading game frames |
 | I/O | reading the card when the app asks (migrating, loading settings, starting its scan), saving settings (saves queued together are merged) |
 | Scan | looking for the cores on the card (then writing the settings' schemas), library scans (loading the games' settings), then moving saves of renamed ROMs |
-| Hardware | the device's hardware services, file transfer and SSH; reads the battery every 10 s |
+| Hardware | the device's hardware services, file transfer, SSH and the CPU's minimum speed (which the game's thread asks for); reads the battery every 10 s |
 | One per radio, and the card | WiFi and Bluetooth commands, which can block for seconds; following the SD card's state (see [sd-card.md](sd-card.md)) |
 | Headphone jack | waits for plugging and unplugging |
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
@@ -141,6 +141,7 @@ pub struct Hardware {
     pub rumble: Option<Box<dyn Rumble>>,
     pub file_transfer: Option<Box<dyn FileTransfer>>,   // see remote-access.md
     pub ssh: Option<Box<dyn Ssh>>,
+    pub cpu: Option<Box<dyn Cpu>>,                // a minimum speed while games play; see runtime.md
 }
 
 /// 0–65535 each, as libretro and Linux take them; a device with one motor runs the stronger.
