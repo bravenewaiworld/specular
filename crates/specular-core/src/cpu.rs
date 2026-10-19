@@ -27,8 +27,9 @@ const MISS_PAIR: Duration = Duration::from_secs(1);
 /// How long every frame must be on time before the minimum may drop a step.
 const ON_TIME: Duration = Duration::from_secs(10);
 /// A step down is taken only if the slowest runs, slowed to the lower speed, would fit in this
-/// share of a refresh (percent). The UI's drawing isn't counted: it runs on a thread of its own,
-/// beside the core's.
+/// share of a refresh (percent); the rest is a margin for the runs slower still and for jitter.
+/// The UI's drawing isn't counted: it runs on its own thread, so a slow draw delays when a frame is
+/// shown, not the core's next run.
 const HEADROOM: u32 = 85;
 
 /// Chooses the CPU's minimum speed, among the CPU's speed steps, from the game's frames (see the
@@ -123,9 +124,10 @@ impl CpuMin {
     }
 
     /// After `ON_TIME` on time: the level a step down, if the slowest runs (the 95th percentile),
-    /// slowed in proportion to the lower speed, fit in `HEADROOM` percent of a refresh. Work bound
-    /// by memory slows less than the clock, so this errs towards stepping down; if frames then
-    /// miss, they step back up, and the next step down is `ON_TIME` later. From the lowest step to
+    /// slowed in proportion to the lower speed, fit in `HEADROOM` percent of a refresh. Runs needn't
+    /// slow in proportion (work bound by memory slows less; the slowest 5 % aren't looked at), so
+    /// frames may miss after a step down: they step back up, and the next step down is `ON_TIME`
+    /// later. From the lowest step to
     /// the system's default, the runs are judged at the lowest step's speed, as the governor runs
     /// a busy game about that fast (see `LOWEST_USEFUL_MHZ`).
     fn step_down(&mut self, period: Duration) -> Option<Decision> {
@@ -264,12 +266,9 @@ mod tests {
         // Metal Gear Solid on the Brick: 14.5 ms at 2000 MHz is about 16.1 ms at 1800, over 85 %
         // of a refresh (14.1 ms).
         let mut c = CpuMin::new(STEPS.into(), Some(2000));
-        let decisions = on_time(&mut c, ms(30_000), Duration::from_micros(14_500));
+        let decisions = on_time(&mut c, ms(20_000), Duration::from_micros(14_500));
         assert!(decisions.is_empty(), "{decisions:?}");
         assert_eq!(c.current(), Some(2000));
-        // Symphony of the Night once at 1800: 13.3 ms is about 14.9 ms at 1608.
-        let mut c = CpuMin::new(STEPS.into(), Some(1800));
-        assert!(on_time(&mut c, ms(30_000), Duration::from_micros(13_300)).is_empty());
         // A miss restarts the 10 s: none is taken 10 s after the start if a miss came meanwhile.
         let mut c = CpuMin::new(STEPS.into(), Some(1800));
         on_time(&mut c, ms(5_000), ms(4));

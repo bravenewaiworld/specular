@@ -349,7 +349,8 @@ fn percentile(sorted: &[Duration], q: usize) -> Duration { sorted.get(sorted.len
 const CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 /// The time the UI needs to draw and present a frame once the core has made it: the frame delay
-/// leaves this much of each refresh after the slowest runs.
+/// leaves this much of each refresh after the slowest runs. (The CPU minimum's step down doesn't
+/// count it: see `cpu::HEADROOM` in specular-core.)
 const UI_TIME: Duration = Duration::from_millis(6);
 
 /// Times the game's frames (see the module doc).
