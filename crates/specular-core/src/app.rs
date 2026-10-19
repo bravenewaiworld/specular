@@ -261,6 +261,9 @@ impl Ctx {
     /// Whether the SD card is in and its files can be read (it is mounted, maybe read-only).
     pub fn card_in(&self) -> bool { self.card.as_ref().is_some_and(Card::readable) }
 
+    /// Whether the SD card can be written to (saves, settings).
+    pub fn card_writable(&self) -> bool { self.card.as_ref().is_some_and(Card::writable) }
+
     /// Which settings are shown: developer ones too while "Developer details" is on.
     pub fn visibility(&self) -> Visibility {
         if self.settings.on(builtin::DEVELOPER_DETAILS) { Visibility::Developer } else { Visibility::User }
@@ -497,8 +500,7 @@ impl App {
     /// Who buttons are for now: the game while one is played and no menu is open over it (nor a
     /// screen opened from its menu).
     pub fn input_target(&self) -> InputTarget {
-        let top = &self.nav.top().id;
-        let menu = self.nav.contains(&screens::GAME_MENU) || *top == screens::POWER_MENU || *top == screens::CARD_WAIT;
+        let menu = self.nav.contains(&screens::GAME_MENU) || self.nav.top().id == screens::POWER_MENU || self.nav.contains(&screens::CARD_WAIT);
         if self.playing.is_some() && !menu { InputTarget::Game } else { InputTarget::App }
     }
 
@@ -845,7 +847,7 @@ impl App {
                 self.repeater.reset();
                 // The settings that may differ for this game.
                 let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
-                let unsaved = (!self.card_writable()).then(|| Effect::Notice("The SD card is read-only: progress in this game won't be saved".into()));
+                let unsaved = (!self.ctx.card_writable()).then(|| Effect::Notice("The SD card is read-only: progress in this game won't be saved".into()));
                 std::iter::once(Effect::Launch(game)).chain(per_game).chain([Effect::Redraw(None)]).chain(unsaved).collect()
             }
             Outcome::Effects(e) => { self.changed(); e }
@@ -925,15 +927,13 @@ impl App {
             (Button::A, Some("restart")) => (Effect::Restart, "Restarting…"),
             _ => return vec![],
         };
-        let mut e: Vec<Effect> = self.end_game().into_iter().collect();
-        e.extend([Effect::Notice(notice.into()), power]);
-        e
+        self.end_game().into_iter().chain([Effect::Notice(notice.into()), power]).collect()
     }
 
     /// Ends the game being played, if any: with its saves written if the card can take them.
     fn end_game(&mut self) -> Option<Effect> {
         self.playing.take()?;
-        Some(if self.card_writable() { Effect::QuitGame } else { Effect::AbandonGame })
+        Some(if self.ctx.card_writable() { Effect::QuitGame } else { Effect::AbandonGame })
     }
 
     fn open_game_menu(&mut self) -> Vec<Effect> {
@@ -955,7 +955,7 @@ impl App {
                 let to = current.map_or(if back { count - 1 } else { 0 }, |c| (c + if back { count - 1 } else { 1 }) % count);
                 vec![Effect::ChangeDisc(to), Effect::PauseGame(false)]
             }
-            (Button::A, Some("save")) if !self.card_writable() => return vec![Effect::Notice("The SD card is read-only: the state can't be saved".into())],
+            (Button::A, Some("save")) if !self.ctx.card_writable() => return vec![Effect::Notice("The SD card is read-only: the state can't be saved".into())],
             (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
             (Button::A, Some("load")) => vec![Effect::LoadState, Effect::PauseGame(false)],
             (Button::A, Some("reset")) => vec![Effect::ResetGame, Effect::PauseGame(false)],

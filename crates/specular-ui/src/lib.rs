@@ -573,8 +573,10 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Io>, std::thread::JoinHandle<()>) 
                 if let Io::Save(path, values) = cmd { saves.insert(path, values); continue; }
                 store_settings(&mut saves, writable);
                 if let Some(s) = scan.take() { s.stop(); }
-                writable = false;
-                if let Io::Read { reading, writable: w } = cmd { (scan, writable) = read_card(&data, reading, w, std::mem::take(&mut first)); }
+                (scan, writable) = match cmd {
+                    Io::Read { reading, writable } => read_card(&data, reading, writable, std::mem::take(&mut first)),
+                    _ => (None, false),
+                };
             }
             store_settings(&mut saves, writable);
         }
@@ -625,6 +627,11 @@ fn post_reading(reading: u32, msg: Msg) { on_ui(move |r| if r.reading.get() == r
 /// as read-only (`Msg::CardReadOnly`).
 fn wrote_to_card(what: &str, e: &std::io::Error) {
     eprintln!("{what}: {e}");
+    tell_if_read_only(e);
+}
+
+/// Tells the app if a write to the card failed because it is read-only (`Msg::CardReadOnly`).
+fn tell_if_read_only(e: &std::io::Error) {
     if e.raw_os_error() == Some(libc::EROFS) { post(Msg::CardReadOnly); }
 }
 
@@ -729,7 +736,6 @@ fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl
         if orphans.insert(f.clone()) { eprintln!("settings: games/{f}.json is for no game in the library, so it isn't loaded"); }
     }
 }
-
 
 /// Power-key presses are ignored from the request to sleep until this long after waking. The
 /// press that woke the device is delivered as it resumes, before the sleep command returns (it
@@ -922,11 +928,10 @@ impl Runner {
                 let _ = self.io.send(Io::Save(layer.path(&self.data.config()), values));
             }
             Effect::ReadCard { writable } => {
-                self.reading.set(self.reading.get() + 1);
-                let _ = self.io.send(Io::Read { reading: self.reading.get(), writable });
+                let _ = self.io.send(Io::Read { reading: self.next_reading(), writable });
             }
             Effect::ForgetCard => {
-                self.reading.set(self.reading.get() + 1);
+                self.next_reading();
                 let _ = self.io.send(Io::Forget);
                 let _ = self.art_worker.send(art::ArtCmd::Library(vec![]));
             }
@@ -960,26 +965,25 @@ impl Runner {
                 w.set_letter(letter.to_string().into());
                 self.show_for(&self.letter_timer, LETTER_TIME, AppWindow::set_letter_shown);
             }
-            Effect::QuitGame => {
+            Effect::QuitGame | Effect::AbandonGame => {
                 // (The game's texture is freed, and stops being shown, at the next draw.)
                 let playing = self.playing.borrow_mut().take();
                 if let Some(p) = playing {
-                    self.keep_left_off(&p);
-                    if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
+                    if e == Effect::QuitGame {
+                        self.keep_left_off(&p);
+                        if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
+                    } else {
+                        p.session.abandon();
+                        eprintln!("game: ended without saving: the SD card can't be written");
+                    }
                 }
-                let _ = self.art_worker.send(art::ArtCmd::Paused(false));
-                self.tell_effects(Event::GameStopped);
-            }
-            Effect::AbandonGame => {
-                if let Some(p) = self.playing.borrow_mut().take() { p.session.abandon(); }
-                eprintln!("game: ended without saving: the SD card can't be written");
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));
                 self.tell_effects(Event::GameStopped);
             }
             Effect::Sleep => {
                 self.ignore_power_until.set(Duration::MAX); // until `Msg::Woke`
                 // A game's battery save is written first: power can fail while asleep.
-                let save = self.app.borrow().ctx().card.as_ref().is_some_and(Card::writable);
+                let save = self.app.borrow().ctx().card_writable();
                 self.with_game(|p| { p.pause(true); if save { p.session.flush().map(|()| "") } else { Ok("") } });
                 self.tell_effects(Event::GameStopped);
                 let _ = self.hardware.send(HwCmd::Sleep);
@@ -998,6 +1002,12 @@ impl Runner {
             Effect::FileTransfer(start) => { let _ = self.hardware.send(HwCmd::FileTransfer(start)); }
             Effect::Ssh(cmd) => { let _ = self.hardware.send(HwCmd::Ssh(cmd)); }
         }
+    }
+
+    /// Starts a new reading of the card (or none, the card being gone), making the last stale.
+    fn next_reading(&self) -> u32 {
+        self.reading.set(self.reading.get() + 1);
+        self.reading.get()
     }
 
     /// Tells the app the running game's discs, as its core says now.

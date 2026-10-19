@@ -26,6 +26,7 @@ pub struct CardWatch { inotify: OwnedFd, stop: Arc<OwnedFd> }
 pub struct Stop(Arc<OwnedFd>);
 
 impl Stop {
+    /// Makes the watch's `wait_for_change`, now or next, return false.
     pub fn stop(&self) {
         let one = 1u64.to_ne_bytes();
         unsafe { libc::write(self.0.as_raw_fd(), one.as_ptr().cast(), one.len()) };

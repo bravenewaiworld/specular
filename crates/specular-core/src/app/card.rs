@@ -20,15 +20,11 @@ use super::*;
 /// The row on home that dismisses the card's one-time message.
 pub(super) const DISMISS: &str = "card:dismiss";
 
-
 pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) {
     screens.insert(screens::CARD_WAIT, Box::new(CardWait));
 }
 
 impl App {
-    /// Whether the card can be written to now.
-    pub(super) fn card_writable(&self) -> bool { self.ctx.card.as_ref().is_some_and(Card::writable) }
-
     pub(super) fn card_changed(&mut self, card: Card) -> Vec<Effect> {
         self.rechecking_card = false;
         let before = self.ctx.card.replace(card.clone());
@@ -81,14 +77,14 @@ impl App {
 
     /// A write failed as read-only (`Msg::CardReadOnly`).
     pub(super) fn card_read_only(&mut self) -> Vec<Effect> {
-        if self.rechecking_card || !self.card_writable() { return vec![]; }
+        if self.rechecking_card || !self.ctx.card_writable() { return vec![]; }
         self.rechecking_card = true;
         vec![Effect::Card(CardCmd::Recheck), Effect::Notice("The SD card has turned read-only: nothing more can be saved".into())]
     }
 
     /// Drops settings saves while the card can't take them: the changes stay in memory.
     pub(super) fn hold_settings_saves(&self, e: &mut Vec<Effect>) {
-        if !self.card_writable() { e.retain(|e| !matches!(e, Effect::SaveSettings(_))); }
+        if !self.ctx.card_writable() { e.retain(|e| !matches!(e, Effect::SaveSettings(_))); }
     }
 
     /// A press while waiting for the card: A on "quit" ends the game without saving.

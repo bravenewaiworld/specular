@@ -10,7 +10,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use specular_core::card::{CardService, CardStatus};
+use specular_core::card::CardStatus;
 use specular_core::device::{Device, DeviceProfile, Hardware, Output, SoundOut, Vsync, simulated};
 use specular_core::input::Button;
 use specular_core::wireless::trace::Traced;
@@ -34,8 +34,8 @@ impl Device for Desktop {
         let mut hardware = simulated::hardware();
         if let Some(state) = std::env::var_os("SPECULAR_CARD_STATE") {
             let (state, data) = (PathBuf::from(state), self.0.clone());
-            let recheck = { let state = state.clone(); Box::new(move || simulated_mount_card(&state, &data)) };
-            hardware.card = Some(Box::new(Traced::new("card", StateFile::new(state, recheck))) as Box<CardService>);
+            let recheck = { let state = state.clone(); move || simulated_mount_card(&state, &data) };
+            hardware.card = Some(Box::new(Traced::new("card", StateFile::new(state, recheck))));
         }
         hardware
     }

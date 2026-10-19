@@ -100,7 +100,8 @@ impl Playing {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
-            let write_failed = Box::new(|e: &std::io::Error| crate::wrote_to_card("game: a save", e));
+            // (The runtime logs them.)
+            let write_failed = Box::new(crate::tell_if_read_only);
             let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt, write_failed };
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }

@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize, Serializer};
 pub type Events<E> = Box<dyn Fn(E) + Send + Sync>;
 
 /// A radio's service (or the SD card's, `card::CardService`, which works the same way). Commands
-/// may block (loading a driver takes seconds), so the UI sends them from a thread of its own. Failures are reported as events rather than returned, so the app
-/// sees one stream of what happened.
+/// may block (loading a driver takes seconds), so the UI sends them from a thread of its own.
+/// Failures are reported as events rather than returned, so the app sees one stream of what
+/// happened.
 pub trait Wireless<C, E>: Send {
     /// Starts reporting events, once, before any command. The service then reports its whole
     /// state (powered or not, the networks or devices it knows) without being asked.

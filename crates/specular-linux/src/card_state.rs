@@ -20,8 +20,10 @@ pub struct StateFile {
 }
 
 impl StateFile {
-    pub fn new(path: impl Into<PathBuf>, recheck: Box<dyn FnMut() -> io::Result<()> + Send>) -> Self {
-        Self { path: path.into(), recheck, events: None }
+    /// The card as the file at `path` says; `recheck` has the system look at the card again (and
+    /// update the file), for `CardCmd::Recheck`.
+    pub fn new(path: impl Into<PathBuf>, recheck: impl FnMut() -> io::Result<()> + Send + 'static) -> Self {
+        Self { path: path.into(), recheck: Box::new(recheck), events: None }
     }
 }
 
@@ -107,7 +109,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state");
         let rechecked = path.clone();
-        let mut file = StateFile::new(&path, Box::new(move || std::fs::write(&rechecked, "read-only damaged\nRead-only.\n")));
+        let mut file = StateFile::new(&path, move || std::fs::write(&rechecked, "read-only damaged\nRead-only.\n"));
         let (tx, rx) = mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
         file.start(Box::new(move |c| tx.lock().unwrap().send(c).unwrap()));

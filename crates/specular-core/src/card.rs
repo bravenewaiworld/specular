@@ -26,6 +26,7 @@ pub struct Card {
     pub check: Option<String>,
 }
 
+/// How the card stands (the state file's first word).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CardStatus {
     /// No card in the slot.

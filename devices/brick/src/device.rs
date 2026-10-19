@@ -57,7 +57,7 @@ impl Device for Brick {
             installer: Some(Box::new(crate::install::BrickInstaller)),
             time_zone: Some(Box::new(crate::timezone::BrickTimeZone)),
             // Crystaline OS mounts the card as it comes and goes (docs/storage.md there).
-            card: Some(Box::new(Traced::new("card", StateFile::new(CARD_STATE, Box::new(|| run(MOUNT_CARD, &[])))))),
+            card: Some(Box::new(Traced::new("card", StateFile::new(CARD_STATE, || run(MOUNT_CARD, &[]))))),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
             // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.
