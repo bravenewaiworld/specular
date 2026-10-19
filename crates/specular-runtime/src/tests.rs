@@ -366,8 +366,11 @@ fn ps1_exe() -> Vec<u8> {
     exe
 }
 
-/// The DualShock Specular gives SwanStation's player 1 (`CoreDecl::controller`).
-const DUALSHOCK: std::ffi::c_uint = 0x105;
+/// The pad Specular gives SwanStation's player 1 (`CoreDecl::controller`: a DualShock).
+fn swanstation_pad() -> Option<std::ffi::c_uint> {
+    use specular_core::library::{builtin_systems, cores};
+    cores(&builtin_systems()).into_iter().find(|c| c.id() == "swanstation").unwrap().controller
+}
 
 #[test]
 fn runs_a_ps1_game_without_a_bios() {
@@ -381,7 +384,7 @@ fn runs_a_ps1_game_without_a_bios() {
     let session = Session::start(
         LaunchSpec { core, rom, save: save.clone(), autosave: None, system_dir: dir.path().join("bios"),
                      options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None, rom_by_path: false,
-                     controller: Some(DUALSHOCK), states_restore_save: true, record: None },
+                     controller: swanstation_pad(), states_restore_save: true, record: None },
         Outputs { frames: frames.clone(), ..outputs() },
     ).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
@@ -678,7 +681,7 @@ fn a_ps1_game_on_two_discs_changes_disc_and_resumes_on_the_one_it_was_on() {
     let autosave = dir.path().join(".states/Game.autosave");
     let spec = || LaunchSpec { core: core.clone(), rom: rom.clone(), save: dir.path().join("Game.srm"), autosave: Some(autosave.clone()),
         system_dir: dir.path().join("bios"), options: vec![("swanstation_GPU_Renderer".into(), "Software".into())], option_list: None,
-        rom_by_path: false, controller: Some(DUALSHOCK), states_restore_save: true, record: None };
+        rom_by_path: false, controller: swanstation_pad(), states_restore_save: true, record: None };
     let on = |disc| Discs { count: 2, current: Some(disc) };
     let session = Session::start(spec(), outputs()).unwrap();
     assert_eq!(session.discs(), on(0));

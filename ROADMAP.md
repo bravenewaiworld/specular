@@ -23,14 +23,14 @@ Completed:
  - Clock in the status bar, hidden until the time has been set
  - Controls that appear late or disconnect are picked up again
  - The device's address on the Wi-Fi screen while connected, for file transfer, kept current as it changes; with Developer details, also the other interfaces' (e.g. the USB link)
- - Menus paced by the vsync, as games are. Measured on the Brick: a median of 16.6 ms between frames, scrolling and screens alike, with a frame late now and then (often an animation's first)
+ - Menus paced by the vsync, as games are. Measured on the Brick: a median of 16.6 ms between frames, scrolling and screens alike (except zooming into and out of a game, see TODO), with a frame late now and then (often an animation's first)
  - Everything except the display, backlight, the LEDs' brightness cap, volume, sleep and the WiFi driver goes through standard Linux interfaces (evdev, power supply, LED class, ALSA, wpa_supplicant, BlueZ, the framebuffer's vsync), shared by any Linux device
 
 TODO:
- - File transfer: Settings → File transfer runs Crystaline OS's WebDAV server and browser page only while open, and shows the addresses to open (WiFi's, and the USB cable's while a PC is connected) and that anyone on the network can reach the card meanwhile. "No SD card" without one; a failed start says why. No idle sleep while open; sleeping stops it, waking starts it again; stopped whenever Specular starts and quits (built; on the Brick, a failed start says why and stops the service; the server itself can't listen there yet, as Crystaline OS's dufs lacks its port 80 capability; to check again once it can, see DEVELOPMENT.md)
+ - File transfer: Settings → File transfer runs Crystaline OS's WebDAV server and browser page only while open, and shows the addresses to open (WiFi's, and the USB cable's while a PC is connected) and that anyone on the network can reach the card meanwhile. "No SD card" without one; a failed start says why. No idle sleep while open; sleeping stops it, waking starts it again; stopped whenever Specular starts and quits (built; on the Brick a failed start stops the service, but the server can't start yet: Crystaline OS's image ships its WebDAV server, dufs, without the capability to listen on port 80, `CAP_NET_BIND_SERVICE` (docs/brick.md, Findings); to check again once fixed, see DEVELOPMENT.md)
  - SSH on release systems: an "SSH" switch and "Import SSH keys from the SD card" in the developer settings (built; to check on the Brick, see DEVELOPMENT.md)
  - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `brick-timezone`; the clock changes at once (built; to check on the Brick, see DEVELOPMENT.md)
- - Rumble from games: works on the Brick as far as Specular goes (effects reach the motor, which followed a game's sound), but Crystaline OS's padbridge deadlocks on a game's first effect, wedging the buttons until a restart. Until it is fixed, set "Rumble" to 0. Then: a person feeling a game rumble (PS1 games now get a DualShock)
+ - Rumble from games: works on the Brick as far as Specular goes (effects reach the motor, which followed a game's sound), but Crystaline OS's padbridge deadlocks on a game's first effect, wedging the buttons until a restart. Until it is fixed, set "Rumble" to 0. Once padbridge is fixed, left to check: that a game's rumble feels right, PS1 games included (they get a DualShock)
  - SD card pulled and inserted, in the library and mid-game; a read-only card; a write refused as read-only runs `mount-card` (built; on the Brick, a card turned read-only and a repaired one checked; pulling and inserting cards needs a person, see DEVELOPMENT.md)
  - Zooming into and out of a game runs at half rate on the Brick (a median of 33 ms between frames, most of them late): find why
  - Separate volume levels for speaker and headphones, each in its own codec control (built; on the Brick, the levels set at start-up and muting checked; switching outputs needs a person, see DEVELOPMENT.md)
@@ -49,7 +49,7 @@ Completed:
  - Watchdog: a core stuck on one frame for 6 s restarts Specular
  - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)
  - Screen scaling: integer, fit, stretch
- - Measured on the Brick: Nestopia at full speed (Contra 6.8 ms a frame, Zelda 5.7 ms) and SwanStation at full speed with the CPU at 1.8 GHz or more (Metal Gear Solid, Castlevania: Symphony of the Night), its drawing thread helping; see docs/runtime.md
+ - Measured on the Brick: Nestopia at full speed (Contra 6.8 ms a frame, Zelda 5.7 ms) SwanStation reaches full speed only with the CPU at 1.8 GHz or more (Metal Gear Solid, Castlevania: Symphony of the Night), its drawing thread helping; not yet held there (see TODO; docs/runtime.md)
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play, Famicom Disk System games too: the ROM is unzipped into memory, never onto the card, and given to the core under the zip's name; a zip that can't be played says why
  - Cores' own log messages go into Specular's log (debug messages left out, and at most 30 a second)

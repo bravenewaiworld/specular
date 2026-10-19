@@ -37,7 +37,8 @@ impl FileTransfer for BrickTransfer {
         }
         eprintln!("transfer: port 80 took no connection within {} s", START_WAIT.as_secs());
         let status = explain(run("transfer", SV, &["status", "webdav"]).unwrap_or_else(|e| e));
-        // Only the service's own lines (its syslog tag), not Specular's lines about it.
+        // Only the service's own lines ("user.notice webdav: …": syslog's facility.level, then its
+        // tag), not Specular's lines that mention webdav.
         let log = format!("/sbin/logread | grep -E '\\.[a-z]+ webdav: ' | tail -n {LOG_LINES}");
         let log = run("transfer", "/bin/sh", &["-c", &log]).map(|l| said(&l)).unwrap_or_default();
         // (A failure to stop is logged; leaving the screen stops it again.)
@@ -53,7 +54,7 @@ impl FileTransfer for BrickTransfer {
 /// card is mounted.
 fn explain(status: String) -> String {
     if !status.starts_with("down:") { return status; }
-    let why = if status.contains("want up") { "it exited as it started" } else { "it stopped by itself, as it does with no SD card mounted" };
+    let why = if status.contains("want up") { "it exited right after starting" } else { "it stopped by itself, as it does with no SD card mounted" };
     format!("{why} ({status})")
 }
 
@@ -84,7 +85,7 @@ mod tests {
 
     #[test]
     fn a_server_that_exited_is_told_from_one_taken_down() {
-        assert_eq!(super::explain("down: webdav: 1s, want up".into()), "it exited as it started (down: webdav: 1s, want up)");
+        assert_eq!(super::explain("down: webdav: 1s, want up".into()), "it exited right after starting (down: webdav: 1s, want up)");
         assert_eq!(super::explain("down: webdav: 3s".into()), "it stopped by itself, as it does with no SD card mounted (down: webdav: 3s)");
         assert_eq!(super::explain("run: webdav: (pid 9) 4s".into()), "run: webdav: (pid 9) 4s");
     }

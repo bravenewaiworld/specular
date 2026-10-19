@@ -148,7 +148,8 @@ impl App {
 
     /// Logs the USB link to a PC coming up or going, as it holds off idle sleep (`stays_awake`).
     /// When it goes, the idle count starts again at the next tick, so pulling the cable after a
-    /// long idle doesn't put the device straight to sleep.
+    /// long idle doesn't put the device straight to sleep. Call it before `now` is stored: it
+    /// compares `now` with the interfaces stored.
     fn usb_link_changes(&mut self, now: &[Interface]) {
         let after = now.iter().find(|i| i.is_usb_link());
         match (self.usb_link().is_some(), after) {

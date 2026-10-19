@@ -188,7 +188,7 @@ const SWANSTATION: &CoreDecl = &CoreDecl {
         files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }], user: None,
 };
 
-/// libretro's DualShock for SwanStation: `RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)`.
+/// SwanStation's device ID for a DualShock: libretro's `RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)`.
 const PS_DUALSHOCK: u32 = (1 << 8) | 5;
 
 /// The cores of `systems`, each once, in their order.

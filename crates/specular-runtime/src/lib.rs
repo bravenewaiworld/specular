@@ -536,7 +536,8 @@ impl Game {
             frontend::install(None);
             return Err(format!("the core could not load {}", spec.rom.display()));
         }
-        // After the game is loaded, as RetroArch does: some cores only take it then.
+        // After the game is loaded, as RetroArch does (SwanStation applies it at its next frame;
+        // docs/runtime.md, Findings).
         if let Some(device) = spec.controller {
             unsafe { (core.set_controller_port_device)(0, device) };
             eprintln!("game: {name}'s player 1 has libretro device {device:#x}");
