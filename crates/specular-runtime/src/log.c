@@ -3,6 +3,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+// Set once, by log.rs's `start` as the first game loads (before its core is initialised); until
+// then messages are dropped.
 static void (*sink)(unsigned level, const char *line);
 
 void specular_log_to(void (*s)(unsigned, const char *)) { sink = s; }

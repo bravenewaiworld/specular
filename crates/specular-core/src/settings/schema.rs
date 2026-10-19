@@ -21,9 +21,9 @@ pub fn file(layer: &Layer) -> PathBuf {
     }
 }
 
-/// Every schema file, by its path relative to the config folder: the global one, then two for
-/// each of `systems` (the caller passes those with a core): its file's, and its games' shared one;
-/// then one for each of their cores' files.
+/// Every schema file, by its path relative to the config folder: the global one; then two for
+/// each of `systems` (the ones playable, with a core), one for the system's file and one shared
+/// by its games' files; then one for each of their cores' files.
 pub fn all(decls: &[SettingDecl], systems: &[SystemDecl]) -> Vec<(PathBuf, Value)> {
     let global = schema(decls, &Layer::Global, &[], "Specular settings",
         "Specular's settings. This file holds only the settings you changed: any left out has the default shown here.");

@@ -10,8 +10,8 @@ use crate::library::display_title;
 /// One system's games, to look a ROM up by checksum, serial or file name.
 #[derive(Default)]
 pub struct GameDb {
-    /// The table's `#` line (its source and commit): identifications made with another table
-    /// may be out of date.
+    /// The table's `#` line (its source and commit). `ArtIndex` records it with each game's
+    /// identification, and identifies again the games identified with another table.
     pub version: String,
     /// Every ROM's game name; the maps below hold indexes into it.
     names: Vec<Box<str>>,
@@ -129,7 +129,7 @@ pub fn normalise(name: &str) -> String {
 
 /// The value of a lower-case roman numeral from i to xxxix, written the usual way ("iiii" is
 /// not one). Larger ones are left alone: words such as "mix" and "dc" are rarely numbers. A
-/// lone "x" or "i" counts too, so "Mega Man X" would be the same name as "Mega Man 10".
+/// lone "x" or "i" counts too, so "Mega Man X" is the same name as "Mega Man 10".
 fn roman(word: &str) -> Option<u32> {
     const ONES: [&str; 10] = ["", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix"];
     let rest = word.trim_start_matches('x');
@@ -160,7 +160,8 @@ fn regions(name: &str) -> Vec<&'static str> {
 
 /// How much to prefer a name among games that match equally well (lower is better): released
 /// games before betas, prototypes, demos and unlicensed ones, then those of `own_regions`, then
-/// by region (USA, World, Europe, Japan, then the rest), then originals before revisions.
+/// by region (USA, World, Europe, Japan, then the rest; only No-Intro's region names count
+/// here, not GoodTools' letters), then originals before revisions.
 fn preference(name: &str, own_regions: &[&str]) -> (bool, bool, usize, bool) {
     let tags = &name[name.find('(').unwrap_or(name.len())..];
     let unreleased = ["(Beta", "(Proto", "(Demo", "(Sample", "(Pirate", "(Unl)"].iter().any(|t| tags.contains(t));

@@ -20,7 +20,13 @@ const HEADROOM: u64 = 64 << 20;
 
 /// A ROM unpacked into memory. Dropping this frees it and removes its link (the process's whole
 /// folder of links: there is one at a time, as one game runs at a time): `path` stops working.
-pub struct Unzipped { _file: File, pub path: PathBuf, linked: bool }
+pub struct Unzipped {
+    _file: File,
+    /// The path to give the core: the link, or the memfd's `/proc/self/fd/<n>` if the link
+    /// couldn't be made.
+    pub path: PathBuf,
+    linked: bool,
+}
 
 impl Drop for Unzipped {
     fn drop(&mut self) {

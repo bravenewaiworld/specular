@@ -52,7 +52,7 @@ pub struct LaunchSpec {
     /// (time paused doesn't count), on `Session::flush`, and when the game ends. Written
     /// zstd-compressed, like every save state, so other frontends can't read it as it is.
     pub autosave: Option<PathBuf>,
-    /// Where cores look for BIOS files (`bios/`).
+    /// Where cores look for BIOS files (the card's `bios/`): libretro's system directory.
     pub system_dir: PathBuf,
     /// Core options to set, by key (e.g. "mgba_idle_optimization"); the rest keep the core's
     /// defaults. A value the core doesn't take is logged, and its option keeps its default.
@@ -69,10 +69,10 @@ pub struct LaunchSpec {
     /// start) and its core is unloaded. Since only one game runs at a time (`Session::start`), one
     /// launch's ending can't remove the record of another.
     pub record: Option<(PathBuf, LaunchRecord)>,
-    /// The core's save states hold its save memory too, so loading one rolls the battery save
-    /// back. Then, the first time the battery save is written after a state is loaded, a save on
-    /// the card that the state wasn't made with (a newer one) is first renamed to
-    /// `<name>.newer.srm`.
+    /// Whether the core's save states hold its save memory too, so loading one rolls the battery
+    /// save back. If so, the first time the battery save is written after a state is loaded, a
+    /// save on the card that the state wasn't made with (one the game wrote later) is first
+    /// renamed to `<name>.newer.srm` rather than lost (see `keep_newer_save`).
     pub states_restore_save: bool,
 }
 
@@ -273,8 +273,10 @@ impl Session {
     /// next time it asks (libretro's GET_VARIABLE_UPDATE, usually each frame); some options only
     /// take effect when the game is started again.
     pub fn set_options(&self, options: Vec<(String, String)>) { let _ = self.cmds.send(Cmd::Options(options)); }
-    /// Saves the game's state to `path` (zstd-compressed); `load_state` also takes uncompressed ones.
+    /// Saves the game's state to `path` (zstd-compressed, with tags: see `StateTags`).
     pub fn save_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::SaveState(path.into(), r)) }
+    /// Loads the save state at `path`: one `save_state` wrote, or the core's own uncompressed data.
+    /// It may roll the battery save back (see `LaunchSpec::states_restore_save`).
     pub fn load_state(&self, path: &Path) -> io::Result<()> { self.ask(|r| Cmd::LoadState(path.into(), r)) }
     /// The game's discs, as its core says now: none for a core without libretro's disk control
     /// interface. Ask again after `load_state`, which may change the disc in.
@@ -611,8 +613,9 @@ impl Game {
         if let Some(r) = reply { self.writer.reply(r); }
     }
 
-    /// Queues the game's state to be written to `path` as a save state, with the crc32 of the
-    /// save memory as it is now.
+    /// Queues the game's state to be written to `path` as a save state, tagged with the crc32 of
+    /// the save memory as it is now: once the state is loaded, `keep_newer_save` compares it with
+    /// the save on the card to tell whether the game saved after the state was made.
     fn queue_state(&mut self, path: PathBuf) -> io::Result<()> {
         let size = unsafe { (self.core.serialize_size)() };
         let mut data = vec![0u8; size];
@@ -627,9 +630,9 @@ impl Game {
     fn load_state(&mut self, path: &Path) -> io::Result<()> { self.load_state_data(path, std::fs::read(path)?) }
 
     /// Loads `data`, the save state file at `path` (named in the log): one written by
-    /// `Writer::write_state`, or an uncompressed one (as earlier builds wrote them). If the state
-    /// was made on another disc than the one in (the core's states may not keep it), that disc is
-    /// put in.
+    /// `Writer::write_state`, or the core's own data as it is, untagged (told apart by
+    /// `ZSTD_MAGIC`). If the state was made on another disc than the one in (the core's states may
+    /// not keep it), that disc is put in.
     fn load_state_data(&mut self, path: &Path, mut data: Vec<u8>) -> io::Result<()> {
         let mut tags = StateTags::default();
         if data.starts_with(&ZSTD_MAGIC) {
@@ -783,6 +786,7 @@ const ZSTD_MAGIC: [u8; 4] = zstd::zstd_safe::MAGICNUMBER.to_le_bytes();
 
 /// A save state loaded into a core whose states restore its save memory.
 struct LoadedState {
+    /// For the log.
     path: PathBuf,
     /// The crc32 of the save memory the state was made with; None if it doesn't say.
     save_crc: Option<u32>,

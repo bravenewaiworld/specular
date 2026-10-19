@@ -21,6 +21,8 @@ CC=${CROSS_COMPILE:-}gcc CXX=${CROSS_COMPILE:-}g++
 	CMAKE_CROSS="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=$("$CC" -dumpmachine | cut -d- -f1)"
 
 # patched_src CORE URL COMMIT: CORE's source at COMMIT in $OUT/src/CORE, with our patches applied.
+# `git clean` (without -x) keeps ignored files: Nestopia's objects, built in its source tree, survive
+# it only if its .gitignore lists them.
 patched_src() {
 	d=$OUT/src/$1
 	git -C "$d" cat-file -e "$3^{commit}" 2>/dev/null ||
@@ -49,7 +51,8 @@ patched_src nestopia https://github.com/libretro/nestopia.git 06a8949e0b3cf60e3a
 CFLAGS="${CORE_CFLAGS:-}" CXXFLAGS="${CORE_CFLAGS:-}" make -C "$OUT/src/nestopia/libretro" CC="$CC" CXX="$CXX" -j"$(nproc)" >/dev/null
 cp "$OUT/src/nestopia/libretro/nestopia_libretro.so" "$OUT/"
 
-# SwanStation (GPL-3.0): CMake. Only its software renderer is used (no GL context is shared yet).
+# SwanStation (GPL-3.0): CMake. Only its software renderer is used: Specular gives cores no GL
+# context to draw with.
 patched_src swanstation https://github.com/libretro/swanstation.git e436e9b85374def58d211df7f78880f0f4a917b4
 cmake -S "$OUT/src/swanstation" -B "$OUT/build/swanstation" -DCMAKE_BUILD_TYPE=Release ${CMAKE_CROSS:-} \
 	-DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DCMAKE_C_FLAGS="${CORE_CFLAGS:-}" -DCMAKE_CXX_FLAGS="${CORE_CFLAGS:-}" >/dev/null

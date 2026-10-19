@@ -94,7 +94,8 @@ fn iso_serial(f: &mut File) -> io::Result<Option<String>> {
 
 /// The first sector and size of the file `name` in directory `dir`. A directory record holds
 /// its length at +0, first sector at +2, size at +10, name length at +32 and name at +33 (with a
-/// ";1" version); records never cross a sector's end, and a zero length pads to it.
+/// ";1" version). Records never cross a sector's end: a zero length byte means the rest of the
+/// sector is padding.
 fn find_file(dir: &[u8], name: &str) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < dir.len() {

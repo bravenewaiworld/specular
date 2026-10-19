@@ -35,8 +35,9 @@ fn parse(path: &Path) -> io::Result<Option<Map<String, Value>>> {
     }
 }
 
-/// Reads one settings file. A missing file is an empty layer. If the file is missing or not
-/// valid JSON, a valid `<file>.tmp` left by a save that was cut off is used instead.
+/// Reads one settings file. If the file is missing or not a JSON object, a valid `<file>.tmp`
+/// left by a save that was cut off is used instead; failing that, a missing file is an empty
+/// layer, and one that isn't a JSON object is moved aside (`LoadError::Corrupt`).
 pub fn load_layer(path: &Path) -> Result<Map<String, Value>, LoadError> {
     match parse(path) {
         Ok(Some(m)) => Ok(m),
@@ -57,8 +58,9 @@ pub fn load_layer(path: &Path) -> Result<Map<String, Value>, LoadError> {
 /// Writes one settings file safely (see the module doc). An empty layer removes the file.
 pub fn store_layer(path: &Path, map: &Map<String, Value>) -> io::Result<()> {
     if map.is_empty() {
-        // Also a stale .tmp, which `load_layer` would otherwise bring back; first, so a power cut
-        // between the two can't leave it alone.
+        // The `.tmp` a cut-off save may have left goes too, or `load_layer` would bring it back
+        // once the file is gone. It goes first, so a power cut between the two removals can't
+        // leave the `.tmp` without the file.
         for p in [tmp(path), path.to_path_buf()] {
             if let Err(e) = fs::remove_file(p) && e.kind() != io::ErrorKind::NotFound { return Err(e); }
         }
@@ -92,7 +94,8 @@ fn replace(path: &Path, text: &str, read_only: bool) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
     let tmp = tmp(path);
-    // One left by a cut-off `store_generated` is already read-only, so it couldn't be opened.
+    // One left by a cut-off `store_generated` is already read-only, so `File::create` couldn't
+    // open it for writing.
     let _ = fs::remove_file(&tmp);
     let mut f = File::create(&tmp)?;
     f.write_all(text.as_bytes())?;
