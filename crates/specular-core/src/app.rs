@@ -716,11 +716,15 @@ impl App {
                 why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
             }
             Msg::GameStopped(why) => {
+                // A game waiting for its card isn't saved: another card may be in.
+                let waiting = self.nav.contains(&screens::CARD_WAIT);
                 if self.playing.take().is_none() { return vec![]; }
                 self.idle_since = None;
+                self.nav.close(&screens::CARD_WAIT);
                 self.nav.close(&screens::GAME_MENU);
                 self.changed();
-                vec![Effect::QuitGame, Effect::Notice(format!("The game stopped: {why}")), Effect::Redraw(None)]
+                let end = if self.ctx.card_writable() && !waiting { Effect::QuitGame } else { Effect::AbandonGame };
+                vec![end, Effect::Notice(format!("The game stopped: {why}")), Effect::Redraw(None)]
             }
             Msg::LastGameStopped(r) => {
                 let title = crate::library::display_title(r.game.file_stem().unwrap_or_default().to_str().unwrap_or_default());

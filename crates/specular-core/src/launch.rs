@@ -45,6 +45,15 @@ impl LaunchRecord {
     /// cut short, when given nothing to store).
     pub fn remove(path: &Path) -> io::Result<()> { store::store_layer(path, &Default::default()) }
 
+    /// Removes the record at `path` if it is this one; returns whether it was. For a game ended
+    /// without saving (its card gone or read-only, so the record couldn't be removed then), once
+    /// its card can be written again: a record for any other game is left for `left_behind`.
+    pub fn remove_if_this(&self, path: &Path) -> io::Result<bool> {
+        let Ok(map) = store::load_layer(path) else { return Ok(false) };
+        if serde_json::from_value::<Self>(serde_json::Value::Object(map)).ok().as_ref() != Some(self) { return Ok(false); }
+        Self::remove(path).map(|()| true)
+    }
+
     /// At start-up: the record left at `path` by a game that didn't end, if there is one. It is
     /// logged in full and removed. A file that isn't JSON is logged and moved aside
     /// (`store::load_layer`); JSON that isn't a record is logged and removed. Both give None.
@@ -76,5 +85,20 @@ mod tests {
         r.write(&p).unwrap();
         LaunchRecord::remove(&p).unwrap();
         assert_eq!(LaunchRecord::left_behind(&p), None);
+    }
+
+    #[test]
+    fn only_the_same_record_is_removed_by_remove_if_this() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = path(dir.path());
+        let game = |title: &str| Game { system: "gba", path: format!("gba/{title}.gba").into(), title: title.into(), sort_key: String::new() };
+        let ours = LaunchRecord::new("mGBA", Path::new("/cores/mgba_libretro.so"), &game("Golden Sun"));
+        assert!(!ours.remove_if_this(&p).unwrap()); // none there
+        LaunchRecord::new("mGBA", Path::new("/cores/mgba_libretro.so"), &game("Mother 3")).write(&p).unwrap();
+        assert!(!ours.remove_if_this(&p).unwrap());
+        assert!(p.exists());
+        ours.write(&p).unwrap();
+        assert!(ours.remove_if_this(&p).unwrap());
+        assert!(!p.exists());
     }
 }

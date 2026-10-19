@@ -556,6 +556,10 @@ enum Io {
     Forget,
     /// Write a settings file.
     Save(PathBuf, serde_json::Map<String, serde_json::Value>),
+    /// A game was ended without saving (`Effect::AbandonGame`), so its launch record (at the
+    /// path) is likely still on its card: it is removed when that card can next be written, or
+    /// the next start would report the game as stopped unexpectedly.
+    Abandoned(PathBuf, LaunchRecord),
 }
 
 /// The I/O thread: reads the card when asked (`read_card`), and saves settings. It works in the
@@ -568,16 +572,27 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Io>, std::thread::JoinHandle<()>) 
         // The card's scan, whether settings may be written to its config folder, and whether the
         // next reading is the run's first (see `read_card`).
         let (mut scan, mut writable, mut first) = (None::<watch::Stop>, false, true);
-        let mut saves = HashMap::new();
+        let (mut saves, mut abandoned) = (HashMap::new(), None::<(PathBuf, LaunchRecord)>);
         while let Ok(cmd) = rx.recv() {
             for cmd in std::iter::once(cmd).chain(rx.try_iter()) {
-                if let Io::Save(path, values) = cmd { saves.insert(path, values); continue; }
+                match cmd {
+                    Io::Save(path, values) => { saves.insert(path, values); continue; }
+                    Io::Abandoned(path, record) => { abandoned = Some((path, record)); continue; }
+                    _ => {}
+                }
                 store_settings(&mut saves, writable);
                 if let Some(s) = scan.take() { s.stop(); }
                 (scan, writable) = match cmd {
                     Io::Read { reading, writable } => read_card(&data, reading, writable, std::mem::take(&mut first)),
                     _ => (None, false),
                 };
+                if writable && let Some((path, record)) = &abandoned {
+                    match record.remove_if_this(path) {
+                        Ok(true) => { eprintln!("game: removed the launch record of the game ended without saving"); abandoned = None; }
+                        Ok(false) => {} // another card: kept for when that game's is back
+                        Err(e) => wrote_to_card(&format!("game: removing the launch record {}", path.display()), &e),
+                    }
+                }
             }
             store_settings(&mut saves, writable);
         }
@@ -975,8 +990,10 @@ impl Runner {
                         self.keep_left_off(&p);
                         if let Err(e) = p.session.quit() { eprintln!("game: saving: {e}"); }
                     } else {
+                        let (path, record) = p.record.clone();
                         p.session.abandon();
                         eprintln!("game: ended without saving: the SD card can't be written");
+                        let _ = self.io.send(Io::Abandoned(path, record));
                     }
                 }
                 let _ = self.art_worker.send(art::ArtCmd::Paused(false));

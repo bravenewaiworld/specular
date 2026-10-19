@@ -1996,6 +1996,39 @@ mod card {
     }
 
     #[test]
+    fn a_game_its_bios_halts_while_waiting_for_its_card_ends_unsaved() {
+        let mut a = playing();
+        a.handle(card(GONE));
+        a.handle(card(B)); // writable, but not the game's
+        let e = a.handle(Msg::GameStopped("the BIOS halted".into()));
+        assert_eq!(e[0], Effect::AbandonGame);
+        assert_eq!((a.playing(), a.view().title.as_str()), (None, "Game Boy Advance")); // where it was launched from
+    }
+
+    #[test]
+    fn nothing_acts_on_the_settings_while_a_new_cards_are_read() {
+        use crate::timezone::{ZoneCmd, ZoneEvent};
+        use crate::wireless::wifi::{WifiEvent, WifiLink};
+        let mut a = App::new(builtin_systems(), quiet());
+        a.has_radios(true, false);
+        a.has_time_zone(true);
+        a.handle(card(A));
+        let allowed = || json!({"time.zone_lookup_allowed": true}).as_object().unwrap().clone();
+        a.handle(Msg::SettingsLoaded(Layer::Global, allowed()));
+        a.handle(Msg::TimeZone(ZoneEvent::Started { zone: Some("UTC".into()), zones: vec!["UTC".into()] }));
+        let e = a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: "Home".into(), address: "10.0.0.2".into(), bars: None })));
+        assert!(e.contains(&Effect::TimeZone(ZoneCmd::LookUp)), "{e:?}");
+        a.handle(card(GONE));
+        // Until card B's settings are read, its defaults (lookups not allowed) mustn't ask.
+        let e = a.handle(card(B));
+        assert!(!e.iter().any(|e| matches!(e, Effect::TimeZone(_) | Effect::Wifi(_))), "{e:?}");
+        assert_eq!(a.view().title, "Library");
+        let e = a.handle(Msg::SettingsLoaded(Layer::Global, allowed()));
+        assert!(!e.contains(&Effect::TimeZone(ZoneCmd::LookUp)), "{e:?}"); // already looked up on this network
+        assert_eq!(a.view().title, "Library");
+    }
+
+    #[test]
     fn a_write_refused_as_read_only_has_the_card_looked_at_once() {
         let mut a = with_card(A);
         let notice = || Effect::Notice("The SD card has turned read-only: nothing more can be saved".into());
