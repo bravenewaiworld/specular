@@ -619,15 +619,6 @@ mod wireless {
         tap(a, Button::A, t);
     }
 
-    /// Moves the focus down to the row labelled `label`.
-    fn focus_on(a: &mut App, label: &str) {
-        for _ in 0..a.view().rows.len() {
-            if focused(a) == label { return; }
-            tap(a, Button::Down, 0);
-        }
-        panic!("no row {label}");
-    }
-
     fn net(ssid: &str, secured: bool, saved: bool) -> Network { Network { ssid: ssid.into(), bars: 3, secured, saved, in_range: true, supported: true } }
 
     fn connected(ssid: &str) -> Msg { Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: ssid.into(), address: "10.0.0.2".into(), bars: None })) }
