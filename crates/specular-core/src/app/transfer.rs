@@ -81,7 +81,6 @@ struct TransferScreen;
 
 impl Screen for TransferScreen {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
-        let hints = vec![(Button::B, "Back".into()), (Button::A, "Select".into())];
         if !ctx.card_found {
             let rows = vec![Row::note("note:none", "No SD card"), Row::note("note:where", "Insert one to transfer files to it.")];
             return ScreenView::list("File transfer", rows);
@@ -103,7 +102,7 @@ impl Screen for TransferScreen {
                 // The other interfaces with a link, such as a USB cable's to a PC.
                 for i in ctx.wifi.iter().flat_map(|w| &w.interfaces) {
                     let label = if i.name.starts_with("usb") { "USB cable" } else { &i.name };
-                    rows.push(Row::new(format!("address:{}:{}", i.name, i.address), label, RowKind::Text { detail: Some(url(&i.address)) }));
+                    rows.push(Row::new(format!("address:{}:{}", i.name, i.address), label, RowKind::Note { detail: Some(url(&i.address)) }));
                 }
             }
             Some(Server::Failed(why)) => {
@@ -112,16 +111,18 @@ impl Screen for TransferScreen {
             }
             _ => rows.push(Row::note("note:starting", "Starting…")),
         }
-        ScreenView { title: "File transfer".into(), layout: Layout::List, rows, hints, entry: None }
+        let mut view = ScreenView::list("File transfer", rows);
+        view.hints.push((Button::A, "Select".into()));
+        view
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         if p.button == Button::B { return Outcome::Back; }
         if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
-        match (p.button, focused.map(|r| r.id.0.as_str()), &mut ctx.transfer) {
-            // Told to stop, the server is started again by the next reconcile.
-            (Button::A, Some("retry"), Some(t)) if !p.repeat => { t.told = false; Outcome::Changed }
-            _ => Outcome::None,
+        if p.button == Button::A && !p.repeat && focused.is_some_and(|r| r.id.0 == "retry") && let Some(t) = &mut ctx.transfer {
+            t.told = false; // so the next reconcile starts it again
+            return Outcome::Changed;
         }
+        Outcome::None
     }
 }

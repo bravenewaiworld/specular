@@ -723,12 +723,13 @@ impl App {
             Outcome::None => vec![],
             Outcome::Changed => { self.changed(); vec![Effect::Redraw(None)] }
             Outcome::Push(s) => {
-                // Settings shows what the installer can do now, and SSH's state.
                 let settings = s.id == screens::SETTINGS;
-                let ask = [(settings && self.ctx.install.is_some()).then_some(Effect::Installer(InstallCmd::Offer)),
-                           (settings && self.ctx.ssh.is_some()).then_some(Effect::Ssh(SshCmd::Status))];
                 let mut e = self.go(|nav| Some(nav.push(s)));
-                e.extend(ask.into_iter().flatten());
+                // Settings shows what the installer can do now, and SSH's state.
+                if settings {
+                    e.extend(self.ctx.install.as_ref().map(|_| Effect::Installer(InstallCmd::Offer)));
+                    e.extend(self.ctx.ssh.as_ref().map(|_| Effect::Ssh(SshCmd::Status)));
+                }
                 e
             }
             Outcome::Back => self.go(|nav| nav.pop()),

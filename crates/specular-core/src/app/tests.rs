@@ -1314,7 +1314,7 @@ mod transfer {
 
     fn row_value(a: &App, label: &str) -> Option<String> {
         a.view().rows.iter().find(|r| r.label == label).and_then(|r| match &r.kind {
-            RowKind::Action { value } | RowKind::Text { detail: value } => value.clone(),
+            RowKind::Action { value } | RowKind::Note { detail: value } => value.clone(),
             _ => None,
         })
     }

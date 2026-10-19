@@ -36,9 +36,9 @@ impl App {
 fn keys(n: u32) -> String { format!("{n} SSH key{}", if n == 1 { "" } else { "s" }) }
 
 /// The developer settings' SSH rows: the switch and the import where the user switches SSH; else
-/// (for developers) why there are none.
+/// why there are none.
 pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
-    let Some(state) = ctx.ssh.as_ref().filter(|_| ctx.visibility() == Visibility::Developer) else { return vec![] };
+    let Some(state) = &ctx.ssh else { return vec![] };
     match &state.status {
         Some(Ok(s)) if s.switchable => {
             let mut rows = vec![

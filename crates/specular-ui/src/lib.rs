@@ -435,7 +435,6 @@ const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
 /// sleep is done before it.
 fn hardware_thread(hw: Hardware) -> (mpsc::Sender<HwCmd>, std::thread::JoinHandle<()>) {
     let (tx, rx) = mpsc::channel();
-    let stop_transfer = |hw: &Hardware| if let Some(t) = &hw.file_transfer && let Err(e) = t.stop() { eprintln!("transfer: stopping: {e}"); };
     let handle = std::thread::spawn(move || {
         stop_transfer(&hw);
         let mut next_battery = Instant::now();
@@ -482,6 +481,10 @@ fn hardware_thread(hw: Hardware) -> (mpsc::Sender<HwCmd>, std::thread::JoinHandl
         }
     });
     (tx, handle)
+}
+
+fn stop_transfer(hw: &Hardware) {
+    if let Some(t) = &hw.file_transfer && let Err(e) = t.stop() { eprintln!("transfer: stopping: {e}"); }
 }
 
 /// A radio's thread: it owns the radio's service, starts it (its events become messages to the

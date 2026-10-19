@@ -6,7 +6,7 @@ use std::process::Command;
 /// prefixed by `area` (e.g. "transfer"). Ok: what it printed on stdout. Err: what it printed on
 /// stderr (else stdout, else its exit status), or why it couldn't run.
 pub fn run(area: &str, program: &str, args: &[&str]) -> Result<String, String> {
-    let line = std::iter::once(program).chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
+    let line = [&[program][..], args].concat().join(" ");
     let out = match Command::new(program).args(args).output() {
         Ok(out) => out,
         Err(e) => { eprintln!("{area}: {line}: {e}"); return Err(format!("{program}: {e}")); }
