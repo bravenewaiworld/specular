@@ -6,9 +6,13 @@
 //! (`builtin::TIME_ZONE_LOOKUP`). The question is put unprompted the first time a lookup would
 //! happen (WiFi connected) while the user is browsing (home, a game list, Settings, the radios'
 //! screens), never during a game; and when the user opens the Time zone screen, or chooses
-//! Automatic, without having allowed it. It stays until answered (Menu doesn't leave it).
-//! Declining makes the zone manual: the zone in effect stays (UTC on a new device), and the
-//! question is never put again unprompted. Picking a zone by hand makes it manual too.
+//! Automatic, without having allowed it. It stays until answered (Menu doesn't leave it). A
+//! device without WiFi counts as connected from the start, so it is asked (or looks up) once,
+//! at start. Declining makes the zone manual: the zone in effect stays (UTC on a new device),
+//! and the question is never put again unprompted. Picking a zone by hand makes it manual too.
+//!
+//! "Automatic" and "manual" are `time.zone`'s values ("auto", "manual"); the screen says
+//! "Automatically" and "By hand".
 //!
 //! The device keeps the zone; the app only shows it and asks for changes. Failures (no network,
 //! an unknown zone) are logged by the UI's time zone thread and otherwise only show as the zone
@@ -43,7 +47,7 @@ pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) {
 fn automatic(ctx: &Ctx) -> bool { ctx.settings.get(builtin::TIME_ZONE, &Layer::Global).is_some_and(|(v, _)| v == "auto") }
 fn lookup_allowed(ctx: &Ctx) -> bool { ctx.settings.on(builtin::TIME_ZONE_LOOKUP) }
 
-/// Sets a global setting the app itself chose a valid value for.
+/// Sets a global setting, ignoring the error: the app passes only values it knows are valid.
 fn set(ctx: &mut Ctx, key: &str, value: serde_json::Value) { let _ = ctx.settings.set(key, &Layer::Global, value); }
 
 /// The zone in effect, if the device has said.
@@ -57,7 +61,8 @@ fn area(zone: &str) -> Option<&str> { zone.split_once('/').map(|(a, _)| a) }
 /// A zone (or area) as the user sees it: "America/New York" for "America/New_York".
 fn label(zone: &str) -> String { zone.replace('_', " ") }
 
-/// The picker's first screen, with the focus on the zone in effect's area.
+/// The picker's first screen, with the focus on the zone in effect's area, or on the zone itself
+/// if it has none (UTC).
 fn areas(ctx: &Ctx) -> ScreenState {
     let mut s = ScreenState::new(screens::ZONE_AREAS, None);
     s.focus = current(ctx).map(|z| RowId(area(z).map_or(format!("zone:{z}"), |a| format!("area:{a}"))));
@@ -65,12 +70,13 @@ fn areas(ctx: &Ctx) -> ScreenState {
 }
 
 impl App {
-    /// Says whether the device has a time zone Specular can set (none until told). Call before
+    /// Tells the app whether the device's time zone can be set (until told, it can't). Call before
     /// the first message.
     pub fn has_time_zone(&mut self, yes: bool) { self.ctx.time_zone = yes.then(TimeZoneState::default); }
 
     /// The connection the network is reached through: the WiFi network's name while connected,
-    /// "" on a device without WiFi (its network, if any, is assumed to be there), else None.
+    /// "" on a device without WiFi (assumed connected all along: see the module's documentation),
+    /// else None.
     fn connection(&self) -> Option<String> {
         match self.ctx.wifi.as_ref().map(|w| &w.link) {
             None => Some(String::new()),
@@ -85,7 +91,8 @@ impl App {
         match e {
             ZoneEvent::Started { zone, zones } => *tz = TimeZoneState { zone, zones },
             ZoneEvent::Set { zone, result: Ok(()) } => tz.zone = Some(zone),
-            // The user may have picked a zone by hand since the lookup was sent.
+            // Only if still automatic (the user may have picked a zone by hand since the lookup
+            // was sent), and only if it differs from the zone in effect.
             ZoneEvent::LookedUp(Ok(zone)) if auto && tz.zone.as_ref() != Some(&zone) => return vec![Effect::TimeZone(ZoneCmd::Set(zone))],
             ZoneEvent::Set { result: Err(_), .. } | ZoneEvent::LookedUp(_) => return vec![],
         }
@@ -93,10 +100,11 @@ impl App {
         vec![Effect::Redraw(None)]
     }
 
-    /// Looks the zone up, or asks whether it may be, when the time has come (see the module's
-    /// documentation); called after every message. A lookup is made once per connection
-    /// (`zone_looked_up_for`, cleared when the connection ends or the zone is made manual, so
-    /// choosing Automatic again looks it up again).
+    /// Called after every message. Sends a lookup when one is due: Automatic, allowed, and
+    /// connected through a connection not yet looked up for (`zone_looked_up_for`, cleared when
+    /// the connection ends or the zone is made manual, so choosing Automatic again looks it up
+    /// again). Opens the question when Automatic isn't allowed yet and the user is browsing while
+    /// connected, or is on the Time zone screen.
     pub(super) fn reconcile_time_zone(&mut self) -> Vec<Effect> {
         if !self.settings_loaded || self.ctx.time_zone.is_none() { return vec![]; }
         let auto = automatic(&self.ctx);
@@ -115,8 +123,9 @@ impl App {
         self.go(|nav| Some(nav.push(ScreenState::new(screens::ZONE_CONSENT, None))))
     }
 
-    /// A press on the question: Allow makes the zone automatic; "Choose it myself" makes it manual
-    /// and opens the picker; B makes it manual. Each answer is kept.
+    /// A press on the question: Allow makes the zone automatic and allows lookups; "Choose it
+    /// myself" makes it manual and opens the picker; B makes it manual. Declining also sets
+    /// `time.zone_lookup_allowed` to false. Each answer is saved to the global settings.
     pub(super) fn zone_consent(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
         let (allow, pick) = match (button, row) {
             (Button::A, Some("allow")) => (true, false),
@@ -149,7 +158,8 @@ pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
          Row::new("open:time zone", "Time zone", RowKind::Action { value: current(ctx).map(label) })]
 }
 
-/// The Time zone screen: Automatic or Manual, and the zone in effect, which opens the picker.
+/// The Time zone screen: how the zone is set (`time.zone`: "Automatically" or "By hand"), and
+/// the zone in effect, which opens the picker.
 struct TimeZoneScreen;
 
 impl Screen for TimeZoneScreen {
@@ -166,8 +176,8 @@ impl Screen for TimeZoneScreen {
         match (p.button, focused) {
             (Button::B, _) => Outcome::Back,
             (Button::A, Some(row)) if row.id.0 == "zone" => Outcome::Push(areas(ctx)),
-            // Any press that changes it makes it Automatic (there are two choices), which needs
-            // permission first.
+            // While By hand and not allowed: any press that changes the choice would select
+            // Automatically (there are only two), so ask for permission instead.
             (Button::A | Button::Left | Button::Right, Some(row)) if row.id.0 == builtin::TIME_ZONE && !automatic(ctx) && !lookup_allowed(ctx) => {
                 if p.repeat { Outcome::None } else { Outcome::Push(ScreenState::new(screens::ZONE_CONSENT, None)) }
             }
@@ -178,8 +188,8 @@ impl Screen for TimeZoneScreen {
 }
 
 /// The picker's first screen: zones without an area (UTC), then the areas ("Europe"), each
-/// opening its zones. Row ids are "zone:" and a zone, or "area:" and an area. A zone's press is
-/// the app's (`App::pick_zone`).
+/// opening its zones. Row ids are "zone:" and a zone, or "area:" and an area. A on a zone is
+/// handled by the app (`App::pick_zone`) before this screen sees it.
 struct AreasScreen;
 
 impl Screen for AreasScreen {
@@ -207,8 +217,9 @@ impl Screen for AreasScreen {
     }
 }
 
-/// One area's zones (the area is the params), by name with a letter index, the zone in effect
-/// marked. Row ids are "zone:" and the zone; a press on one is the app's (`App::pick_zone`).
+/// One area's zones (the area is the params), in the device's order (by name, which the letter
+/// index relies on), the zone in effect marked. Row ids are "zone:" and the zone; A on one is
+/// handled by the app (`App::pick_zone`) before this screen sees it.
 struct CitiesScreen;
 
 impl Screen for CitiesScreen {
@@ -233,8 +244,9 @@ impl Screen for CitiesScreen {
     fn letter_index(&self) -> bool { true }
 }
 
-/// "Look up the time zone?": what a lookup tells whom. The app handles its presses
-/// (`App::zone_consent`).
+/// The question whether the zone may be looked up: it says that ipinfo.io learns the network's
+/// public address, and offers Allow or Choose it myself (B declines). The app handles its
+/// presses (`App::zone_consent`).
 struct ConsentScreen;
 
 impl Screen for ConsentScreen {

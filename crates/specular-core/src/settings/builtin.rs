@@ -152,7 +152,7 @@ pub fn settings() -> Vec<SettingDecl> {
             kind: SettingKind::Choice(&[("auto", "Automatically"), ("manual", "By hand")]), default: json!("auto"),
             visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: TIME_ZONE_LOOKUP, section: "Time", label: "Look up the time zone",
-            help: "Whether the time zone may be looked up by asking ipinfo.io, which tells it the network's public address. Asked once, when the time zone is automatic.",
+            help: "Whether the time zone may be looked up by asking ipinfo.io, which tells it the network's public address. Asked when the time zone is automatic and this isn't allowed yet.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: WIFI_KEEP_ON, section: "Developer", label: "Keep Wi-Fi on",
             help: "Keeps Wi-Fi on while it is set to \"auto\", so the device can still be reached over Wi-Fi (for SSH, or copying files).",

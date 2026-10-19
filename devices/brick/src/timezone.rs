@@ -1,6 +1,7 @@
 //! The Brick's time zone: the system's brick-timezone program (Crystaline OS's
-//! docs/power.md, "Time zone"). It keeps the zone across restarts, and logs its own errors to the
-//! system log too.
+//! docs/power.md, "Time zone"): `get` prints the zone, `set <zone>` sets it (exit 1 for a zone
+//! it has no file for), `list` prints UTC then tzdata's `zone.tab` zones by name. It keeps the
+//! zone across restarts, and logs its own errors to the system log too.
 
 use std::process::Command;
 
@@ -8,6 +9,7 @@ use specular_core::timezone::TimeZone;
 
 const PROGRAM: &str = "/usr/sbin/brick-timezone";
 
+/// The Brick's `TimeZone`, through `/usr/sbin/brick-timezone`.
 pub struct BrickTimeZone;
 
 impl TimeZone for BrickTimeZone {

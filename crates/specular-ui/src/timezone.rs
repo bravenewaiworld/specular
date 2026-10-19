@@ -49,7 +49,7 @@ pub fn thread(mut zone: Box<dyn TimeZone>) -> mpsc::Sender<ZoneCmd> {
 }
 
 /// Asks the lookup service for the network's zone; with $SPECULAR_TIMEZONE_LOOKUP set, takes its
-/// value as the answer instead, without the network (empty: no answer).
+/// value as the answer instead, without the network (empty: a blank answer, which is refused).
 fn look_up(agent: &ureq::Agent) -> Result<String, String> {
     let answer = match std::env::var("SPECULAR_TIMEZONE_LOOKUP") {
         Ok(answer) => { eprintln!("timezone: lookup: $SPECULAR_TIMEZONE_LOOKUP answered {answer:?}"); answer }

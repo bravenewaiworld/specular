@@ -1753,7 +1753,7 @@ mod time_zone {
         assert_eq!(zone(&a).as_deref(), Some("America/Toronto"));
         // The zone in effect already: nothing to set.
         assert_eq!(a.handle(looked_up(Ok("America/Toronto"))), vec![]);
-        // Failures change nothing and say nothing; a zone the device refuses (an alias it hasn't)
+        // Failures change nothing and say nothing; a zone the device refuses (one it has no file for)
         // leaves the zone as it was.
         assert_eq!(a.handle(looked_up(Err("ipinfo.io: timeout"))), vec![]);
         assert_eq!(zone_cmds(&a.handle(looked_up(Ok("Mars/Olympus_Mons")))), [&ZoneCmd::Set("Mars/Olympus_Mons".into())]);

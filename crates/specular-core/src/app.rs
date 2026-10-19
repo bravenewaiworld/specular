@@ -89,7 +89,8 @@ pub enum Msg {
     /// The running game's discs, as its core says: sent once it has started, and after a state is
     /// loaded or a disc changed. Ignored while no game runs.
     Discs(Discs),
-    /// What the device's time zone thread reports (answers to `Effect::TimeZone`).
+    /// What the UI's time zone thread reports: the zone and the list at start, then the answers
+    /// to `Effect::TimeZone`.
     TimeZone(ZoneEvent),
 }
 
@@ -163,7 +164,7 @@ pub enum Effect {
     /// played (it has the sound output, also while paused), muted, at volume 0 or with "Interface
     /// sounds" off.
     Sound(Sound),
-    /// For the device's time zone. The UI redraws the clock once a zone is set.
+    /// A command for the UI's time zone thread. The UI redraws the clock once a zone is set.
     TimeZone(ZoneCmd),
 }
 
@@ -326,12 +327,15 @@ pub mod screens {
     pub const SYSTEM_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("system settings"));
     /// While it is open, PCs can read and write the SD card (see `app::transfer`).
     pub const FILE_TRANSFER: ScreenId = ScreenId(std::borrow::Cow::Borrowed("file transfer"));
-    /// Settings → Time zone, and its picker: areas, then one area's zones (the area in its
-    /// params). Then the question whether the zone may be looked up (see `app::timezone`). The
-    /// question's presses, and presses on a zone in the picker, are handled by the app itself.
+    /// Settings → Time zone (see `app::timezone`).
     pub const TIME_ZONE: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone"));
+    /// The zone picker's first screen: zones with no area, then the areas. A on a zone is
+    /// handled by the app (`App::pick_zone`).
     pub const ZONE_AREAS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone areas"));
+    /// One area's zones, the area in its params. A on a zone is handled by the app.
     pub const ZONE_CITIES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone cities"));
+    /// The question whether the zone may be looked up. Its presses are handled by the app
+    /// (`App::zone_consent`).
     pub const ZONE_CONSENT: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone consent"));
 }
 
@@ -368,8 +372,8 @@ pub struct App {
     keyboard: Option<(Keyboard, String)>,
     /// The latest time seen (`Tick`, button and `WifiNeed` times).
     now: Duration,
-    /// Whether the global settings have been loaded: nothing is sent to the radios, and the time
-    /// zone isn't looked up, before (the settings say what to do).
+    /// Whether the global settings have been loaded. Until then nothing is sent to the radios and
+    /// the time zone isn't looked up, since the settings decide both.
     settings_loaded: bool,
     /// What the radios and sound were last told (see `wireless::Radios`).
     radios: wireless::Radios,

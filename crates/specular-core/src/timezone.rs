@@ -3,15 +3,15 @@
 //! Specular chooses it: by hand, or automatically by asking a lookup service for the network's
 //! zone (see app::timezone and docs/time-zone.md).
 
-/// The device's time zone. Calls may be slow (they run a program), so the UI crate makes them on
-/// a thread of its own.
+/// The device's time zone. Calls may be slow (on the Brick each runs a program), so the UI crate
+/// makes them on a thread of its own.
 pub trait TimeZone: Send {
     /// The zone in effect, such as "Europe/Paris".
     fn get(&mut self) -> Result<String, String>;
     /// Makes `zone` the zone in effect. Refuses a zone the device doesn't have. It may accept
     /// zones `list` leaves out (aliases, such as "US/Eastern").
     fn set(&mut self, zone: &str) -> Result<(), String>;
-    /// The zones to choose from, in order.
+    /// The zones to choose from, in the order to show them (by name; the picker keeps it).
     fn list(&mut self) -> Result<Vec<String>, String>;
 }
 
@@ -48,9 +48,10 @@ pub fn zone_name(answer: &str) -> Result<String, String> {
 }
 
 /// A stand-in for the desktop build: the zone is kept in memory (UTC at start) and given to the
-/// process as $TZ, and the zones are the PC's (`ZONEINFO`), listed as the Brick lists them. Needs
-/// $TZ to be set before any thread starts (the desktop's `main` sets it to UTC), so that changing
-/// it later only replaces its value (see `set`).
+/// process as $TZ, and the zones are the PC's (`ZONEINFO`): UTC, then `zone.tab`'s by name, as
+/// brick-timezone lists them. Needs $TZ to be set before any thread starts (the desktop's `main`
+/// sets it to UTC), so that `set` only swaps its value rather than growing the environment,
+/// which other threads may be reading.
 pub struct Simulated { zone: String }
 
 /// Where the PC keeps its zones.
@@ -67,7 +68,8 @@ impl Default for Simulated {
 impl TimeZone for Simulated {
     fn get(&mut self) -> Result<String, String> { Ok(self.zone.clone()) }
 
-    /// Refuses names that aren't a zone file, as brick-timezone does.
+    /// Refuses names that aren't a zone file, and the `posix/` and `right/` copies, as
+    /// brick-timezone does.
     fn set(&mut self, zone: &str) -> Result<(), String> {
         let path = std::path::Path::new(ZONEINFO).join(zone);
         let tzif = std::fs::read(&path).is_ok_and(|b| b.starts_with(b"TZif"));
