@@ -18,4 +18,5 @@ pub mod palette;
 pub mod repeat;
 pub mod rumble;
 pub mod settings;
+pub mod timezone;
 pub mod wireless;

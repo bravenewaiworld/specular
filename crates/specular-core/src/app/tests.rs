@@ -1616,3 +1616,204 @@ mod ssh {
         assert!(!labels(&a).contains(&"SSH".into()));
     }
 }
+
+mod time_zone {
+    use super::*;
+    use crate::timezone::{ZoneCmd, ZoneEvent};
+    use crate::wireless::wifi::{WifiEvent, WifiLink};
+
+    const ZONES: [&str; 5] = ["UTC", "America/Argentina/Buenos_Aires", "America/Toronto", "Europe/Berlin", "Europe/Paris"];
+
+    /// An app with WiFi (not connected) and a time zone (UTC), at home, its settings loaded with
+    /// `stored`.
+    fn zone_app(stored: serde_json::Value) -> App {
+        let mut a = app();
+        a.has_radios(true, false);
+        a.has_time_zone(true);
+        a.handle(Msg::SettingsLoaded(Layer::Global, stored.as_object().unwrap().clone()));
+        a.handle(Msg::TimeZone(ZoneEvent::Started { zone: Some("UTC".into()), zones: ZONES.map(String::from).to_vec() }));
+        a
+    }
+
+    /// One where the lookup was allowed earlier.
+    fn allowed_app() -> App { zone_app(json!({"time.zone_lookup_allowed": true})) }
+
+    fn connected(ssid: &str) -> Msg { Msg::Wifi(WifiEvent::Link(WifiLink::Connected { ssid: ssid.into(), address: "10.0.0.2".into(), bars: None })) }
+    fn looked_up(answer: Result<&str, &str>) -> Msg { Msg::TimeZone(ZoneEvent::LookedUp(answer.map(String::from).map_err(String::from))) }
+    fn set(zone: &str, result: Result<(), &str>) -> Msg { Msg::TimeZone(ZoneEvent::Set { zone: zone.into(), result: result.map_err(String::from) }) }
+
+    fn zone_cmds(e: &[Effect]) -> Vec<&ZoneCmd> { e.iter().filter_map(|e| match e { Effect::TimeZone(c) => Some(c), _ => None }).collect() }
+    fn zone(a: &App) -> Option<String> { a.ctx().time_zone.as_ref().unwrap().zone.clone() }
+    fn stored(a: &App, key: &str) -> Option<serde_json::Value> { a.ctx().settings.layer(&Layer::Global).get(key).cloned() }
+
+    /// Moves the focus to the row labelled `label` and presses A.
+    fn press(a: &mut App, label: &str) -> Vec<Effect> {
+        for _ in 0..a.view().rows.len() {
+            if focused(a) == label { return tap(a, Button::A, 0); }
+            tap(a, Button::Down, 0);
+        }
+        panic!("no row {label} in {:?}", labels(a));
+    }
+
+    /// Opens Settings, then its Time zone screen.
+    fn open_time_zone(a: &mut App) {
+        tap(a, Button::Up, 0); // home wraps to its last row, Settings
+        tap(a, Button::A, 0);
+        press(a, "Time zone");
+    }
+
+    #[test]
+    fn the_question_is_asked_when_wifi_first_connects_and_allowing_looks_up() {
+        let mut a = zone_app(json!({}));
+        assert_eq!(a.view().title, "Library"); // not before there is a network
+        let e = a.handle(connected("Home"));
+        assert_eq!(zone_cmds(&e), Vec::<&ZoneCmd>::new());
+        assert_eq!(a.view().title, "Look up the time zone?");
+        let e = press(&mut a, "Allow");
+        assert_eq!(zone_cmds(&e), [&ZoneCmd::LookUp]);
+        assert!(e.contains(&Effect::SaveSettings(Layer::Global)));
+        assert_eq!(a.view().title, "Library");
+        assert_eq!(stored(&a, "time.zone_lookup_allowed"), Some(json!(true)));
+    }
+
+    #[test]
+    fn the_question_waits_until_the_game_ends() {
+        let mut a = zone_app(json!({}));
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 0); // plays Golden Sun
+        a.handle(connected("Home"));
+        assert_eq!(a.input_target(), InputTarget::Game);
+        a.handle(Msg::GameEnded(None));
+        assert_eq!(a.view().title, "Look up the time zone?");
+    }
+
+    #[test]
+    fn declining_keeps_the_zone_and_is_never_asked_again_unprompted() {
+        let mut a = zone_app(json!({}));
+        a.handle(connected("Home"));
+        let e = tap(&mut a, Button::B, 0);
+        assert_eq!(zone_cmds(&e), Vec::<&ZoneCmd>::new());
+        assert_eq!(a.view().title, "Library");
+        assert_eq!(stored(&a, "time.zone"), Some(json!("manual")));
+        // Nor after a restart, with the settings saved.
+        let mut b = zone_app(serde_json::Value::Object(a.ctx().settings.layer(&Layer::Global)));
+        assert_eq!(zone_cmds(&b.handle(connected("Home"))), Vec::<&ZoneCmd>::new());
+        assert_eq!(b.view().title, "Library");
+        assert_eq!(zone(&b).as_deref(), Some("UTC"));
+    }
+
+    #[test]
+    fn the_question_stays_until_answered_and_is_put_once() {
+        let mut a = zone_app(json!({}));
+        a.handle(connected("Home"));
+        assert_eq!(tap(&mut a, Button::Menu, 0), vec![]);
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
+        a.handle(connected("Home"));
+        assert_eq!(a.view().title, "Look up the time zone?");
+        tap(&mut a, Button::B, 0);
+        assert_eq!(a.view().title, "Library"); // not a second one below
+    }
+
+    #[test]
+    fn choosing_it_myself_opens_the_picker_which_sets_the_zone() {
+        let mut a = zone_app(json!({}));
+        a.handle(connected("Home"));
+        press(&mut a, "Choose it myself");
+        assert_eq!(a.view().title, "Choose a time zone");
+        assert_eq!(labels(&a), ["UTC", "America", "Europe"]);
+        press(&mut a, "America");
+        assert_eq!(labels(&a), ["Argentina / Buenos Aires", "Toronto"]);
+        let e = press(&mut a, "Toronto");
+        assert_eq!(zone_cmds(&e), [&ZoneCmd::Set("America/Toronto".into())]);
+        assert!(e.contains(&Effect::SaveSettings(Layer::Global)));
+        assert_eq!(a.view().title, "Library"); // back where the question was put
+        assert_eq!(stored(&a, "time.zone"), Some(json!("manual")));
+        a.handle(set("America/Toronto", Ok(())));
+        assert_eq!(zone(&a).as_deref(), Some("America/Toronto"));
+    }
+
+    #[test]
+    fn a_lookup_is_made_once_per_connection() {
+        let mut a = allowed_app();
+        assert_eq!(zone_cmds(&a.handle(connected("Home"))), [&ZoneCmd::LookUp]);
+        // The link is reported again with each signal reading.
+        assert_eq!(zone_cmds(&a.handle(connected("Home"))), Vec::<&ZoneCmd>::new());
+        a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
+        assert_eq!(zone_cmds(&a.handle(connected("Home"))), [&ZoneCmd::LookUp]);
+        assert_eq!(zone_cmds(&a.handle(connected("Cafe"))), [&ZoneCmd::LookUp]);
+        assert_eq!(a.view().title, "Library"); // allowed earlier: not asked
+    }
+
+    #[test]
+    fn a_lookup_is_set_unless_the_zone_was_picked_by_hand_since() {
+        let mut a = allowed_app();
+        a.handle(connected("Home"));
+        assert_eq!(zone_cmds(&a.handle(looked_up(Ok("America/Toronto")))), [&ZoneCmd::Set("America/Toronto".into())]);
+        a.handle(set("America/Toronto", Ok(())));
+        assert_eq!(zone(&a).as_deref(), Some("America/Toronto"));
+        // The zone in effect already: nothing to set.
+        assert_eq!(a.handle(looked_up(Ok("America/Toronto"))), vec![]);
+        // Failures change nothing and say nothing; a zone the device refuses (an alias it hasn't)
+        // leaves the zone as it was.
+        assert_eq!(a.handle(looked_up(Err("ipinfo.io: timeout"))), vec![]);
+        assert_eq!(zone_cmds(&a.handle(looked_up(Ok("Mars/Olympus_Mons")))), [&ZoneCmd::Set("Mars/Olympus_Mons".into())]);
+        assert_eq!(a.handle(set("Mars/Olympus_Mons", Err("no time zone"))), vec![]);
+        assert_eq!(zone(&a).as_deref(), Some("America/Toronto"));
+        open_time_zone(&mut a);
+        press(&mut a, "Zone");
+        assert_eq!(focused(&a), "America"); // the zone in effect's
+        press(&mut a, "Europe");
+        press(&mut a, "Berlin");
+        assert_eq!(a.view().title, "Time zone");
+        assert_eq!(a.handle(looked_up(Ok("America/Toronto"))), vec![]);
+    }
+
+    #[test]
+    fn choosing_automatic_asks_unless_allowed_and_looks_up_at_once() {
+        let mut a = zone_app(json!({"time.zone": "manual"}));
+        a.handle(connected("Home"));
+        assert_eq!(a.view().title, "Library"); // manual: not asked
+        open_time_zone(&mut a);
+        assert_eq!(a.view().title, "Time zone");
+        assert_eq!(focused(&a), "Set");
+        tap(&mut a, Button::Right, 0);
+        assert_eq!(a.view().title, "Look up the time zone?");
+        let e = press(&mut a, "Allow");
+        assert_eq!(zone_cmds(&e), [&ZoneCmd::LookUp]);
+        assert_eq!(a.view().title, "Time zone");
+        // Manual and back: looked up again, without asking.
+        assert_eq!(zone_cmds(&tap(&mut a, Button::Right, 0)), Vec::<&ZoneCmd>::new());
+        assert_eq!(zone_cmds(&tap(&mut a, Button::Right, 0)), [&ZoneCmd::LookUp]);
+        assert_eq!(a.view().title, "Time zone");
+    }
+
+    #[test]
+    fn opening_the_time_zone_screen_asks_if_not_yet_allowed() {
+        let mut a = zone_app(json!({}));
+        open_time_zone(&mut a);
+        assert_eq!(a.view().title, "Look up the time zone?");
+        tap(&mut a, Button::B, 0);
+        assert_eq!(a.view().title, "Time zone");
+        assert!(labels(&a).contains(&"Zone".to_string()));
+    }
+
+    #[test]
+    fn settings_show_the_zone_in_effect_and_the_picker_marks_it() {
+        let mut a = zone_app(json!({"time.zone": "manual"}));
+        a.handle(set("America/Argentina/Buenos_Aires", Ok(())));
+        tap(&mut a, Button::Up, 0);
+        tap(&mut a, Button::A, 0);
+        let row = a.view().rows.iter().find(|r| r.label == "Time zone").cloned().unwrap();
+        assert_eq!(row.kind, RowKind::Action { value: Some("America/Argentina/Buenos Aires".into()) });
+        press(&mut a, "Time zone");
+        press(&mut a, "Zone");
+        press(&mut a, "America");
+        assert_eq!(focused(&a), "Argentina / Buenos Aires");
+        assert_eq!(a.view().rows[a.focus()].kind, RowKind::Text { detail: Some("Current".into()) });
+        // A device whose zone can't be set has no row.
+        let mut b = app();
+        tap(&mut b, Button::Up, 0);
+        tap(&mut b, Button::A, 0);
+        assert!(!labels(&b).contains(&"Time zone".to_string()));
+    }
+}

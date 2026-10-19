@@ -78,8 +78,6 @@ impl BtState {
 /// What the radios and sound were last told, so only changes are sent.
 #[derive(Debug)]
 pub(super) struct Radios {
-    /// Nothing is sent before the settings are loaded: they say what the radios should do.
-    pub settings_loaded: bool,
     wifi_power: Option<bool>,
     /// A scan was asked for since the Wi-Fi screen opened (or WiFi came on with it open).
     scanned: bool,
@@ -98,7 +96,7 @@ pub(super) struct Radios {
 
 impl Default for Radios {
     fn default() -> Self {
-        Self { settings_loaded: false, wifi_power: None, scanned: false, bt_power: None, bt_search: false, output: Output::Speaker, failed: None,
+        Self { wifi_power: None, scanned: false, bt_power: None, bt_search: false, output: Output::Speaker, failed: None,
                needs: HashMap::new(), needed: false, grace_until: Duration::ZERO }
     }
 }
@@ -200,7 +198,7 @@ impl App {
     /// Commands that bring the radios and the sound output to what the settings and screens
     /// want now; sent after every message.
     pub(super) fn reconcile_radios(&mut self) -> Vec<Effect> {
-        if !self.radios.settings_loaded { return vec![]; }
+        if !self.settings_loaded { return vec![]; }
         let mut e = vec![];
         if self.ctx.wifi.is_some() {
             let needed = self.wifi_needed();

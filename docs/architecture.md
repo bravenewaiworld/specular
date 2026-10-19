@@ -96,6 +96,7 @@ pub trait Screen {
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
 | Rumble | runs the motors, at the latest state asked for (`rumble::RumbleLine`) |
 | Installer | the device's installer |
+| Time zone | the device's time zone, and looking it up (see [time-zone.md](time-zone.md)) |
 | Art worker, art loader | finding and storing pictures (and the frame each game was left on); decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
 | Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written |
@@ -134,6 +135,7 @@ pub struct Hardware {
     pub wifi: Option<Box<Wifi>>,                  // see wireless.md
     pub bluetooth: Option<Box<Bluetooth>>,
     pub installer: Option<Box<dyn Installer>>,    // see installer.md
+    pub time_zone: Option<Box<dyn TimeZone>>,     // see time-zone.md
     pub headphones: Option<Box<dyn HeadphoneJack>>,
     pub rumble: Option<Box<dyn Rumble>>,
     pub file_transfer: Option<Box<dyn FileTransfer>>,   // see remote-access.md

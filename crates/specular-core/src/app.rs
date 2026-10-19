@@ -19,6 +19,7 @@ use crate::model::{Icon, ImageRef, Layout, Row, RowKind, ScreenId, ScreenView, T
 use crate::nav::{NavStack, ScreenState, Transition};
 use crate::repeat::Repeater;
 use crate::settings::{Layer, SettingDecl, Settings, Visibility, builtin};
+use crate::timezone::{ZoneCmd, ZoneEvent};
 use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
@@ -29,7 +30,9 @@ mod install;
 mod layers;
 mod ssh;
 mod transfer;
+mod timezone;
 mod wireless;
+pub use timezone::TimeZoneState;
 pub use wireless::{BtState, WifiNeed, WifiState};
 pub use install::{InstallCmd, InstallState, TaskView};
 pub use ssh::SshState;
@@ -86,6 +89,7 @@ pub enum Msg {
     /// The running game's discs, as its core says: sent once it has started, and after a state is
     /// loaded or a disc changed. Ignored while no game runs.
     Discs(Discs),
+    TimeZone(ZoneEvent),
 }
 
 /// A game's discs, for the game menu's Disc row.
@@ -158,6 +162,8 @@ pub enum Effect {
     /// played (it has the sound output, also while paused), muted, at volume 0 or with "Interface
     /// sounds" off.
     Sound(Sound),
+    /// For the device's time zone. The UI redraws the clock once a zone is set.
+    TimeZone(ZoneCmd),
 }
 
 /// The interface's sounds (made in specular-ui; see docs/look-and-motion.md).
@@ -216,6 +222,8 @@ pub struct Ctx {
     pub turned_away: Vec<library::user_cores::TurnedAway>,
     /// The running game's discs (`Msg::Discs`); none until its core says.
     pub discs: Discs,
+    /// None on a device whose time zone can't be set; see `App::has_time_zone`.
+    pub time_zone: Option<TimeZoneState>,
 }
 
 impl Ctx {
@@ -317,6 +325,13 @@ pub mod screens {
     pub const SYSTEM_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("system settings"));
     /// While it is open, PCs can read and write the SD card (see `app::transfer`).
     pub const FILE_TRANSFER: ScreenId = ScreenId(std::borrow::Cow::Borrowed("file transfer"));
+    /// Settings → Time zone, and its picker: areas, then one area's zones (the area in its
+    /// params). Then the question whether the zone may be looked up (see `app::timezone`). The
+    /// question's presses, and presses on a zone in the picker, are handled by the app itself.
+    pub const TIME_ZONE: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone"));
+    pub const ZONE_AREAS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone areas"));
+    pub const ZONE_CITIES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone cities"));
+    pub const ZONE_CONSENT: ScreenId = ScreenId(std::borrow::Cow::Borrowed("time zone consent"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -352,8 +367,13 @@ pub struct App {
     keyboard: Option<(Keyboard, String)>,
     /// The latest time seen (`Tick`, button and `WifiNeed` times).
     now: Duration,
+    /// Whether the global settings have been loaded: nothing is sent to the radios, and the time
+    /// zone isn't looked up, before (the settings say what to do).
+    settings_loaded: bool,
     /// What the radios and sound were last told (see `wireless::Radios`).
     radios: wireless::Radios,
+    /// The connection the time zone was last looked up for (see `App::reconcile_time_zone`).
+    zone_looked_up_for: Option<String>,
     /// When the last `Sound::Move` was sent (see `TICK_GAP`).
     last_tick: Option<Duration>,
     /// True from sending `Effect::Sleep` until `Msg::Woke`.
@@ -378,9 +398,10 @@ impl App {
         cores::register(&mut screens);
         layers::register(&mut screens);
         transfer::register(&mut screens);
+        timezone::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card_found: true, settings: Settings::new(settings), battery: None, wifi: None, bluetooth: None, install: None,
-                   transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(), discs: Discs::default() },
+                   transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(), discs: Discs::default(), time_zone: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -393,7 +414,9 @@ impl App {
             cache: RefCell::default(),
             keyboard: None,
             now: Duration::ZERO,
+            settings_loaded: false,
             radios: wireless::Radios::default(),
+            zone_looked_up_for: None,
             last_tick: None,
             asleep: false,
         }
@@ -562,6 +585,7 @@ impl App {
         // holds the sound output.
         let in_game = self.playing.is_some();
         let mut e = self.handle_msg(msg);
+        e.extend(self.reconcile_time_zone());
         e.extend(self.reconcile_radios());
         e.extend(self.reconcile_transfer());
         self.drop_unheard_sounds(&mut e, in_game);
@@ -656,7 +680,7 @@ impl App {
                 // The other layers are loaded before the games they are for are listed, so before
                 // any of those can be played: nothing in them applies yet.
                 let applied: Vec<Effect> = if global {
-                    self.radios.settings_loaded = true;
+                    self.settings_loaded = true;
                     self.apply_all(|_| true)
                 } else { vec![] };
                 std::iter::once(Effect::Redraw(None)).chain(applied).chain(save).collect()
@@ -676,6 +700,7 @@ impl App {
                 self.changed();
                 vec![Effect::Redraw(None)]
             }
+            Msg::TimeZone(e) => self.time_zone_event(e),
         }
     }
 
@@ -718,6 +743,12 @@ impl App {
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
         if let Some(e) = self.install_press(&id, p.button, row) { return e; }
+        if id == screens::ZONE_CONSENT { return self.zone_consent(p.button, row); }
+        let picked = row.and_then(|r| r.strip_prefix("zone:")).filter(|_| p.button == Button::A);
+        if let (true, Some(zone)) = ([screens::ZONE_AREAS, screens::ZONE_CITIES].contains(&id), picked) {
+            let zone = zone.to_string();
+            return self.pick_zone(zone);
+        }
         // (A, B and Menu never repeat.) Over a paused game, Menu resumes it.
         if p.button == Button::Menu && self.nav.contains(&screens::GAME_MENU) { return self.resume(); }
         if p.button == Button::Menu { return self.go(|nav| nav.home()); }
@@ -1061,6 +1092,7 @@ impl Screen for SettingsScreen {
         let mut rows = vec![];
         if !connections.is_empty() { rows.push(Row::new("section:connections", "Connections", RowKind::Header)); }
         rows.extend(connections);
+        rows.extend(timezone::settings_rows(ctx));
         rows.extend(ctx.settings.rows(&Layer::Global, ctx.visibility(), None));
         // Credits, last in the System section.
         let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
@@ -1076,7 +1108,7 @@ impl Screen for SettingsScreen {
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
         if p.button == Button::B { return Outcome::Back; }
-        if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p)) { return open; }
+        if let Some(open) = focused.and_then(|row| wireless::settings_press(row, p).or_else(|| timezone::settings_press(row, p))) { return open; }
         if p.button == Button::A && let Some(row) = focused {
             match row.id.0.as_str() {
                 "open:icons" => return Outcome::Push(ScreenState::new(screens::ICONS, None)),

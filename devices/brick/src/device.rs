@@ -50,6 +50,7 @@ impl Device for Brick {
             wifi: Some(Box::new(Traced::new("wifi", WpaSupplicant::new(crate::wifi::SOCKET, Box::new(crate::wifi::BrickWifi))))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
             installer: Some(Box::new(crate::install::BrickInstaller)),
+            time_zone: Some(Box::new(crate::timezone::BrickTimeZone)),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
             // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.

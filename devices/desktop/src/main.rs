@@ -40,6 +40,10 @@ fn main() -> Result<(), specular_ui::Error> {
     // One window pixel per panel pixel, whatever the desktop's scaling.
     // SAFETY: before any other thread exists.
     unsafe { std::env::set_var("SLINT_SCALE_FACTOR", "1") };
+    // The simulated time zone starts in UTC, as a new device does, whatever the PC's, and moves
+    // by changing $TZ, which must exist before other threads start (see `timezone::Simulated`).
+    // SAFETY: before any other thread exists.
+    unsafe { std::env::set_var("TZ", "UTC") };
     let data = std::env::args().nth(1).unwrap_or_else(|| "sdcard".into());
     specular_ui::run(Box::new(Desktop), DataRoot(data.into()), None, CREDITS)
 }

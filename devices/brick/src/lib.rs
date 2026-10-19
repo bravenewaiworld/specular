@@ -8,4 +8,5 @@ pub mod install;
 pub mod platform;
 pub mod ssh;
 pub mod transfer;
+pub mod timezone;
 pub mod wifi;

@@ -224,6 +224,8 @@ pub struct Hardware {
     pub bluetooth: Option<Box<wireless::Bluetooth>>,
     /// None on devices without internal storage to install onto.
     pub installer: Option<Box<dyn crate::install::Installer>>,
+    /// None on devices whose time zone Specular can't set.
+    pub time_zone: Option<Box<dyn crate::timezone::TimeZone>>,
     /// None on devices that can't tell when headphones are plugged in.
     pub headphones: Option<Box<dyn HeadphoneJack>>,
     /// None on devices without a rumble motor.
@@ -256,7 +258,7 @@ pub trait Device {
 /// headphone jack (a desktop key simulates one, see `specular_ui::run`), and its radios follow a
 /// scenario (`wireless::scenario`): the file named by $SPECULAR_SCENARIO, `{"wifi": <script>,
 /// "bluetooth": <script>}`, else a built-in one with a few networks and devices. File transfer and
-/// SSH are pretend (see `SimTransfer`, `SimSsh`).
+/// SSH are pretend (see `SimTransfer`, `SimSsh`). Its time zone is `timezone::Simulated`.
 pub mod simulated {
     use std::time::Instant;
 
@@ -336,6 +338,7 @@ pub mod simulated {
             wifi: Some(Box::new(Traced::new("wifi", radio(&script, "wifi")))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", radio(&script, "bluetooth")))),
             installer: Some(Box::new(crate::install::Simulated)),
+            time_zone: Some(Box::new(crate::timezone::Simulated::new())),
             headphones: None,
             rumble: Some(Box::new(Sim(t))),
             file_transfer: Some(Box::new(SimTransfer)),

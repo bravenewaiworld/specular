@@ -62,6 +62,13 @@ pub const LIBRARY_VIEW: &str = "library.view";
 pub const ART: &str = "library.art";
 /// Shows the game's frame rate and the core's time per frame over the game (a developer setting).
 pub const FRAME_STATS: &str = "dev.frame_stats";
+/// How the time zone is chosen: "auto" (looked up from the network, once `TIME_ZONE_LOOKUP`
+/// allows it) or "manual" (picked from a list). The zone itself is kept by the device. Shown on
+/// the Time zone screen.
+pub const TIME_ZONE: &str = "time.zone";
+/// Whether the user allowed telling the lookup service (ipinfo.io) the network's public address,
+/// to find the time zone (see `app::timezone`).
+pub const TIME_ZONE_LOOKUP: &str = "time.zone_lookup_allowed";
 /// Shows the settings and details meant for developers.
 pub const DEVELOPER_DETAILS: &str = "ui.developer_details";
 
@@ -139,6 +146,13 @@ pub fn settings() -> Vec<SettingDecl> {
             visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: BLUETOOTH, section: "Wireless", label: "Bluetooth",
             help: "Whether Bluetooth is on, for headphones and speakers.",
+            kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
+        SettingDecl { key: TIME_ZONE, section: "Time", label: "Set",
+            help: "\"auto\" looks the time zone up each time Wi-Fi connects (once time.zone_lookup_allowed allows it); \"manual\" keeps the zone chosen in Settings. The zone itself is kept by the system.",
+            kind: SettingKind::Choice(&[("auto", "Automatically"), ("manual", "By hand")]), default: json!("auto"),
+            visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
+        SettingDecl { key: TIME_ZONE_LOOKUP, section: "Time", label: "Look up the time zone",
+            help: "Whether the time zone may be looked up by asking ipinfo.io, which tells it the network's public address. Asked once, when the time zone is automatic.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: WIFI_KEEP_ON, section: "Developer", label: "Keep Wi-Fi on",
             help: "Keeps Wi-Fi on while it is set to \"auto\", so the device can still be reached over Wi-Fi (for SSH, or copying files).",

@@ -1,7 +1,8 @@
 //! Specular's UI: draws the core's screens with Slint and carries out the app's effects. All
 //! slow work happens off the UI thread: files on an I/O thread (and the library scan on its
-//! own), hardware (with file transfer and SSH) on a hardware thread, each radio on a thread of its own (`radio_thread`), box
-//! art on the art service's threads (`art`), interface sounds on a thread of their own
+//! own), hardware (with file transfer and SSH) on a hardware thread, each radio on a thread of
+//! its own (`radio_thread`), the time zone on its own (`timezone`), box art on the art service's
+//! threads (`art`), interface sounds on a thread of their own
 //! (`sounds`), and opening a game's sound outputs on short-lived threads; their results come back
 //! as messages to the app, or as calls on the UI thread.
 
@@ -10,6 +11,7 @@ mod frames;
 mod game;
 mod keys;
 mod sounds;
+mod timezone;
 mod watch;
 
 use std::cell::{Cell, RefCell};
@@ -35,6 +37,7 @@ use specular_core::model::{Icon, ImageRef, Layout, Row, RowKind, ScreenView};
 use specular_core::wireless::bluetooth::BtKind;
 use specular_core::nav::Transition;
 use specular_core::settings::{self, Layer, builtin, store};
+use specular_core::timezone::ZoneEvent;
 use specular_core::wireless::Wireless;
 use specular_core::wireless::wifi::WifiLink;
 
@@ -175,7 +178,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     // to the hardware thread.
     let mut hardware = device.hardware();
     let device: game::SharedDevice = Arc::from(device);
-    let (wifi, bluetooth, installer) = (hardware.wifi.take(), hardware.bluetooth.take(), hardware.installer.take());
+    let (wifi, bluetooth, installer, time_zone) = (hardware.wifi.take(), hardware.bluetooth.take(), hardware.installer.take(), hardware.time_zone.take());
     match hardware.headphones.take() {
         Some(jack) => { std::thread::spawn(move || jack.watch(Box::new(|plugged| post(Msg::Headphones(plugged))))); }
         None => eprintln!("input: this device has no headphone detection; headphones get the speaker's volume"),
@@ -188,6 +191,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     app.has_file_transfer(hardware.file_transfer.is_some());
     app.has_ssh(hardware.ssh.is_some());
     let (hardware, hardware_thread) = hardware_thread(hardware);
+    app.has_time_zone(time_zone.is_some());
     // Beside the binary, where `make install` puts it (and the build does, for development).
     let texts = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("licences.txt"))).filter(|p| p.is_file());
     if texts.is_none() { eprintln!("credits: there's no licences.txt beside the binary"); }
@@ -213,6 +217,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         wifi: wifi.map(|s| radio_thread("wifi", s, Msg::Wifi)),
         bluetooth: bluetooth.map(|s| radio_thread("bluetooth", s, Msg::Bluetooth)),
         installer: installer.map(installer_thread),
+        time_zone: time_zone.map(timezone::thread),
         io,
         data,
         sounds: sounds::Sounds::start(device.clone()),
@@ -704,6 +709,8 @@ struct Runner {
     bluetooth: Option<mpsc::Sender<specular_core::wireless::bluetooth::BtCmd>>,
     /// The installer's thread (None on a device without one).
     installer: Option<mpsc::Sender<specular_core::app::InstallCmd>>,
+    /// The time zone's thread (None on a device whose zone can't be set).
+    time_zone: Option<mpsc::Sender<specular_core::timezone::ZoneCmd>>,
     io: mpsc::Sender<Save>,
     data: DataRoot,
     device: game::SharedDevice,
@@ -818,7 +825,8 @@ impl Runner {
             Msg::Battery(b) => self.tell_effects(Event::Battery(*b)),
             _ => {}
         }
-        let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_));
+        // (A new time zone shows at once.)
+        let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_) | Msg::TimeZone(ZoneEvent::Set { result: Ok(()), .. }));
         // The window can be resized (on a desktop), changing how many columns a grid has.
         if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
         // A tick while a button is held makes its repeats. (The flag stays set until the next
@@ -920,6 +928,7 @@ impl Runner {
             Effect::Wifi(cmd) => if let Some(t) = &self.wifi { let _ = t.send(cmd); },
             Effect::Bluetooth(cmd) => if let Some(t) = &self.bluetooth { let _ = t.send(cmd); },
             Effect::Installer(cmd) => if let Some(t) = &self.installer { let _ = t.send(cmd); },
+            Effect::TimeZone(cmd) => if let Some(t) = &self.time_zone { let _ = t.send(cmd); },
             Effect::SoundTo(output) => self.set_output(output),
             Effect::Sound(sound) => self.sounds.play(sound),
             Effect::FileTransfer(start) => { let _ = self.hardware.send(HwCmd::FileTransfer(start)); }
@@ -1470,11 +1479,14 @@ fn icon_data(icon: &Icon) -> IconData {
 }
 
 /// The local time (hours, minutes, seconds), or None while the clock is clearly unset (before
-/// 2025, as on a device that hasn't had network time yet).
+/// 2025, as on a device that hasn't had network time yet). In the zone in effect now: glibc's
+/// `localtime_r` keeps the zone it loaded first, so `tzset` has it look again (a stat of
+/// /etc/localtime, or a look at $TZ).
 fn local_time() -> Option<(u32, u32, u32)> {
+    unsafe extern "C" { fn tzset(); }
     let t = unsafe { libc::time(std::ptr::null_mut()) };
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&t, &mut tm) };
+    unsafe { tzset(); libc::localtime_r(&t, &mut tm) };
     (tm.tm_year + 1900 >= 2025).then_some((tm.tm_hour as u32, tm.tm_min as u32, tm.tm_sec as u32))
 }
 

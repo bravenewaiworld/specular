@@ -28,6 +28,7 @@ Completed:
 TODO:
  - File transfer: Settings → File transfer runs Crystaline OS's WebDAV server and browser page only while open, and shows the addresses to open (WiFi's, and the USB cable's while a PC is connected) and that anyone on the network can reach the card meanwhile. "No SD card" without one; a failed start says why. No idle sleep while open; sleeping stops it, waking starts it again; stopped whenever Specular starts and quits (built; to check on the Brick, see DEVELOPMENT.md)
  - SSH on release systems: an "SSH" switch and "Import SSH keys from the SD card" in the developer settings (built; to check on the Brick, see DEVELOPMENT.md)
+ - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `brick-timezone`; the clock changes at once (built; to check on the Brick, see DEVELOPMENT.md)
  - Rumble from games (built; to check on the Brick)
  - Menus paced by the vsync, as games are (built; to measure on the Brick)
  - Separate volume levels for speaker and headphones, each in its own codec control (built; to check on the Brick, see DEVELOPMENT.md)
