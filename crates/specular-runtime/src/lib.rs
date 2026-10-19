@@ -438,7 +438,6 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps, options }));
     // Dropped as this returns, setting the system's default again.
     let mut cpu = cpu::CpuSpeed::start(out.cpu_min, out.set_cpu_min);
-    runs.lock().unwrap().cpu_min = cpu.level();
 
     // Counted in frames played, so time paused doesn't count.
     let check_frames = (CHECK_INTERVAL.as_secs_f64() * fps) as u32;

@@ -351,15 +351,11 @@ pub mod simulated {
     struct SimCpu;
 
     /// The Brick's CPU speed steps (MHz).
-    const STEPS: [u32; 9] = [408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000];
+    pub const STEPS: [u32; 9] = [408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000];
 
     impl Cpu for SimCpu {
         fn prepare(&self) -> Result<Vec<u32>, String> { eprintln!("simulated: CPU profile balanced"); Ok(STEPS.into()) }
-        fn set_min(&self, mhz: Option<u32>) -> Result<(), String> {
-            let step = mhz.map(|m| STEPS.into_iter().find(|&s| s >= m).unwrap_or(STEPS[STEPS.len() - 1]));
-            eprintln!("simulated: CPU minimum {}", crate::cpu::text(step));
-            Ok(())
-        }
+        fn set_min(&self, mhz: Option<u32>) -> Result<(), String> { eprintln!("simulated: CPU minimum {}", crate::cpu::text(mhz)); Ok(()) }
     }
 
     pub fn hardware() -> Hardware {

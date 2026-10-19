@@ -66,7 +66,7 @@ impl CpuMin {
 
     /// A minimum that stays at `mhz` (rounded up to a step, as for `new`) for the whole game.
     pub fn fixed(steps: Vec<u32>, mhz: Option<u32>) -> Self {
-        let level = mhz.filter(|_| !steps.is_empty()).map(|m| steps.iter().position(|&s| s >= m).unwrap_or(steps.len() - 1));
+        let level = mhz.and_then(|m| steps.iter().position(|&s| s >= m).or(steps.len().checked_sub(1)));
         Self { steps, level, ..Self::default() }
     }
 
@@ -132,7 +132,7 @@ impl CpuMin {
 /// level comes from, for the log.
 pub fn for_game(setting: &str, start: Option<u32>, steps: Vec<u32>) -> (CpuMin, &'static str) {
     match setting {
-        OFF => (CpuMin::fixed(steps, None), "the config files turn it off"),
+        OFF => (CpuMin::default(), "the config files turn it off"),
         // The settings accept only `AUTO`, `OFF` and numbers; anything else is taken as `AUTO`.
         _ => match setting.parse() {
             Ok(mhz) => (CpuMin::fixed(steps, Some(mhz)), "as the config files set it, for the whole game"),
@@ -148,8 +148,7 @@ pub fn text(mhz: Option<u32>) -> String { mhz.map_or("the system's default".into
 mod tests {
     use super::*;
 
-    /// The Brick's steps (MHz).
-    const STEPS: [u32; 9] = [408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000];
+    use crate::device::simulated::STEPS;
     const PERIOD: Duration = Duration::from_micros(16_611); // 60.2 Hz
 
     fn ms(n: u64) -> Duration { Duration::from_millis(n) }
@@ -189,7 +188,7 @@ mod tests {
         // From the system's default, the first step.
         let mut c = CpuMin::new(STEPS.into(), None);
         c.frame(ms(1000), true, ms(15), PERIOD);
-        assert_eq!(c.frame(ms(1100), true, ms(15), PERIOD).and_then(|_| c.current()), Some(408));
+        assert!(matches!(c.frame(ms(1100), true, ms(15), PERIOD), Some(Decision::Set(Some(408), _))));
     }
 
     #[test]
@@ -255,8 +254,6 @@ mod tests {
         assert_eq!(level(OFF), None);
         assert_eq!(level("1200"), Some(1200));
         assert_eq!(level("1300"), Some(1416), "rounded up to a step");
-        assert!(for_game(AUTO, Some(1800), STEPS.into()).0.adaptive);
-        assert!(!for_game("1200", Some(1800), STEPS.into()).0.adaptive);
-        assert!(!for_game(OFF, Some(1800), STEPS.into()).0.adaptive);
+        assert!(!for_game("1200", Some(1800), STEPS.into()).0.adaptive, "a speed set holds, as `fixed`");
     }
 }

@@ -1387,7 +1387,7 @@ fn a_games_settings_over_its_menu_apply_as_it_plays() {
 
 #[test]
 fn a_games_cpu_minimum_starts_at_its_cores_level_unless_a_config_file_says_otherwise() {
-    const STEPS: [u32; 9] = [408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000];
+    use crate::device::simulated::STEPS;
     let mut a = app();
     a.handle(Msg::Library(vec![game("ps1", "Vagrant Story"), game("gba", "Golden Sun")]));
     assert_eq!(a.cpu_min(STEPS.into()).0.current(), None, "no game");
@@ -1403,16 +1403,12 @@ fn a_games_cpu_minimum_starts_at_its_cores_level_unless_a_config_file_says_other
     assert_eq!(min.current(), Some(1800));
     assert!(line.starts_with("SwanStation starts with a minimum of 1800 MHz") && line.ends_with("power.cpu_min = \"auto\", its default)"), "{line}");
     assert_eq!(a.cpu_min(vec![]).0.current(), None, "where the speed can't be set");
-    // A game's own file overrides it; it isn't on its settings screen.
+    // A game's own file overrides it.
     let layer = game("ps1", "Vagrant Story").settings_layer();
     a.handle(Msg::SettingsLoaded(layer, serde_json::Map::from_iter([(builtin::CPU_MIN.into(), json!("1608"))])));
     let (min, line) = a.cpu_min(STEPS.into());
     assert_eq!(min.current(), Some(1608));
     assert!(line.ends_with("power.cpu_min = \"1608\", in games/ps1/Vagrant Story.json)"), "{line}");
-    tap(&mut a, Button::Menu, 60);
-    focus_on(&mut a, "Game settings");
-    tap(&mut a, Button::A, 70);
-    assert!(!labels(&a).iter().any(|l| l.contains("CPU")), "{:?}", labels(&a));
 }
 
 #[test]
