@@ -1,6 +1,6 @@
 # Runtime
 
-Status: In progress · Updated: 2026-10-19
+Status: In progress · Updated: 2026-10-20
 
 Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces it by the display, plays its sound, and keeps its saves and states safe, and which cores it runs. It decides how games feel (input latency, smoothness, sound) and how safe the player's progress is.
 
@@ -12,6 +12,7 @@ Specular's own libretro runtime (`specular-runtime`): how it loads a core, paces
 - **SwanStation for the PS1, with its software renderer** (2026-10-18). GPL-3.0; the code it bundles is BSD, MIT, public domain or GPL-2.0-or-later (see Findings), and it has a recompiler for ARM64. Its hardware renderers need a GL context shared with the UI, which comes with 3D cores (V1). Rejected: PCSX ReARMed (possibly GPLv2-only).
 - **A PS1 game starts without a BIOS, on SwanStation's built-in OpenBIOS** (2026-10-18). SwanStation runs OpenBIOS (MIT) when `bios/` has no BIOS, so games start, though some don't run with it; Specular logs the files it looked for. Rejected: refusing to start PS1 games without a BIOS (it would stop games that run, and SwanStation also finds a known BIOS dump under any name, which a check of file names can't see). Famicom Disk System games have no such fallback: without `disksys.rom` they don't start, and the player is told which file to add.
 - **A PS1 game that OpenBIOS halts is quit, and the player is told which BIOS file to add** (2026-10-19). OpenBIOS halts for good on a BIOS function it doesn't implement, a patch of its code it doesn't know, or its fatal error, and just before, it writes to PCSX-Redux's debug port. Our SwanStation build turns that write, made with a disc in, into a private environment call (`0x20002`, `ENV_BIOS_HALTED`). Specular then removes the game's autosave and writes no more (a resume would halt again, even with a BIOS added: SwanStation's states hold the BIOS they were made with), quits the game, and says "The game stopped. It may need a BIOS file: put one of scph5500.bin, … in bios/ on the SD card, then start the game again." Only a halt is told apart: a crash, the watchdog, a game that won't load, or one that hangs or misbehaves in its own code carry no sign of whether the BIOS was the cause (see Findings), so they say nothing of it. Rejected: OpenBIOS's own messages (they go to a dummy TTY device, so never reach the emulator); a black or still screen as the sign (games show both on a real BIOS too); a notice over the frozen game, left running (its autosave would keep the halted state).
+- **A game whose autosave was made on another BIOS than it would start on now asks, before it starts, whether to resume it or start afresh** (2026-10-20, the project owner's choice). SwanStation's states hold the BIOS they were made on, so a PS1 game resumed from an autosave made on OpenBIOS goes on running OpenBIOS after a BIOS file is added, until the autosave goes; and one made with a BIOS file goes on running it after the file is removed. So each state of a core with a stand-in BIOS records what it was made on (the `BIOS` tag: the stand-in's name, or a BIOS file), and at launch, if the autosave's differs from what the game would start on, the player is asked, over the game list: "Its autosave was made on OpenBIOS, and there is a BIOS file in bios/ now. Resume keeps OpenBIOS; Start afresh uses the BIOS file. Starting afresh sets the autosave aside, in the .states folder beside the game. The memory card (saves made in the game) is kept either way." Resume (focused first) starts it from the autosave, still on the BIOS it was made on; Start afresh renames the autosave to `<name>.old-autosave` (replacing any earlier one, as `.newer.srm` does) and starts the game on the BIOS it gets now; B or Cancel goes back to the list, Menu home. The battery save (the memory card) is kept either way. A game resumed on the old BIOS asks again at each launch: its later autosaves are made on that BIOS too. Loading the save state from the game menu says so too ("Load the state saved at 14:32? It was made on OpenBIOS, which the game will run on after loading it. …"), when it was made on another BIOS than the game runs on. Which BIOS file the core uses isn't recorded, only that it was one: SwanStation picks among several by the game's region and finds a known one under any name, which Specular can't see, so naming the file would ask when nothing changed. For the same reason, a BIOS under a name `check_bios` doesn't know counts as none, for the tag and the comparison alike. States made before the tag, and those of cores without a stand-in, say nothing, and are never asked about. Rejected: starting such games afresh without asking (it loses play the player may want to keep); leaving it (the player can't tell why a game still runs OpenBIOS, or make it use a BIOS file just added).
 - **SNES and Mega Drive wait for V1** (2026-10-18). They need more research: bsnes is likely too slow for the Brick's Cortex-A53, and BlastEm's 68000 emulation is an x86 recompiler (both inferred, unmeasured); Beetle Supafaust and ClownMDEmu are candidates too. Rejected: bsnes and BlastEm for V0 (speed).
 - **Battery saves are protected from cores whose save states also restore save memory** (2026-10-18). Loading such a state rolls the save memory back, and writing it would lose newer in-game saves. Each save state is stored with the crc32 of the save memory as it was when the state was made. For the cores flagged (`CoreDecl::states_restore_save`: Nestopia and SwanStation; not mGBA), the first time the `.srm` is written after a state was loaded, an `.srm` on the card that is neither the state's (by its crc32) nor what is about to be written is a newer save, and is first renamed to `<name>.newer.srm`, so it isn't lost. A state without a crc32 counts as not matching. Rejected: RetroArch's copy-back of the save memory after loading (restores only the bytes, not the core's own save-chip state; see Findings); blocking writes after a load.
 - **Games are paced by the display's vsync, with an adaptive frame delay** (2026-10-12). Latency comes from when frames are started, not from the toolkit. The core runs once per vsync, started as late as it safely can, so buttons are read late and a press reaches the screen sooner. On the Brick this cuts start-to-screen from 32 ms to about 6 ms (see [brick.md](brick.md)). Rejected: draw-then-swap, as toolkits do by default (frames queue for two vsyncs); a core on its own clock (it drifts against the display, and its frames sometimes wait a whole refresh).
@@ -59,6 +60,7 @@ pub struct LaunchSpec {
     pub controller: Option<c_uint>,     // CoreDecl::controller, plugged in once the game is loaded
     pub record: Option<(PathBuf, LaunchRecord)>, // the launch record (see architecture.md)
     pub states_restore_save: bool,      // keep a newer .srm when a state rolls it back (see Saves and states)
+    pub bios: Option<String>,           // CoreDecl::starts_on: what it starts on, kept in its states (BIOS tag); None: not kept
 }
 pub struct Outputs {
     pub sound: Option<Box<dyn SoundOut>>,
@@ -86,11 +88,13 @@ impl Session {
     pub fn set_options(&self, options: Vec<(String, String)>); // as LaunchSpec::options; the core reads them again (GET_VARIABLE_UPDATE)
     pub fn discs(&self) -> Discs;            // as the core says now; Discs { count, current: Option<usize> } (specular-core's app)
     pub fn change_disc(&self, index: usize) -> io::Result<()>;
+    pub fn bios(&self) -> Option<String>;    // what it runs on now: LaunchSpec::bios, until a state loaded brings its own
     pub fn save_state(&self, path: &Path) -> io::Result<()>;
     pub fn load_state(&self, path: &Path) -> io::Result<()>;
     pub fn flush(&self) -> io::Result<()>;   // battery save and autosave, on the card when it returns
     pub fn quit(self) -> io::Result<()>;     // dropping a Session quits too
 }
+pub fn state_bios(path: &Path) -> Option<String>;  // a state file's BIOS tag; None without one, or no file (a failed read is logged)
 ```
 
 A zip that can't be unzipped fails the start with a message for the player ("the zip can't be read", "the zip holds no game mGBA plays", "the zip is damaged", "the game is too large to unzip"), shown as "The game couldn't start: …"; the log has the zip's path, what it holds and the sizes. A ROM unzipped is logged with its size and how long unzipping took, then the path the core is given (`game: giving Nestopia /run/user/1000/specular/812/Zelda.fds (a link to /proc/self/fd/31)`), or why the link couldn't be made.
@@ -151,6 +155,7 @@ Every game's sound is resampled, by linear interpolation, to the output's rate (
 | Autosave | `roms/<folder>/.states/<name>.autosave` | as the game menu opens, on sleep and quit; also every 10 s of play (time paused doesn't count) except for SwanStation, unless `game.autosave` says otherwise (see Decisions) |
 | Save state (one slot) | `roms/<folder>/.states/<name>.state1` | from the in-game menu |
 | Newer battery save | `saves/<path under roms/>.newer.srm` | renamed from the `.srm` when a loaded state would overwrite it (see below); an older one is replaced |
+| Old autosave | `roms/<folder>/.states/<name>.old-autosave` | renamed from the autosave when the player starts afresh rather than resume it on another BIOS (see Decisions); an older one is replaced |
 
 - A battery save is written only if it changed. Its size is read each time, as some cores (mGBA) only know it once the game has used its save memory. A save file that exists but couldn't be loaded yet (the core had no save memory then) is never overwritten until it is.
 - Our mGBA build says when the game has finished writing its save memory, through a private environment call (`0x20001`, from the range libretro leaves to frontends and their cores), made once the save memory has gone 15 frames without a write. Other cores fall back to the 10 s check.
@@ -161,9 +166,21 @@ Every game's sound is resampled, by linear interpolation, to the output's rate (
 - After the zstd frame, a state has zstd skippable frames (zstd's tools pass over them), each `5e 2a 4d 18`, the length of the tag and value (little-endian, as are the numbers in them), a 4-byte tag and its value. Frames with unknown tags are skipped, so later builds can add tags.
   - `SRAM`: the crc32 of the save memory the state was made with (`5e 2a 4d 18`, `08 00 00 00`, `SRAM`, the crc32). A core without save memory gets none.
   - `DISC`: for a game on several discs, the disc in (a u32, from 0), then its image's path as the core gives it (UTF-8; empty if the core gives none).
+  - `BIOS`: for a core with a stand-in BIOS (SwanStation), what the state was made on, in UTF-8: the stand-in's name (`OpenBIOS`), or `file` for a BIOS file from `bios/`. A game runs on what it started on (`LaunchSpec::bios`) until a state is loaded, then on that state's; loading a state without the tag makes the game's BIOS unknown, and the states made after it carry none (so an old autosave, resumed, is never asked about).
+- **A game's autosave made on another BIOS is asked about** (see Decisions). Before a game of a core with a stand-in BIOS starts, the app sends `Effect::CheckAutosave`; on a thread of its own, the UI reads the autosave's tag and `CoreDecl::starts_on`, and answers with `Msg::AutosaveChecked`. If they differ the app asks (`screens::RESUME`, `app::resume`), and starts the game with `Effect::Launch` (resume) or `Effect::LaunchAfresh`, for which the UI renames the autosave before the game loads; if the rename fails the game doesn't start, and says why. The log has the question (`game: …/.states/Vagrant Story.autosave was made on BIOS "OpenBIOS", and SwanStation would start on "file" now: asking whether to resume it`), then the answer: the rename (`game: starting afresh: … set aside as ….old-autosave`), or the resume (`game: SwanStation resumes …, made on BIOS "OpenBIOS", on that BIOS (it would start on "file")`). The game menu's state (`Msg::SavedState`) carries the state's BIOS when it differs from `Session::bios`.
 - **A newer battery save is kept** (see Decisions). After a state is loaded into a core whose states restore save memory, the next `.srm` write first checks the file on the card, on the writer's thread: if it is neither the state's save (crc32) nor what is being written, it is renamed to `.newer.srm`, logged with both crc32s and the paths. If the rename fails, the write is skipped and the error reported like any write's. The autosave a game resumes from counts as a loaded state.
 - On sleep the game is paused and its saves flushed first; waking opens its menu.
 - **Saves follow a renamed or moved ROM.** Specular records the size and checksum of each ROM played in `saves/.specular-saves.json`. After a scan, the saves (battery saves and states) of a recorded ROM that is gone move to the one game without battery saves whose ROM has the same size and checksum. With none, or several, they stay.
+
+```rust
+// specular-core's app: the question before resuming an autosave made on another BIOS
+pub enum Effect { Launch(Game), LaunchAfresh(Game), CheckAutosave(Game), /* … */ }
+pub enum Msg { AutosaveChecked { game: Game, bios: Option<BiosChange> }, SavedState(Option<SavedState>), /* … */ }
+pub struct BiosChange { pub made_on: String, pub now: String }  // as CoreDecl::starts_on names them; never the same
+pub struct SavedState { pub made: LocalTime, pub now: Option<LocalTime>,
+                        pub bios: Option<String> }  // what it was made on, if not what the game runs on now
+impl App { pub fn core_of(&self, game: &Game) -> Option<&'static CoreDecl>; }
+```
 
 ### Cores
 
@@ -185,11 +202,13 @@ pub struct Bios {
     pub games: &'static str,                     // "Famicom Disk System games", for messages
     pub extensions: &'static [&'static str],     // the games that use it; empty: all
     pub files: &'static [&'static str],          // any one will do; matched ignoring case
-    pub fallback: Option<&'static str>,          // what the core uses without; None: they can't start
+    pub fallback: Option<&'static str>,          // its built-in stand-in it runs them on without ("OpenBIOS"); None: they can't start
 }
+pub const BIOS_FILE: &str = "file";              // CoreDecl::starts_on for a BIOS file from bios/
 impl CoreDecl {
     pub fn id(&self) -> &'static str;  // "mgba": its library's name less "_libretro"
     pub fn check_bios(&self, rom: &Path, extensions: &[&str], bios_dir: &Path) -> Result<(), String>; // a zip by its game: the first file with one of the system's extensions
+    pub fn starts_on(&self, rom: &Path, extensions: &[&str], bios_dir: &Path) -> Option<&'static str>; // its stand-in's name or BIOS_FILE; None: no stand-in
     pub fn bios_halt_notice(&self) -> String; // for Outputs::on_bios_halt: the files its fallback stands in for
 }
 ```
@@ -302,5 +321,4 @@ mGBA runs with `mgba_idle_optimization = "Remove Known"`, which skips the busy-w
 
 ## Open questions
 
-- A PS1 game resumed from an autosave made without a BIOS goes on running OpenBIOS once a BIOS file is added (its states hold the BIOS), until the autosave goes. Should a BIOS added make such games start afresh, or offer to? A state tag naming the BIOS it was made on would tell them apart.
 - What the CPU minimum costs in battery: PS1 games at 1.8–2.0 GHz against the 1.2 GHz `ondemand` settles at. With no step down during a game, PS1 games stay at 1.8 GHz or above. A measurement on the Brick would say what that costs.

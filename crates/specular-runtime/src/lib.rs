@@ -84,6 +84,11 @@ pub struct LaunchSpec {
     /// save on the card that the state wasn't made with (one the game wrote later) is first
     /// renamed to `<name>.newer.srm` rather than lost (see `keep_newer_save`).
     pub states_restore_save: bool,
+    /// What the game starts on, for a core with a stand-in for a missing BIOS file
+    /// (`CoreDecl::starts_on` in specular-core): kept in its save states (the `BIOS` tag), since
+    /// SwanStation's states hold the BIOS they were made on, and a state loaded runs on that one.
+    /// None: not kept.
+    pub bios: Option<String>,
 }
 
 /// Where the game's output goes.
@@ -254,6 +259,7 @@ enum Cmd {
     /// Gives the core these option values instead; see `Session::set_options`.
     Options(Vec<(String, String)>),
     Discs(mpsc::Sender<io::Result<Discs>>),
+    Bios(mpsc::Sender<io::Result<Option<String>>>),
     ChangeDisc(usize, mpsc::Sender<io::Result<()>>),
     /// Ends the game, writing its saves first if `save`.
     Quit { save: bool, reply: mpsc::Sender<io::Result<()>> },
@@ -338,6 +344,9 @@ impl Session {
     /// The game's discs, as its core says now: none for a core without libretro's disk control
     /// interface. Ask again after `load_state`, which may change the disc in.
     pub fn discs(&self) -> Discs { self.ask(Cmd::Discs).unwrap_or_default() }
+    /// What the game runs on now, as its states record it (see `LaunchSpec::bios`): what it
+    /// started on, until a state is loaded, which brings its own. None: not known.
+    pub fn bios(&self) -> Option<String> { self.ask(Cmd::Bios).ok().flatten() }
     /// Puts disc `index` (from 0) in the drive, as `discs` counts them. On failure the disc that
     /// was in is put back, if the core can; the error is for the player.
     pub fn change_disc(&self, index: usize) -> io::Result<()> { self.ask(|r| Cmd::ChangeDisc(index, r)) }
@@ -494,6 +503,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                 Cmd::Sound(out) => sound.set_out(out),
                 Cmd::Options(options) => game.set_options(options),
                 Cmd::Discs(reply) => { let _ = reply.send(Ok(disks().map(|d| d.discs()).unwrap_or_default())); }
+                Cmd::Bios(reply) => { let _ = reply.send(Ok(game.bios.clone())); }
                 Cmd::ChangeDisc(index, reply) => { let _ = reply.send(game.change_disc(index).map_err(io::Error::other)); }
                 Cmd::Quit { save: true, reply } => { game.save_all(Some(reply)); return; }
                 Cmd::Quit { save: false, reply } => { let _ = reply.send(Ok(())); return; }
@@ -556,6 +566,8 @@ struct Game {
     /// next written, which checks it (see `LaunchSpec::states_restore_save`).
     loaded_state: Option<LoadedState>,
     autosave: Option<PathBuf>,
+    /// See `Session::bios`.
+    bios: Option<String>,
     writer: Writer,
     /// Kept for the core, which may hold on to the ROM's path, and open or map the file there (an
     /// unzipped ROM's file goes when this does). (The ROM's contents are freed once the core has
@@ -615,13 +627,18 @@ impl Game {
         let writer = Writer::new(write_failed).map_err(|e| StartError::Other(format!("starting the save writer: {e}")))?;
         let mut g = Game { core, name, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
                            states_restore_save: spec.states_restore_save, loaded_state: None,
-                           autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };
+                           autosave: spec.autosave.clone(), bios: spec.bios.clone(), writer, _rom: (rom_path, unzipped) };
         drop(rom);
         g.log_discs();
         g.read_save();
-        if let Some((p, data)) = resume && let Err(e) = data.and_then(|d| g.load_state_data(p, d)) {
-            // Starting afresh instead: the next autosave replaces it.
-            eprintln!("game: resuming from {}: {e}", p.display());
+        if let Some((p, data)) = resume {
+            match data.and_then(|d| g.load_state_data(p, d)) {
+                // The game starts from power-on instead, and its next autosave replaces the file.
+                Err(e) => eprintln!("game: resuming from {}: {e}", p.display()),
+                Ok(()) if g.bios.is_some() && g.bios != spec.bios => eprintln!("game: {} resumes {}, made on BIOS {:?}, on that BIOS (it would start on {:?})",
+                    g.name, p.display(), g.bios, spec.bios),
+                Ok(()) => {}
+            }
         }
         Ok(g)
     }
@@ -728,7 +745,7 @@ impl Game {
         if size == 0 || !unsafe { (self.core.serialize)(data.as_mut_ptr().cast(), size) } {
             return Err(io::Error::other("the core could not save its state"));
         }
-        let tags = StateTags { save_crc: self.save_crc(), disc: disks().and_then(|d| d.current()) };
+        let tags = StateTags { save_crc: self.save_crc(), disc: disks().and_then(|d| d.current()), bios: self.bios.clone() };
         self.writer.write_state(path, data, tags);
         Ok(())
     }
@@ -738,7 +755,8 @@ impl Game {
     /// Loads `data`, the save state file at `path` (named in the log): one written by
     /// `Writer::write_state`, or the core's own data as it is, untagged (told apart by
     /// `ZSTD_MAGIC`). If the state was made on another disc than the one in (the core's states may
-    /// not keep it), that disc is put in.
+    /// not keep it), that disc is put in. The game then runs on the state's BIOS (`self.bios`):
+    /// unknown if it has no `BIOS` tag, so the states made after it have none either.
     fn load_state_data(&mut self, path: &Path, mut data: Vec<u8>) -> io::Result<()> {
         let mut tags = StateTags::default();
         if data.starts_with(&ZSTD_MAGIC) {
@@ -754,6 +772,7 @@ impl Game {
             let _ = self.change_disc(disc.index);
         }
         if self.states_restore_save { self.loaded_state = Some(LoadedState { path: path.into(), save_crc: tags.save_crc }); }
+        self.bios = tags.bios;
         Ok(())
     }
 }
@@ -948,6 +967,8 @@ struct StateTags {
     save_crc: Option<u32>,
     /// `DISC`: the disc in (a u32, from 0), then its image's path; only for a game on several.
     disc: Option<Disc>,
+    /// `BIOS`: what the state was made on (`LaunchSpec::bios`), as UTF-8.
+    bios: Option<String>,
 }
 
 /// One of zstd's skippable frame markers.
@@ -960,6 +981,7 @@ fn with_tags(mut state: Vec<u8>, tags: &StateTags) -> Vec<u8> {
     };
     if let Some(crc) = tags.save_crc { frame(b"SRAM", &crc.to_le_bytes()); }
     if let Some(d) = &tags.disc { frame(b"DISC", &[&(d.index as u32).to_le_bytes()[..], d.path.as_bytes()].concat()); }
+    if let Some(b) = &tags.bios { frame(b"BIOS", b.as_bytes()); }
     state
 }
 
@@ -976,11 +998,23 @@ fn tags_of(file: &[u8]) -> StateTags {
         match tag {
             b"SRAM" => tags.save_crc = first_u32(),
             b"DISC" => tags.disc = first_u32().map(|i| Disc { index: i as usize, path: String::from_utf8_lossy(&value[4..]).into_owned() }),
+            b"BIOS" => tags.bios = Some(String::from_utf8_lossy(value).into_owned()),
             _ => {}
         }
         rest = &after[len..];
     }
     tags
+}
+
+/// What the save state at `path` was made on (its `BIOS` tag; see `LaunchSpec::bios`). None if it
+/// doesn't say (made before Specular recorded it, or by a core without a stand-in BIOS), or there
+/// is no file, or it can't be read (logged).
+pub fn state_bios(path: &Path) -> Option<String> {
+    match std::fs::read(path) {
+        Ok(file) => tags_of(&file).bios,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => { eprintln!("saves: can't see what {} was made on: {e}", path.display()); None }
+    }
 }
 
 /// Writes `data` to `path` so a power cut leaves either the old file or the new one (FAT has no

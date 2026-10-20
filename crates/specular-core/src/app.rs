@@ -33,6 +33,7 @@ mod icons;
 mod install;
 mod layers;
 mod problems;
+mod resume;
 mod ssh;
 mod transfer;
 mod timezone;
@@ -100,6 +101,10 @@ pub enum Msg {
     /// When the running game's save state was made, for its menu; None: it has none. Sent by the
     /// UI once the game has started and each time its menu opens. Ignored while no game runs.
     SavedState(Option<SavedState>),
+    /// The answer to `Effect::CheckAutosave` for `game`. `bios`: what its autosave was made on and
+    /// what it would start on now, when they differ; None when they don't, it has no autosave, or
+    /// either isn't known.
+    AutosaveChecked { game: Game, bios: Option<BiosChange> },
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
     Wifi(WifiEvent),
@@ -135,9 +140,17 @@ pub enum Msg {
 pub struct LocalTime { pub year: i32, pub month: u8, pub day: u8, pub hour: u8, pub minute: u8 }
 
 /// When a game's save state was made (its file's time), and the time it was looked at (None
-/// while the clock isn't set), to show the time if it was made today, else the date.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SavedState { pub made: LocalTime, pub now: Option<LocalTime> }
+/// while the clock isn't set), to show the time if it was made today, else the date. `bios`:
+/// what it was made on (`CoreDecl::starts_on`), when that isn't what the game runs on now; None
+/// if it is, or either isn't known.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedState { pub made: LocalTime, pub now: Option<LocalTime>, pub bios: Option<String> }
+
+/// What a save state was made on, and what the game would run on instead, as
+/// `CoreDecl::starts_on` names them; never the same. A state holds the BIOS it was made on, so
+/// loading it keeps that one (docs/runtime.md).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BiosChange { pub made_on: String, pub now: String }
 
 impl SavedState {
     /// When it was made, after "saved": "at 14:32" today, else "on 18 Oct" (and the year, if
@@ -185,8 +198,17 @@ pub enum Effect {
     /// starts. The UI carries out the ones the device or the UI acts on, such as brightness or
     /// scaling, and ignores the rest.
     Apply { key: &'static str, value: serde_json::Value },
-    /// Start playing a game, its core's options set as `App::core_options` says.
+    /// Start playing a game, its core's options set as `App::core_options` says, resuming its
+    /// autosave.
     Launch(Game),
+    /// As `Launch`, but first set the game's autosave aside (renamed `<name>.old-autosave`,
+    /// replacing any earlier one), so it starts afresh. If that fails, the game doesn't start,
+    /// and the player is told why (`Msg::GameEnded`).
+    LaunchAfresh(Game),
+    /// Find whether the game's autosave was made on another BIOS than it would start on now; the
+    /// answer comes back as `Msg::AutosaveChecked`. Sent instead of `Launch` for a game whose core
+    /// has a stand-in for a missing BIOS file.
+    CheckAutosave(Game),
     /// One of the running game's core options changed. This is the full set of values to give its
     /// core now (`App::core_options`); options left out go back to the core's defaults.
     CoreOptions(Vec<(String, String)>),
@@ -315,6 +337,8 @@ pub struct Ctx {
     pub discs: Discs,
     /// The running game's save state (`Msg::SavedState`); None until the UI says.
     pub saved_state: Option<SavedState>,
+    /// The game `screens::RESUME` asks about, and how its autosave's BIOS differs.
+    pub resume: Option<(Game, BiosChange)>,
     /// None on a device whose time zone can't be set; see `App::has_time_zone`.
     pub time_zone: Option<TimeZoneState>,
 }
@@ -389,6 +413,9 @@ pub mod screens {
     /// Over the game menu: asks before an action that loses play, named in its params ("load" or
     /// "reset"). Its presses are handled by the app itself (see `App::game_confirm`).
     pub const GAME_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game confirm"));
+    /// Before a game starts: whether to resume its autosave, made on another BIOS, or start
+    /// afresh (see `app::resume`). Its presses are handled by the app itself.
+    pub const RESUME: ScreenId = ScreenId(std::borrow::Cow::Borrowed("resume"));
     /// Power off or restart, opened by holding the power button (over the game menu during a
     /// game). Its presses are handled by the app itself (see `App::power_menu`).
     pub const POWER_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("power menu"));
@@ -530,11 +557,12 @@ impl App {
         card::register(&mut screens);
         problems::register(&mut screens);
         about::register(&mut screens);
+        resume::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card: None, card_note: false, settings: Settings::new(settings), battery: None,
                        wifi: None, bluetooth: None, install: None, transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(),
                        left_out: LeftOut::default(), settings_unsaved: None, fonts_turned_away: Vec::new(),
-                       discs: Discs::default(), saved_state: None, time_zone: None },
+                       discs: Discs::default(), saved_state: None, resume: None, time_zone: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -637,10 +665,12 @@ impl App {
         (when, format!("{} autosaves {what} ({} = \"{setting}\", {file})", core.name, builtin::AUTOSAVE))
     }
 
-    /// The core that plays the running game: its system's, as its "Core" setting chooses
+    /// The core that plays the running game (`core_of`).
+    pub fn playing_core(&self) -> Option<&'static library::CoreDecl> { self.core_of(self.playing.as_ref()?) }
+
+    /// The core that plays `game`: its system's, as its "Core" setting chooses
     /// (`settings::core_of`).
-    pub fn playing_core(&self) -> Option<&'static library::CoreDecl> {
-        let game = self.playing.as_ref()?;
+    pub fn core_of(&self, game: &Game) -> Option<&'static library::CoreDecl> {
         let system = self.ctx.systems.iter().find(|s| s.id == game.system)?;
         crate::settings::core_of(&self.ctx.settings, system, &game.settings_layer())
     }
@@ -904,6 +934,7 @@ impl App {
                 self.changed();
                 vec![Effect::Redraw(None)]
             }
+            Msg::AutosaveChecked { game, bios } => self.autosave_checked(game, bios),
             Msg::Battery(b) => {
                 let changed = self.ctx.battery != Some(b);
                 self.ctx.battery = Some(b);
@@ -992,6 +1023,7 @@ impl App {
         let row = focused.map(|r| r.id.0.as_str());
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
         if id == screens::GAME_CONFIRM { return self.game_confirm(p.button, row); }
+        if id == screens::RESUME { return self.resume_press(p.button, row); }
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
         if let Some(e) = self.install_press(&id, p.button, row) { return e; }
         if id == screens::ZONE_CONSENT { return self.zone_consent(p.button, row); }
@@ -1026,16 +1058,7 @@ impl App {
                 self.keyboard = Some((Keyboard::new(prompt, masked), purpose));
                 self.go(|nav| Some(nav.push(ScreenState::new(screens::KEYBOARD, None))))
             }
-            Outcome::Launch(game) => {
-                self.playing = Some(game.clone());
-                self.ctx.discs = Discs::default();
-                self.ctx.saved_state = None;
-                self.repeater.reset();
-                // The settings that may differ for this game.
-                let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
-                let unsaved = (!self.ctx.card_writable()).then(|| Effect::Notice("The SD card is read-only: progress in this game won't be saved".into()));
-                std::iter::once(Effect::Launch(game)).chain(per_game).chain([Effect::Redraw(None)]).chain(unsaved).collect()
-            }
+            Outcome::Launch(game) => self.launch_or_check(game),
             Outcome::Effects(e) => { self.changed(); e }
             Outcome::SettingChanged(layer, key) => {
                 self.changed();
@@ -1046,6 +1069,19 @@ impl App {
                 e
             }
         }
+    }
+
+    /// Starts `game` (`Effect::Launch`, or `LaunchAfresh` if `afresh`).
+    fn launch(&mut self, game: Game, afresh: bool) -> Vec<Effect> {
+        self.playing = Some(game.clone());
+        self.ctx.discs = Discs::default();
+        self.ctx.saved_state = None;
+        self.repeater.reset();
+        // The settings that may differ for this game.
+        let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
+        let unsaved = (!self.ctx.card_writable()).then(|| Effect::Notice("The SD card is read-only: progress in this game won't be saved".into()));
+        let launch = if afresh { Effect::LaunchAfresh(game) } else { Effect::Launch(game) };
+        std::iter::once(launch).chain(per_game).chain([Effect::Redraw(None)]).chain(unsaved).collect()
     }
 
     /// The volume setting of the output sound goes to: its key and level (0 if unset).
@@ -1510,7 +1546,7 @@ impl Screen for GameMenu {
         // can't be written).
         let quit = if ctx.card_writable() { "Quitting keeps your place: the game goes on from there next time." }
                    else { "The SD card is read-only: nothing from this session is saved." };
-        let state = match ctx.saved_state {
+        let state = match &ctx.saved_state {
             Some(s) => format!("State saved {}. One per game: Save state replaces it, Load state goes back to it.", s.when()),
             None => "No state saved yet: Save state makes one (one per game).".into(),
         };
@@ -1533,8 +1569,12 @@ struct GameConfirm;
 impl Screen for GameConfirm {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let (title, question) = if state.params.as_deref() == Some("load") {
-            let when = ctx.saved_state.map_or_else(String::new, |s| format!(" saved {}", s.when()));
-            ("Load state", format!("Load the state{when}? Progress since then is lost."))
+            let s = ctx.saved_state.as_ref();
+            let when = s.map_or_else(String::new, |s| format!(" saved {}", s.when()));
+            // A state holds the BIOS it was made on, so the game runs on that one after loading it
+            // (see `app::resume`).
+            let bios = s.and_then(|s| s.bios.as_deref()).map_or_else(String::new, |b| format!(" It was {}, which the game will run on after loading it.", resume::made_on(b)));
+            ("Load state", format!("Load the state{when}?{bios} Progress since then is lost."))
         } else {
             // The game restarts as if switched off and on: what it saved itself stays, and so
             // does the saved state; the autosave is overwritten as play goes on.

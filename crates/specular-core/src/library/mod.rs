@@ -113,30 +113,51 @@ pub struct Bios {
     /// The file names the core looks for, in lower case; any one of them will do. A name with a
     /// folder in it ("dc/dc_boot.bin") is looked for as it is.
     pub files: &'static [&'static str],
-    /// What the core uses instead when none is there; None if those games can't start without.
+    /// The name of the core's own stand-in, built into it, that it runs those games on when none
+    /// is there (e.g. "OpenBIOS"); None if they can't start without.
     pub fallback: Option<&'static str>,
 }
 
+/// What `CoreDecl::starts_on` gives for a BIOS file from `bios/` (so no stand-in may be named
+/// this). Which file isn't recorded: SwanStation chooses among several by the game's region, and
+/// also finds known ones under any name, which Specular can't see.
+pub const BIOS_FILE: &str = "file";
+
 impl CoreDecl {
-    /// Checks that `bios_dir` holds a BIOS file the game at `rom` needs, logging what was looked
-    /// for when none is there. Err: why the game can't start, for the player. File names are
-    /// matched ignoring case, as FAT cards do. In a zip, the game is the first file with one of
-    /// `extensions` (its system's, which should be its core's, as the runtime unzips by those).
+    /// Checks that `bios_dir` holds a BIOS file the game at `rom` needs (see `bios_for`), logging
+    /// what was looked for when none is there. Err: why the game can't start, for the player.
     pub fn check_bios(&self, rom: &Path, extensions: &[&str], bios_dir: &Path) -> Result<(), String> {
+        for (b, found) in self.bios_for(rom, extensions, bios_dir) {
+            if found { continue; }
+            let files = b.files.join(", ");
+            eprintln!("game: no BIOS for {} in {} (looked for {files}){}", b.games, bios_dir.display(),
+                b.fallback.map_or(String::new(), |f| format!("; {} uses its built-in {f}", self.name)));
+            if b.fallback.is_none() { return Err(format!("{} need {} in bios/ on the SD card.", b.games, b.which())); }
+        }
+        Ok(())
+    }
+
+    /// What the game at `rom` would start on now, for a core with a stand-in for a missing BIOS
+    /// file (`Bios::fallback`): the stand-in's name, or `BIOS_FILE`. None for other cores. Goes
+    /// by file names, as `check_bios` does, so a BIOS under another name counts as none.
+    pub fn starts_on(&self, rom: &Path, extensions: &[&str], bios_dir: &Path) -> Option<&'static str> {
+        self.bios_for(rom, extensions, bios_dir).into_iter().find_map(|(b, found)| b.fallback.map(|f| if found { BIOS_FILE } else { f }))
+    }
+
+    /// The core's `Bios` entries the game at `rom` uses, each with whether `bios_dir` has one of
+    /// its files. File names are matched ignoring case, as FAT cards do. In a zip, the game is the
+    /// first file with one of `extensions` (its system's, which should be its core's, as the
+    /// runtime unzips by those).
+    fn bios_for(&self, rom: &Path, extensions: &[&str], bios_dir: &Path) -> Vec<(&'static Bios, bool)> {
         let mut ext = extension(rom).unwrap_or_default();
         if ext == "zip" {
             ext = zip::entries(rom).unwrap_or_default().iter().filter_map(|e| extension(Path::new(&e.name))).find(|x| extensions.contains(&x.as_str())).unwrap_or_default();
         }
         let present: HashSet<String> = std::fs::read_dir(bios_dir).into_iter().flatten().flatten()
             .filter_map(|e| e.file_name().to_str().map(str::to_lowercase)).collect();
-        for b in self.bios.iter().filter(|b| b.extensions.is_empty() || b.extensions.contains(&ext.as_str())) {
-            if b.files.iter().any(|f| present.contains(*f) || (f.contains('/') && bios_dir.join(f).is_file())) { continue; }
-            let files = b.files.join(", ");
-            eprintln!("game: no BIOS for {} in {} (looked for {files}){}", b.games, bios_dir.display(),
-                b.fallback.map_or(String::new(), |f| format!("; {} uses {f}", self.name)));
-            if b.fallback.is_none() { return Err(format!("{} need {} in bios/ on the SD card.", b.games, b.which())); }
-        }
-        Ok(())
+        self.bios.iter().filter(|b| b.extensions.is_empty() || b.extensions.contains(&ext.as_str()))
+            .map(|b| (b, b.files.iter().any(|f| present.contains(*f) || (f.contains('/') && bios_dir.join(f).is_file()))))
+            .collect()
     }
 
     /// What to do, for the player, when the core says its stand-in for a missing BIOS file
@@ -206,7 +227,7 @@ const SWANSTATION: &CoreDecl = &CoreDecl {
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
     controller: Some(PS_DUALSHOCK), states_restore_save: true, cpu_start: Some(1800), autosave: Autosave::AtPauses,
     bios: &[Bios { games: "PlayStation games", extensions: &[],
-        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("its built-in OpenBIOS") }], user: None,
+        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("OpenBIOS") }], user: None,
 };
 
 /// SwanStation's device ID for a DualShock: libretro's `RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)`.

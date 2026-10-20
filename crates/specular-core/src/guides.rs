@@ -66,7 +66,7 @@ fn bios(systems: &[SystemDecl]) -> String {
         for b in c.bios {
             let (files, it) = if b.files.len() > 1 { (format!("one of {}", b.files.join(", ")), "one") } else { (b.files.join(", "), "it") };
             t.item(&match b.fallback {
-                Some(f) => format!("{} use {files}. Without {it}, {} uses {f} instead, which may not run every game.", b.games, c.name),
+                Some(f) => format!("{} use {files}. Without {it}, {} uses its built-in {f} instead, which may not run every game.", b.games, c.name),
                 None => format!("{} need {files}. Without {it}, they don't start.", b.games),
             });
         }

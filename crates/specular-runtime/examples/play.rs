@@ -28,7 +28,7 @@ fn main() -> Result<(), String> {
     let out = args.get(4).cloned().unwrap_or_else(|| "/tmp/play.rgba".into());
     let frames = Arc::new(FrameSlot::default());
     let session = Session::start(
-        LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), autosave: None, autosave_when: Autosave::Every10s, system_dir: bios.into(), options, option_list: None, rom_by_path, controller: None, states_restore_save: false, record: None },
+        LaunchSpec { core: core.into(), rom: rom.into(), save: "/tmp/play.srm".into(), autosave: None, autosave_when: Autosave::Every10s, system_dir: bios.into(), options, option_list: None, rom_by_path, controller: None, states_restore_save: false, record: None, bios: None },
         Outputs {
             sound: None, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}),
             write_failed: Box::new(|_| {}), cpu_min: Default::default(), set_cpu_min: Box::new(|_| {}),

@@ -84,20 +84,20 @@ fn the_game_menu_says_when_the_state_was_saved() {
     assert_eq!(tap(&mut a, Button::A, 30), vec![]); // nothing to load
     let note = |a: &App| labels(a).into_iter().find(|l| l.starts_with("State saved")).unwrap();
     let now = Some(at(2026, 10, 19, 15, 0));
-    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 14, 32), now })));
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 14, 32), now, bios: None })));
     assert_eq!(note(&a), "State saved at 14:32. One per game: Save state replaces it, Load state goes back to it.");
-    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 18, 9, 5), now })));
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 18, 9, 5), now, bios: None })));
     assert!(note(&a).starts_with("State saved on 18 Oct."));
-    a.handle(Msg::SavedState(Some(SavedState { made: at(2025, 3, 2, 9, 5), now })));
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2025, 3, 2, 9, 5), now, bios: None })));
     assert!(note(&a).starts_with("State saved on 2 Mar 2025."));
-    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 9, 5), now: None }))); // the clock isn't set
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 9, 5), now: None, bios: None }))); // the clock isn't set
     assert!(note(&a).starts_with("State saved on 19 Oct 2026."));
 }
 
 #[test]
 fn loading_the_state_asks_first() {
     let mut a = paused();
-    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 14, 32), now: Some(at(2026, 10, 19, 15, 0)) })));
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 14, 32), now: Some(at(2026, 10, 19, 15, 0)), bios: None })));
     focus_on(&mut a, "Load state");
     assert_eq!(tap(&mut a, Button::A, 30), vec![Effect::Redraw(Some(Transition::Push))]);
     assert_eq!(labels(&a), ["Load the state saved at 14:32? Progress since then is lost.", "Load state", "Cancel"]);
@@ -107,6 +107,80 @@ fn loading_the_state_asks_first() {
     tap(&mut a, Button::A, 50);
     assert_eq!(tap(&mut a, Button::A, 60), vec![Effect::LoadState, Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(a.input_target(), InputTarget::Game);
+}
+
+#[test]
+fn loading_a_state_made_on_another_bios_says_so() {
+    let mut a = paused();
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 14, 32), now: None, bios: Some("OpenBIOS".into()) })));
+    focus_on(&mut a, "Load state");
+    tap(&mut a, Button::A, 30);
+    assert_eq!(labels(&a)[0], "Load the state saved on 19 Oct 2026? It was made on OpenBIOS, which the game will run on after loading it. Progress since then is lost.");
+    tap(&mut a, Button::B, 40);
+    a.handle(Msg::SavedState(Some(SavedState { made: at(2026, 10, 19, 14, 32), now: None, bios: Some(crate::library::BIOS_FILE.into()) })));
+    tap(&mut a, Button::A, 50);
+    assert!(labels(&a)[0].contains("It was made with a BIOS file, which the game will run on after loading it."), "{:?}", labels(&a));
+}
+
+/// The app on the PlayStation's games, Vagrant Story focused.
+fn ps1_games() -> App {
+    let mut a = app();
+    a.handle(Msg::Library(vec![game("ps1", "Vagrant Story")]));
+    tap(&mut a, Button::A, 0);
+    a
+}
+
+#[test]
+fn a_ps1_game_resumes_at_once_if_its_autosave_was_made_on_the_bios_it_would_start_on() {
+    let mut a = ps1_games();
+    let vagrant = game("ps1", "Vagrant Story");
+    // Its core has a stand-in for a missing BIOS (OpenBIOS), so its autosave is checked first.
+    assert_eq!(tap(&mut a, Button::A, 10), [Effect::CheckAutosave(vagrant.clone())]);
+    assert!(a.playing().is_none());
+    let e = a.handle(Msg::AutosaveChecked { game: vagrant.clone(), bios: None });
+    assert_eq!(e[0], Effect::Launch(vagrant.clone()));
+    assert_eq!(a.playing(), Some(&vagrant));
+    // An answer to a second press is ignored once the game plays.
+    assert_eq!(a.handle(Msg::AutosaveChecked { game: vagrant.clone(), bios: None }), vec![]);
+    // So is one that comes after the player left the list.
+    a.handle(Msg::GameEnded(None));
+    tap(&mut a, Button::A, 20);
+    tap(&mut a, Button::B, 30);
+    assert_eq!(a.handle(Msg::AutosaveChecked { game: vagrant, bios: None }), vec![]);
+    assert!(a.playing().is_none());
+}
+
+#[test]
+fn a_ps1_game_whose_autosave_was_made_on_another_bios_asks_whether_to_resume_it() {
+    let mut a = ps1_games();
+    let vagrant = game("ps1", "Vagrant Story");
+    tap(&mut a, Button::A, 10);
+    let openbios = BiosChange { made_on: "OpenBIOS".into(), now: crate::library::BIOS_FILE.into() };
+    assert_eq!(a.handle(Msg::AutosaveChecked { game: vagrant.clone(), bios: Some(openbios.clone()) }), vec![Effect::Redraw(Some(Transition::Push))]);
+    assert_eq!(a.view().title, "Vagrant Story");
+    assert_eq!(labels(&a), ["Its autosave was made on OpenBIOS, and there is a BIOS file in bios/ now. Resume keeps OpenBIOS; Start afresh uses the BIOS file. \
+        Starting afresh sets the autosave aside, in the .states folder beside the game. The memory card (saves made in the game) is kept either way.", "Resume", "Start afresh", "Cancel"]);
+    assert_eq!(focused(&a), "Resume");
+    assert_eq!(a.input_target(), InputTarget::App);
+    // B goes back to the list, starting nothing.
+    assert_eq!(tap(&mut a, Button::B, 20), vec![Effect::Redraw(Some(Transition::Pop))]);
+    assert!(a.playing().is_none());
+    // Resume starts it as it is.
+    tap(&mut a, Button::A, 30);
+    a.handle(Msg::AutosaveChecked { game: vagrant.clone(), bios: Some(openbios.clone()) });
+    let e = tap(&mut a, Button::A, 40);
+    assert_eq!(e[..2], [Effect::Redraw(Some(Transition::Pop)), Effect::Launch(vagrant.clone())]);
+    assert_eq!(a.playing(), Some(&vagrant));
+    a.handle(Msg::GameEnded(None));
+    // Start afresh sets its autosave aside first. The other way round: made with a BIOS file.
+    tap(&mut a, Button::A, 50);
+    let file = BiosChange { made_on: crate::library::BIOS_FILE.into(), now: "OpenBIOS".into() };
+    a.handle(Msg::AutosaveChecked { game: vagrant.clone(), bios: Some(file) });
+    assert!(labels(&a)[0].starts_with("Its autosave was made with a BIOS file, and bios/ has no BIOS file now. Resume keeps that BIOS; Start afresh uses OpenBIOS."), "{:?}", labels(&a));
+    focus_on(&mut a, "Start afresh");
+    let e = tap(&mut a, Button::A, 60);
+    assert_eq!(e[..2], [Effect::Redraw(Some(Transition::Pop)), Effect::LaunchAfresh(vagrant.clone())]);
+    assert_eq!(a.playing(), Some(&vagrant));
 }
 
 #[test]

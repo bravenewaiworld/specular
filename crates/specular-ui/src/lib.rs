@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
 use specular_core::art::ArtKind;
 use specular_core::card::{Card, CardCmd};
-use specular_core::app::{App, Credit, Credits, Effect, InputTarget, LeftOut, LocalTime, Msg, SavedState, WifiNeed};
+use specular_core::app::{App, BiosChange, Credit, Credits, Effect, InputTarget, LeftOut, LocalTime, Msg, SavedState, WifiNeed};
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble, SshCmd};
 use specular_core::effects::{self, Effects, Event};
 use specular_core::rumble::RumbleLine;
@@ -244,6 +244,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         sleep_timer: slint::Timer::default(),
         wifi_timer: slint::Timer::default(),
         launches: Cell::new(0),
+        state_looks: Cell::new(0),
         clock: slint::Timer::default(),
         ignore_power_until: Cell::new(Duration::ZERO),
         shown_layout: Cell::new(None),
@@ -883,6 +884,9 @@ struct Runner {
     /// How many games have been launched: a game that finishes loading after another launch is
     /// stale (`started`).
     launches: Cell<u32>,
+    /// How many times the save state has been looked at (`tell_saved_state`): only the latest look
+    /// is told, as each reads on a thread of its own.
+    state_looks: Cell<u32>,
     clock: slint::Timer,
     ignore_power_until: Cell<Duration>,
     /// The layout last drawn: a new one gets fresh row slots.
@@ -1039,7 +1043,9 @@ impl Runner {
             }
             Effect::Card(cmd) => if let Some(t) = &self.card { let _ = t.send(cmd); },
             Effect::Apply { key, value } => self.apply_setting(key, &value),
-            Effect::Launch(game) => self.launch(&game),
+            Effect::Launch(game) => self.launch(&game, false),
+            Effect::LaunchAfresh(game) => self.launch(&game, true),
+            Effect::CheckAutosave(game) => self.check_autosave(game),
             Effect::CoreOptions(options) => if let Some(p) = self.playing.borrow().as_ref() { p.session.set_options(options); },
             Effect::PauseGame(paused) => {
                 // Play stops for the game menu (also as the device wakes), or for the card-wait
@@ -1125,17 +1131,58 @@ impl Runner {
         if let Some(p) = self.playing.borrow().as_ref() { post(Msg::Discs(p.session.discs())); }
     }
 
-    /// Tells the app when the running game's save state was made (its file's time), for its menu.
+    /// Tells the app when the running game's save state was made (its file's time), and on what
+    /// BIOS if not the one the game runs on now, for its menu. The file is read on a thread of its
+    /// own: a PS1 state is megabytes.
     fn tell_saved_state(&self) {
-        let Some(state) = self.playing.borrow().as_ref().map(|p| p.state.clone()) else { return };
-        let made = match std::fs::metadata(&state).and_then(|m| m.modified()) {
-            Ok(t) => Some(local_minute(t)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => { eprintln!("saves: can't see when {} was saved: {e}", state.display()); None }
-        };
-        // A clock that isn't set yet (see `local_time`) can't say what today is.
-        let now = Some(local_minute(std::time::SystemTime::now())).filter(|n| n.year >= CLOCK_SET);
-        post(Msg::SavedState(made.map(|made| SavedState { made, now })));
+        let Some((state, running_on)) = self.playing.borrow().as_ref().map(|p| (p.state.clone(), p.session.bios())) else { return };
+        let look = self.state_looks.get() + 1;
+        self.state_looks.set(look);
+        std::thread::spawn(move || {
+            let made = match std::fs::metadata(&state).and_then(|m| m.modified()) {
+                Ok(t) => Some(local_minute(t)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => { eprintln!("saves: can't see when {} was saved: {e}", state.display()); None }
+            };
+            let bios = running_on.and_then(|now| specular_runtime::state_bios(&state).filter(|made_on| *made_on != now));
+            // A clock that isn't set yet (see `local_time`) can't say what today is.
+            let now = Some(local_minute(std::time::SystemTime::now())).filter(|n| n.year >= CLOCK_SET);
+            let msg = Msg::SavedState(made.map(|made| SavedState { made, now, bios }));
+            on_ui(move |r| if r.state_looks.get() == look { r.handle(msg) });
+        });
+    }
+
+    /// `Effect::CheckAutosave`, on a thread of its own, as reading the autosave can take a while.
+    fn check_autosave(&self, game: Game) {
+        let app = self.app.borrow();
+        let extensions = app.ctx().systems.iter().find(|s| s.id == game.system).map_or(&[][..], |s| s.extensions);
+        let Some(core) = app.core_of(&game) else { return post(Msg::AutosaveChecked { game, bios: None }) };
+        let (rom, bios_dir, autosave) = (self.data.roms().join(&game.path), self.data.bios(), game.state_path(&self.data.roms(), "autosave"));
+        std::thread::spawn(move || {
+            let now = core.starts_on(&rom, extensions, &bios_dir);
+            let bios = specular_runtime::state_bios(&autosave).zip(now).filter(|(m, n)| m != n).map(|(made_on, now)| BiosChange { made_on, now: now.into() });
+            if let Some(b) = &bios {
+                eprintln!("game: {} was made on BIOS {:?}, and {} would start on {:?} now: asking whether to resume it", autosave.display(), b.made_on, core.name, b.now);
+            }
+            post(Msg::AutosaveChecked { game, bios });
+        });
+    }
+
+    /// Renames `game`'s autosave to `<name>.old-autosave` (replacing an earlier one), so it starts
+    /// afresh (`Effect::LaunchAfresh`); Ok if it has none. Err: why not, for the player.
+    fn set_aside_autosave(&self, game: &Game) -> Result<(), String> {
+        let roms = self.data.roms();
+        let (from, to) = (game.state_path(&roms, "autosave"), game.state_path(&roms, "old-autosave"));
+        let r = std::fs::rename(&from, &to).and_then(|()| specular_core::settings::store::sync_dir(to.parent().unwrap_or(Path::new("."))));
+        match r {
+            Ok(()) => { eprintln!("game: starting afresh: {} set aside as {}", from.display(), to.display()); Ok(()) }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => {
+                eprintln!("game: setting {} aside as {}: {e}", from.display(), to.display());
+                tell_if_read_only(&e);
+                Err("The autosave couldn't be set aside, so the game didn't start.".into())
+            }
+        }
     }
 
     /// Keeps the frame on screen as `p` is quit, as its game's picture of where it was left off:
@@ -1257,8 +1304,8 @@ impl Runner {
     /// Starts `game`: its cover flies to where the game will be while it loads (once the redraw
     /// that follows shows it playing), with the splash over it until the game is shown
     /// (`SPLASH_TIME`). Art work stops while it runs, and loaded pictures are dropped once it has
-    /// started, to leave it the memory and the CPU.
-    fn launch(self: &Rc<Self>, game: &Game) {
+    /// started, to leave it the memory and the CPU. If `afresh`, its autosave is set aside first.
+    fn launch(self: &Rc<Self>, game: &Game, afresh: bool) {
         let _ = self.art_worker.send(art::ArtCmd::Paused(true));
         let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
         if let Some(w) = self.window.upgrade() {
@@ -1279,13 +1326,16 @@ impl Runner {
         self.launches.set(launch);
         let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("There's no emulator for {} games.", system.map_or(game.system, |s| s.name)))) };
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
-        if let Err(why) = core.check_bios(&self.data.roms().join(&game.path), extensions, &self.data.bios()) { return self.started(launch, Err(why)); }
+        let (rom, bios_dir) = (self.data.roms().join(&game.path), self.data.bios());
+        if let Err(why) = core.check_bios(&rom, extensions, &bios_dir) { return self.started(launch, Err(why)); }
+        if afresh && let Err(why) = self.set_aside_autosave(game) { return self.started(launch, Err(why)); }
+        let bios = core.starts_on(&rom, extensions, &bios_dir);
         let options = self.app.borrow().core_options();
         let (cpu_min, why) = self.app.borrow().cpu_min(self.cpu_steps.get().cloned().unwrap_or_default());
         eprintln!("cpu: {why}");
         let (autosave, why) = self.app.borrow().autosave();
         eprintln!("game: {why}");
-        game::Playing::start(self, game, core, options, cpu_min, autosave, move |r| on_ui(move |me| me.started(launch, r)));
+        game::Playing::start(self, game, core, bios, options, cpu_min, autosave, move |r| on_ui(move |me| me.started(launch, r)));
     }
 
     /// Launch number `launch` (see `launches`) is running, or couldn't start.

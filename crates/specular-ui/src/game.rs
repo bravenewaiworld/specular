@@ -62,7 +62,8 @@ pub struct Playing {
 pub type SharedDevice = Arc<dyn Device + Send + Sync>;
 
 impl Playing {
-    /// Starts `game` with `core` (`App::playing_core`), given these `options` (`App::core_options`)
+    /// Starts `game` with `core` (`App::playing_core`), on `bios` (`CoreDecl::starts_on`, recorded
+    /// in its states: `LaunchSpec::bios`), given these `options` (`App::core_options`)
     /// and CPU minimum (`App::cpu_min`, set through the hardware thread), with `r`'s data folders,
     /// device, sound output and rumble, on another thread, since reading a
     /// large ROM or opening a Bluetooth output can take a second or more; then calls `started`
@@ -70,7 +71,7 @@ impl Playing {
     /// save, and the app if the core's built-in BIOS halts the game (`Msg::GameStopped`). Before opening the game's output, that thread waits for the interface sounds to close
     /// theirs. A core the user added has the options it declares learned, once the game has
     /// started (`user_cores::learn`).
-    pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, cpu_min: CpuMin, autosave: Autosave,
+    pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, bios: Option<&str>, options: Vec<(String, String)>, cpu_min: CpuMin, autosave: Autosave,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let (data, output, rumble) = (&r.data, r.output.borrow().clone(), r.rumble.clone());
         let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
@@ -91,6 +92,7 @@ impl Playing {
             controller: core.controller,
             record: Some(record.clone()),
             states_restore_save: core.states_restore_save,
+            bios: bios.map(str::to_owned),
         };
         let frames = Arc::new(FrameSlot::default());
         // One message to the UI at a time: frames arriving while one is pending are drawn by it.

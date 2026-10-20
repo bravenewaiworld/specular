@@ -173,6 +173,20 @@ fn a_missing_bios_stops_only_the_games_that_need_one() {
 }
 
 #[test]
+fn a_game_starts_on_its_cores_stand_in_until_a_bios_file_is_there() {
+    let systems = builtin_systems();
+    let core = |id: &str| systems.iter().find(|s| s.id == id).unwrap().cores[0];
+    let bios = tempfile::tempdir().unwrap();
+    let game = Path::new("Game.cue");
+    assert_eq!(core("ps1").starts_on(game, &["cue"], bios.path()), Some("OpenBIOS"));
+    touch(bios.path(), "SCPH5501.BIN", b"");
+    assert_eq!(core("ps1").starts_on(game, &["cue"], bios.path()), Some(BIOS_FILE));
+    // Cores without a stand-in: their states aren't tagged.
+    assert_eq!(core("nes").starts_on(Path::new("Zelda.fds"), &["fds"], bios.path()), None);
+    assert_eq!(core("gba").starts_on(Path::new("Game.gba"), &["gba"], bios.path()), None);
+}
+
+#[test]
 fn a_game_its_cores_built_in_bios_halted_is_told_which_file_to_add() {
     let systems = builtin_systems();
     let core = |id: &str| systems.iter().find(|s| s.id == id).unwrap().cores[0];

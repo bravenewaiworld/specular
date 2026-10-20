@@ -1411,6 +1411,7 @@ fn a_games_cpu_minimum_starts_at_its_cores_level_unless_a_config_file_says_other
     tap(&mut a, Button::Down, 30); // PlayStation
     tap(&mut a, Button::A, 40);
     tap(&mut a, Button::A, 50);
+    a.handle(Msg::AutosaveChecked { game: game("ps1", "Vagrant Story"), bios: None });
     let (min, line) = a.cpu_min(STEPS.into());
     assert_eq!(min.current(), Some(1800));
     assert!(line.starts_with("SwanStation starts with a minimum of 1800 MHz") && line.ends_with("power.cpu_min = \"auto\", its default)"), "{line}");
@@ -1435,7 +1436,8 @@ fn a_games_autosave_is_its_cores_unless_a_config_file_says_otherwise() {
     tap(&mut a, Button::B, 20);
     tap(&mut a, Button::Down, 30); // PlayStation
     tap(&mut a, Button::A, 40);
-    tap(&mut a, Button::A, 50);
+    assert_eq!(tap(&mut a, Button::A, 50), [Effect::CheckAutosave(game("ps1", "Vagrant Story"))]);
+    a.handle(Msg::AutosaveChecked { game: game("ps1", "Vagrant Story"), bios: None });
     assert_eq!(a.autosave().0, AtPauses, "SwanStation's own");
     // Each layer overrides the less specific ones.
     let set = |a: &mut App, layer: Layer, v: &str| { a.handle(Msg::SettingsLoaded(layer, serde_json::Map::from_iter([(builtin::AUTOSAVE.into(), json!(v))]))); };
