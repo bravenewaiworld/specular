@@ -11,7 +11,7 @@ Installing the system onto a device's internal storage and putting a backup of i
 - **A developer option keeps the SD card bootable** (2026-10-14). Without it, the device starts from the internal storage from then on.
 - **While a task runs, nothing may interrupt it** (2026-10-14). Its screen can't be left, and sleep and power off wait for it, saying so.
 - **A task cut short is recognised** (2026-10-14). One still running (Specular crashed or was restarted) is shown again; an unfinished one (a power cut) shows in what the internal storage holds, and can be run again. The SD card still starts the device meanwhile.
-- **Failures say what happened, what to do, and where the log is** (2026-10-14). That includes the installer refusing a task on a low battery. Why installing or preparing a restore isn't possible at all is meant for developers and shown only under Developer details.
+- **Failures say what happened, what to do, and where the log is** (2026-10-14). That includes the installer refusing a task on a low battery. Why installing isn't possible is said to everyone in plain words (the system is installed already, or the device can't); the installer's own reason, and why a restore can't be prepared, only under Developer details. Rejected: the reason only under Developer details (2026-10-19; the section would just be missing, with no word why).
 - **Every update file on the SD card is listed: an older one with a warning, one that can't be installed with why** (2026-10-19). Going back to a known-good release must stay possible, and a file that doesn't show would leave the user guessing. Rejected: hiding older or unusable files.
 - **An update or a switch to the previous version takes effect at the next start, so its progress screen ends on Restart** (2026-10-19). The version running before stays installed, to go back to.
 - **On the installed system, Restore prepares the SD card; the card's system asks before restoring** (2026-10-19). The question (Restore, Not now, Cancel the restore) opens once per run, with the focus on Not now, when the first offer that reports the prepared restore arrives while no game or task is open; after Not now it is in Settings. To ask at start-up, the installer is asked for an offer then, not only when Settings opens. Rejected: restoring by itself at start-up (a forgotten note would erase the internal storage unattended); asking each time Settings opens (nagging).
@@ -31,7 +31,7 @@ pub trait Installer: Send {
 
 pub struct Offer {                      // fields an older installer doesn't report are empty
     pub install: Option<InstallOffer>,  // { bytes, backup_possible, free }
-    pub why_not: Option<String>,        // for developers
+    pub why_not: Option<String>,        // the installer's words, for developers
     pub internal: Internal,
     pub backups: Vec<Backup>,           // newest first: { dir, created (YYYYMMDD-HHMMSS UTC), bytes, holds }
     pub version: Option<String>,        // the running system's
@@ -54,8 +54,8 @@ The installer's thread first asks it to `follow` any task left running, then for
 
 Settings shows, from the last offer:
 
-- **Updates**: the running version; Install update (the update files, then "Install update?"); Start previous version ("Start the previous version?").
-- **Internal storage**: what an unfinished install or restore left; Continue the prepared restore; Install to internal storage; Restore internal storage (the backups, then "Restore the internal storage?", which prepares the restore when the offer says the system runs from the internal storage).
+- **Updates**: the running version (its build date; whole with Developer details); Install update (the update files, then "Install update?"), or how to add an update file (into `updates/` on the SD card) when there is none; Start previous version ("Start the previous version?").
+- **Internal storage**: what an unfinished install or restore left; Continue the prepared restore; Install to internal storage, with what it does, or why it isn't offered; Restore internal storage (the backups, then "Restore the internal storage?", which prepares the restore when the offer says the system runs from the internal storage).
 
 The desktop build has a simulated installer that covers every one of these screens (see DEVELOPMENT.md).
 

@@ -58,7 +58,8 @@ impl App {
     pub(super) fn transfer_done(&mut self, start: bool, result: Result<(), String>) -> Vec<Effect> {
         let Some(t) = &mut self.ctx.transfer else { return vec![] };
         match result {
-            Err(why) if !start => return vec![Effect::Notice(format!("File transfer may still be on: {why}"))],
+            // (Why is in the log.)
+            Err(_) if !start => return vec![Effect::Notice("File transfer may still be on. Restart the device to be sure it is off.".into())],
             _ if start != t.told => return vec![],
             Ok(()) => t.server = if start { Server::Running } else { Server::Stopped },
             Err(why) => t.server = Server::Failed(why),
@@ -77,8 +78,9 @@ pub(super) fn settings_row(ctx: &Ctx) -> Option<Row> {
 fn url(address: &str) -> String { format!("http://{address}/") }
 
 /// The file transfer screen: a warning, then the addresses to open in a browser (WiFi's, and the
-/// device's other connected network interfaces, as the WiFi service reports them), or the server's
-/// state. A on Wi-Fi's row opens the Wi-Fi screen, with the server still running.
+/// device's other connected network interfaces, as the WiFi service reports them) with how to
+/// get one while there are none, or the server's state. A on Wi-Fi's row opens the Wi-Fi screen,
+/// with the server still running.
 struct TransferScreen;
 
 impl Screen for TransferScreen {
@@ -107,9 +109,16 @@ impl Screen for TransferScreen {
                     let label = if i.is_usb_link() { "USB cable" } else { &i.name };
                     rows.push(Row::new(format!("address:{}:{}", i.name, i.address), label, RowKind::Note { detail: Some(url(&i.address)) }));
                 }
+                // Neither Wi-Fi nor a USB cable is connected: say how to connect one.
+                let connected = ctx.wifi.as_ref().is_some_and(|w| matches!(w.link, WifiLink::Connected { .. }));
+                if !connected && !ctx.wifi.iter().flat_map(|w| &w.interfaces).any(|i| i.is_usb_link()) {
+                    let wifi = if ctx.wifi.is_some() { "Select Wi-Fi to join a network, or connect" } else { "Connect" };
+                    rows.push(Row::note("note:how", format!("{wifi} the device to a PC with a USB cable.")));
+                }
             }
             Some(Server::Failed(why)) => {
-                rows.push(Row::note("note:failed", format!("File transfer didn't start: {why}")));
+                rows.push(Row::note("note:failed", "File transfer didn't start. Try again; if it still doesn't, restart the device."));
+                if ctx.visibility() == Visibility::Developer { rows.push(Row::note("note:why", why.as_str())); }
                 rows.push(action("retry", "Try again"));
             }
             _ => rows.push(Row::note("note:starting", "Starting…")),

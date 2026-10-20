@@ -39,6 +39,8 @@ impl App {
             self.settings_loaded = false;
             self.ctx.scanned = false;
             self.ctx.card_note = card.repaired();
+            // The card read afresh reports its own.
+            (self.ctx.left_out, self.ctx.settings_unsaved) = Default::default();
             e.push(Effect::ReadCard { writable: card.writable() });
         }
         if !card.readable() {

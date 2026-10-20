@@ -37,9 +37,12 @@ fn finds_games_by_extension_and_zip_contents() {
     touch(roms, "gba/._Golden Sun (USA, Europe).gba", b""); // macOS metadata
     touch(roms, ".Trashes/old.gba", b"");
     touch(roms, "broken.zip", b"not a zip");
-    let games = scan(roms, &builtin_systems());
-    let found: Vec<(&str, &str)> = games.iter().map(|g| (g.system, g.title.as_str())).collect();
-    assert_eq!(found, [("gba", "Golden Sun"), ("gba", "Mother 3"), ("snes", "Super Metroid")]);
+    touch(roms, "README.txt", b"Games go here"); // Specular's guide (`guides`)
+    let scan = scan(roms, &builtin_systems());
+    let found: Vec<(&str, &str)> = scan.games.iter().map(|g| (g.system, g.title.as_str())).collect();
+    assert_eq!(found, [("gba", "Golden Sun"), ("gba", "Mother 3")]);
+    // Out of the box, no core plays the SNES: its games are counted instead.
+    assert_eq!(scan.no_emulator(&builtin_systems()), [("Super Nintendo", 1)]);
 }
 
 #[test]
@@ -51,7 +54,7 @@ fn disc_tracks_and_playlist_discs_are_not_games() {
     touch(roms, "ps1/FF9/Final Fantasy IX (USA).m3u", b"Final Fantasy IX (USA) (Disc 1).chd\n./final fantasy ix (usa) (disc 2).chd\n");
     touch(roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 1).chd", b"");
     touch(roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 2).chd", b"");
-    let games = scan(roms, &builtin_systems());
+    let games = scan(roms, &builtin_systems()).games;
     let paths: Vec<&Path> = games.iter().map(|g| g.path.as_path()).collect();
     assert_eq!(paths, [Path::new("ps1/FF9/Final Fantasy IX (USA).m3u"), Path::new("ps1/Vagrant Story (USA).cue")]);
 }
@@ -158,7 +161,7 @@ fn a_missing_bios_stops_only_the_games_that_need_one() {
     let (nes, fds, ps1) = (core("nes"), Path::new("Zelda.fds"), core("ps1"));
     let ext = &["nes", "fds"];
     assert!(nes.check_bios(Path::new("Mario.nes"), ext, bios.path()).is_ok());
-    assert_eq!(nes.check_bios(fds, ext, bios.path()).unwrap_err(), "Famicom Disk System games need disksys.rom in the bios folder");
+    assert_eq!(nes.check_bios(fds, ext, bios.path()).unwrap_err(), "Famicom Disk System games need disksys.rom in bios/ on the SD card.");
     assert!(ps1.check_bios(Path::new("Game.cue"), &["cue"], bios.path()).is_ok()); // OpenBIOS instead
     // A zip by the game inside it.
     let zipped = bios.path().join("Zelda.zip");
@@ -173,8 +176,8 @@ fn a_missing_bios_stops_only_the_games_that_need_one() {
 fn a_game_its_cores_built_in_bios_halted_is_told_which_file_to_add() {
     let systems = builtin_systems();
     let core = |id: &str| systems.iter().find(|s| s.id == id).unwrap().cores[0];
-    assert_eq!(core("ps1").bios_halt_notice(), "SwanStation ran the game on its built-in OpenBIOS, which lacks something the game uses. It may need a BIOS file: \
-        put one of scph5500.bin, scph5501.bin, scph5502.bin, psxonpsp660.bin, ps1_rom.bin in the bios folder on the SD card");
-    // mGBA never says its BIOS halted a game: only the wording for a core without a fallback.
-    assert_eq!(core("gba").bios_halt_notice(), "mGBA's built-in BIOS halted it");
+    assert_eq!(core("ps1").bios_halt_notice(), "It may need a BIOS file: \
+        put one of scph5500.bin, scph5501.bin, scph5502.bin, psxonpsp660.bin, ps1_rom.bin in bios/ on the SD card, then start the game again.");
+    // mGBA never says its BIOS halted a game: only the wording for a core without BIOS files.
+    assert_eq!(core("gba").bios_halt_notice(), "It may need a BIOS file in bios/ on the SD card.");
 }

@@ -16,9 +16,22 @@ use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
 use specular_core::library::{Autosave, CoreDecl, Game, user_cores};
-use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session};
+use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session, StartError};
 
 use crate::{AppWindow, Runner};
+
+/// What the player is told when `core` couldn't start a game of `system` (its name).
+fn start_failure(core: &CoreDecl, system: &str, e: &StartError) -> String {
+    match e {
+        StartError::Unzip(why) => format!("The game couldn't start: {why}."),
+        StartError::Core(_) => match core.user {
+            Some(u) => format!("{} in cores/ on the SD card doesn't work on this device.", u.path.file_name().unwrap_or_default().to_string_lossy()),
+            None => format!("{} couldn't be started. Restart the device and try again.", core.name),
+        },
+        StartError::Game(_) => format!("{} couldn't open this game. The file may be damaged, or not a {system} game.", core.name),
+        StartError::Other(_) => "The game couldn't start. Try again.".into(),
+    }
+}
 
 /// Where Specular's own cores are installed: `$SPECULAR_CORES`, else `cores/` next to Specular's
 /// binary.
@@ -53,13 +66,14 @@ impl Playing {
     /// and CPU minimum (`App::cpu_min`, set through the hardware thread), with `r`'s data folders,
     /// device, sound output and rumble, on another thread, since reading a
     /// large ROM or opening a Bluetooth output can take a second or more; then calls `started`
-    /// there with the result. The caller checks the BIOS first (`CoreDecl::check_bios`). The UI is told of each new frame (`Runner::game_frame`) and each in-game
+    /// there with the result (Err: why, for the player; the details are logged). The caller checks the BIOS first (`CoreDecl::check_bios`). The UI is told of each new frame (`Runner::game_frame`) and each in-game
     /// save, and the app if the core's built-in BIOS halts the game (`Msg::GameStopped`). Before opening the game's output, that thread waits for the interface sounds to close
     /// theirs. A core the user added has the options it declares learned, once the game has
     /// started (`user_cores::learn`).
     pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, options: Vec<(String, String)>, cpu_min: CpuMin, autosave: Autosave,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let (data, output, rumble) = (&r.data, r.output.borrow().clone(), r.rumble.clone());
+        let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
         let spec = LaunchSpec {
@@ -113,7 +127,7 @@ impl Playing {
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }
-            let session = Session::start(spec, out);
+            let session = Session::start(spec, out).map_err(|e| { eprintln!("game: {e}"); start_failure(core, system, &e) });
             let declared = session.as_ref().ok().map(|s| s.info().options.clone());
             started(session.map(|session| Self { session, frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0) }));
             let Some(d) = declared else { return };

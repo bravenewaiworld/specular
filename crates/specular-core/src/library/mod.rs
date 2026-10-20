@@ -134,20 +134,19 @@ impl CoreDecl {
             let files = b.files.join(", ");
             eprintln!("game: no BIOS for {} in {} (looked for {files}){}", b.games, bios_dir.display(),
                 b.fallback.map_or(String::new(), |f| format!("; {} uses {f}", self.name)));
-            if b.fallback.is_none() { return Err(format!("{} need {} in the bios folder", b.games, b.which())); }
+            if b.fallback.is_none() { return Err(format!("{} need {} in bios/ on the SD card.", b.games, b.which())); }
         }
         Ok(())
     }
 
-    /// Why the game stopped, for the player, when the core says its stand-in for a missing BIOS
-    /// file (`Bios::fallback`) has halted it for good (specular-runtime's `Outputs::on_bios_halt`):
-    /// which files to put where. Names the first `Bios` with a fallback, whatever the game (each
-    /// core has at most one).
+    /// What to do, for the player, when the core says its stand-in for a missing BIOS file
+    /// (`Bios::fallback`) has halted the game for good (specular-runtime's `Outputs::on_bios_halt`):
+    /// which files to put where. Ignores the game's extension: names the `Bios` with a fallback (a
+    /// core has at most one), else the first.
     pub fn bios_halt_notice(&self) -> String {
-        match self.bios.iter().find_map(|b| Some((b, b.fallback?))) {
-            Some((b, fallback)) => format!("{} ran the game on {fallback}, which lacks something the game uses. It may need a BIOS file: put {} in the bios folder on the SD card",
-                self.name, b.which()),
-            None => format!("{}'s built-in BIOS halted it", self.name),
+        match self.bios.iter().find(|b| b.fallback.is_some()).or(self.bios.first()) {
+            Some(b) => format!("It may need a BIOS file: put {} in bios/ on the SD card, then start the game again.", b.which()),
+            None => "It may need a BIOS file in bios/ on the SD card.".into(),
         }
     }
 }
@@ -286,23 +285,40 @@ fn skip_file(name: &str) -> bool { name.starts_with('.') }
 /// How deep folders are followed, so a huge tree can't stall the scan.
 pub const MAX_DEPTH: usize = 8;
 
-/// Finds every game under `roms`, sorted by system order then title. Unreadable folders and
-/// files are skipped; the scan never fails as a whole.
-pub fn scan(roms: &Path, systems: &[SystemDecl]) -> Vec<Game> {
+/// What a scan of `roms/` found.
+#[derive(Debug, Default)]
+pub struct Scan {
+    /// The games of the systems with a core, sorted by system order then title.
+    pub games: Vec<Game>,
+    /// The games of the systems with no core, which aren't listed, unsorted.
+    pub unplayable: Vec<Game>,
+}
+
+impl Scan {
+    /// How many unplayable games each of `systems` has, by the system's name, in system order;
+    /// only systems with some.
+    pub fn no_emulator(&self, systems: &[SystemDecl]) -> Vec<(&'static str, usize)> {
+        systems.iter().map(|s| (s.name, self.unplayable.iter().filter(|g| g.system == s.id).count())).filter(|(_, n)| *n > 0).collect()
+    }
+}
+
+/// Finds every game under `roms` of `systems`, those with no core too (`Scan::unplayable`).
+/// Unreadable folders and files are skipped; the scan never fails as a whole.
+pub fn scan(roms: &Path, systems: &[SystemDecl]) -> Scan {
     let mut files = Vec::new();
     walk(roms, roms, 0, &mut files);
     let parts = parts_of_other_games(roms, &files);
-    let mut games: Vec<Game> = files.iter()
+    let found = files.iter()
         .filter(|f| !parts.contains(&lower(f)))
         .filter_map(|f| {
             let system = system_of(&roms.join(f), systems)?;
             let stem = f.file_stem()?.to_str()?;
             Some(Game { system, path: f.clone(), title: display_title(stem), sort_key: sort_key(stem) })
-        })
-        .collect();
+        });
+    let (mut games, unplayable): (Vec<Game>, Vec<Game>) = found.partition(|g| systems.iter().any(|s| s.id == g.system && !s.cores.is_empty()));
     let order = |id: &str| systems.iter().position(|s| s.id == id);
     games.sort_by(|a, b| (order(a.system), &a.sort_key, &a.path).cmp(&(order(b.system), &b.sort_key, &b.path)));
-    games
+    Scan { games, unplayable }
 }
 
 fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -322,9 +338,12 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 pub fn extension(p: &Path) -> Option<String> { p.extension()?.to_str().map(str::to_ascii_lowercase) }
 
 /// The system a file belongs to: by its extension, or for a zip, by the first file inside it
-/// with a known extension.
+/// with a known extension. A system with a core wins over one without that takes it too.
 fn system_of(path: &Path, systems: &[SystemDecl]) -> Option<&'static str> {
-    let by_ext = |ext: &str| systems.iter().find(|s| s.extensions.contains(&ext)).map(|s| s.id);
+    let by_ext = |ext: &str| {
+        let mut taking = systems.iter().filter(|s| s.extensions.contains(&ext));
+        taking.clone().find(|s| !s.cores.is_empty()).or_else(|| taking.next()).map(|s| s.id)
+    };
     let ext = extension(path)?;
     if ext == "zip" {
         return zip::entries(path).ok()?.iter().find_map(|e| by_ext(&extension(Path::new(&e.name))?));

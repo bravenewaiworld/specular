@@ -134,8 +134,10 @@ pub struct SettingDecl {
     /// The section it is listed under, e.g. "Display".
     pub section: &'static str,
     pub label: &'static str,
-    /// What it does and what its values mean, in a sentence or two, for people editing the files
-    /// by hand (it documents the setting in its schema).
+    /// What it does and what its values mean, in plain sentences that read well both on screen
+    /// (Y on its row: `app::about`) and in its schema, so values are named by their labels, and
+    /// nothing is said of files or keys (the schema adds where it can be set). Empty when there is
+    /// nothing to say: its row then has no About.
     pub help: &'static str,
     pub kind: SettingKind,
     pub default: Value,
@@ -210,6 +212,13 @@ impl Settings {
         for (k, v) in values.into_iter().filter(|(k, _)| k != SCHEMA_KEY) { map.entry(k).or_insert(v); }
     }
 
+    /// `ignored` for every layer loaded: the layer, the key and why, by the layers' file names.
+    pub fn ignored(&self) -> Vec<(Layer, String, String)> {
+        let mut layers: Vec<_> = self.layers.iter().collect();
+        layers.sort_by_cached_key(|(l, _)| l.file());
+        layers.into_iter().flat_map(|(l, values)| ignored(&self.decls, l, values).into_iter().map(|(k, why)| (l.clone(), k, why))).collect()
+    }
+
     /// Forgets every layer, before another SD card's are loaded.
     pub fn clear_layers(&mut self) { self.layers.clear(); }
 
@@ -279,12 +288,7 @@ impl Settings {
         let (v, from) = self.get(d.key, at).unwrap();
         let kind = match d.kind {
             SettingKind::Bool => RowKind::Toggle { on: v.as_bool().unwrap_or(false) },
-            SettingKind::Choice(options) => choice_row(options.iter().map(|(o, label)| (*o, label.to_string())), v, None),
-            SettingKind::Colour { same_as } => {
-                let same = same_as.and_then(|k| self.decl(k)).map(|f| (SAME, format!("Same as {}", f.label.to_lowercase())));
-                let colours = PALETTE.iter().map(|c| (c.id, c.label.to_string()));
-                choice_row(same.into_iter().chain(colours), v, self.colour(d.key, at))
-            }
+            SettingKind::Choice(_) | SettingKind::Colour { .. } => choice_row(choices(&self.decls, d), v, self.colour(d.key, at)),
             SettingKind::Int { min, max, step, unit } => RowKind::Number { value: v.as_i64().unwrap_or(min), min, max, step, unit },
         };
         let mut row = Row::new(d.key, d.label, kind);
@@ -327,16 +331,17 @@ impl Settings {
     }
 }
 
-/// What a settings file read for `layer` holds that is ignored, one line per key: values that
-/// aren't valid for their setting, and settings that can't be set in that file (brightness in a
-/// game's, say). Keys no declaration knows are kept and not reported: they may be a plugin's, or
-/// a newer version's.
-pub fn ignored(decls: &[SettingDecl], layer: &Layer, values: &Map<String, Value>) -> Vec<String> {
+/// What a settings file read for `layer` holds that is ignored: each key, with why (to follow
+/// "<key> is ignored: "): a value that isn't valid for its setting, or a setting that can't be set
+/// in that file (brightness in a game's, say). Keys no declaration knows are kept and not
+/// reported: they may be a plugin's, or a newer version's.
+pub fn ignored(decls: &[SettingDecl], layer: &Layer, values: &Map<String, Value>) -> Vec<(String, String)> {
     values.iter().filter_map(|(key, v)| {
         let d = decls.iter().find(|d| d.key == key)?;
-        if !d.settable_at(layer) { Some(format!("{key} can't be set in this file, so it is ignored")) }
-        else if !d.accepts(v) { Some(format!("{key} = {v} isn't one of its values, so it is ignored")) }
-        else { None }
+        let why = if !d.settable_at(layer) { "it can't be set in this file".to_string() }
+            else if !d.accepts(v) { format!("{v} isn't one of its values") }
+            else { return None };
+        Some((key.clone(), why))
     }).collect()
 }
 
@@ -364,13 +369,17 @@ pub fn games_with_settings(config: &Path) -> BTreeSet<String> {
     games
 }
 
-/// Every setting: Specular's own (`builtin`), the "Core" of each of these systems with several
+/// Every setting: Specular's own (`builtin`, with each core's defaults added to their help by
+/// `builtin::describe_cores`), the "Emulator" of each of these systems with several
 /// (`core_of`), then the options of their cores (each core's once). An option of the same key
 /// as one already declared (cores derived from one another can share their options' keys) isn't
 /// declared again: it is one setting, the first core's.
 pub fn declarations(systems: &[SystemDecl]) -> Vec<SettingDecl> {
-    let mut decls: Vec<SettingDecl> = builtin::settings().into_iter().chain(systems.iter().filter_map(core_choice)).collect();
-    for d in crate::library::cores(systems).into_iter().flat_map(|c| core_options::decls(c)) {
+    let cores = crate::library::cores(systems);
+    let mut decls = builtin::settings();
+    builtin::describe_cores(&mut decls, &cores);
+    decls.extend(systems.iter().filter_map(core_choice));
+    for d in cores.into_iter().flat_map(|c| core_options::decls(c)) {
         if !decls.iter().any(|k| k.key == d.key) { decls.push(d.clone()); }
     }
     decls
@@ -379,23 +388,26 @@ pub fn declarations(systems: &[SystemDecl]) -> Vec<SettingDecl> {
 /// The key of the setting choosing which of `system`'s cores plays its games (see `core_of`).
 pub fn core_key(system: &str) -> String { format!("core.{system}") }
 
-/// The "Core" setting of a system with several cores: which plays its games, by `CoreDecl::id`;
+/// The "Emulator" setting of a system with several cores: which plays its games, by `CoreDecl::id`;
 /// by default the first (Specular's own, if it has one). Its text is leaked: declarations take
 /// `'static` text, and the cores' own are kept for the run too (see `core_options`).
 fn core_choice(system: &SystemDecl) -> Option<SettingDecl> {
     if system.cores.len() < 2 { return None; }
     let choices: Vec<(&'static str, &'static str)> = system.cores.iter().map(|c| (c.id(), c.name)).collect();
-    let each: Vec<String> = system.cores.iter().map(|c| format!("\"{}\" ({}{})", c.id(), c.name, if c.user.is_some() { ", added to the SD card's cores folder" } else { "" })).collect();
+    let added: Vec<&str> = system.cores.iter().filter(|c| c.user.is_some()).map(|c| c.name).collect();
+    let added = if added.is_empty() { String::new() } else {
+        format!(" {} {} added to the cores folder on the SD card.", added.join(", "), if added.len() == 1 { "was" } else { "were" })
+    };
     Some(SettingDecl {
-        key: leak(core_key(system.id)), section: "Emulator", label: "Core",
-        help: leak(format!("Which emulator core plays {} games: {}. A change takes effect when a game next starts.", system.name, each.join(", "))),
+        key: leak(core_key(system.id)), section: "Emulation", label: "Emulator",
+        help: leak(format!("Which emulator plays {} games. A change takes effect when a game next starts.{added}", system.name)),
         kind: SettingKind::Choice(choices.leak()), default: Value::from(system.cores[0].id()),
         visibility: Visibility::User, deepest: Scope::Game, core: None, system: Some(system.id),
     })
 }
 
 /// The core that plays `system`'s games at `at` (its layer, or one of its games'): the one its
-/// "Core" setting chooses (`core_key`), else its first. None if it has none.
+/// "Emulator" setting chooses (`core_key`), else its first. None if it has none.
 pub fn core_of(settings: &Settings, system: &SystemDecl, at: &Layer) -> Option<&'static CoreDecl> {
     let chosen = settings.get(&core_key(system.id), at).and_then(|(v, _)| v.as_str());
     chosen.and_then(|id| system.cores.iter().find(|c| c.id() == id)).or(system.cores.first()).copied()
@@ -404,10 +416,24 @@ pub fn core_of(settings: &Settings, system: &SystemDecl, at: &Layer) -> Option<&
 /// Text kept for the rest of the run, as declarations take `'static` text.
 pub(crate) fn leak(s: impl Into<String>) -> &'static str { Box::leak(s.into().into_boxed_str()) }
 
+/// The (stored value, label) options of a Choice or Colour setting `d` (as `SettingKind::options`),
+/// looking up in `decls` the setting a Colour can be the same as; empty for other kinds.
+fn choices(decls: &[SettingDecl], d: &SettingDecl) -> Vec<(&'static str, String)> {
+    match d.kind {
+        SettingKind::Choice(options) => options.iter().map(|(o, label)| (*o, label.to_string())).collect(),
+        SettingKind::Colour { same_as } => {
+            let followed = |k: &str| decls.iter().find(|d| d.key == k).map_or(k.to_string(), |f| f.label.to_lowercase());
+            let same = same_as.map(|k| (SAME, format!("Same as {}", followed(k))));
+            same.into_iter().chain(PALETTE.iter().map(|c| (c.id, c.label.to_string()))).collect()
+        }
+        SettingKind::Bool | SettingKind::Int { .. } => Vec::new(),
+    }
+}
+
 /// A choice row from (stored value, label) options, with `v` selected (the first if it matches
 /// none) and `swatch` shown beside the value.
-fn choice_row(options: impl Iterator<Item = (&'static str, String)>, v: &Value, swatch: Option<Rgb>) -> RowKind {
-    let (values, labels): (Vec<_>, Vec<_>) = options.unzip();
+fn choice_row(options: Vec<(&'static str, String)>, v: &Value, swatch: Option<Rgb>) -> RowKind {
+    let (values, labels): (Vec<_>, Vec<_>) = options.into_iter().unzip();
     let selected = values.iter().position(|o| Some(*o) == v.as_str()).unwrap_or(0);
     RowKind::Choice { options: labels, selected, swatch }
 }

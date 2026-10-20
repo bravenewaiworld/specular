@@ -112,9 +112,9 @@ fn a_game_that_didnt_end_last_time_is_reported_at_start_up() {
         core: "mGBA".into(), library: "/cores/mgba_libretro.so".into(), system: "gba".into(),
         game: "gba/Golden Sun (USA, Europe).zip".into(), started: 0, reason: reason.map(Into::into),
     };
-    assert_eq!(app().handle(Msg::LastGameStopped(record(None))), vec![Effect::Notice("mGBA stopped unexpectedly while playing Golden Sun".into())]);
+    assert_eq!(app().handle(Msg::LastGameStopped(record(None))), vec![Effect::Notice("Golden Sun closed unexpectedly last time. Progress since its last autosave was lost.".into())]);
     assert_eq!(app().handle(Msg::LastGameStopped(record(Some("it stopped responding")))),
-               vec![Effect::Notice("mGBA was stopped while playing Golden Sun: it stopped responding".into())]);
+               vec![Effect::Notice("Golden Sun was closed because it stopped responding last time. Progress since its last autosave was lost.".into())]);
 }
 
 #[test]
@@ -123,8 +123,8 @@ fn a_game_that_stops_for_good_is_quit_and_says_why() {
     tap(&mut a, Button::A, 0);
     tap(&mut a, Button::A, 10);
     tap(&mut a, Button::Menu, 20); // even under its menu
-    assert_eq!(a.handle(Msg::GameStopped("it needs a BIOS".into())),
-               vec![Effect::QuitGame, Effect::Notice("The game stopped: it needs a BIOS".into()), Effect::Redraw(None)]);
+    assert_eq!(a.handle(Msg::GameStopped("It needs a BIOS.".into())),
+               vec![Effect::QuitGame, Effect::Notice("The game stopped. It needs a BIOS.".into()), Effect::Redraw(None)]);
     assert_eq!((a.playing(), a.input_target(), a.view().title.as_str()), (None, InputTarget::App, "Game Boy Advance"));
     // Already quit: nothing more to do.
     assert_eq!(a.handle(Msg::GameStopped("it needs a BIOS".into())), vec![]);
@@ -151,6 +151,7 @@ fn settings_change_and_save() {
     tap(&mut a, Button::A, 10);
     assert_eq!(a.view().title, "Settings");
     assert_eq!(focused(&a), "Brightness");
+    assert_eq!(a.view().rows[a.focus()].hints, [(Button::Right, "Change".into()), (Button::Y, "About".into())]); // A does nothing on a number
     let e = tap(&mut a, Button::Right, 20);
     assert_eq!(e, vec![Effect::Redraw(None), Effect::SaveSettings(Layer::Global), Effect::Apply { key: "display.brightness", value: json!(7) }]);
     // loading settings applies every global one, and saves the change made before (whose save
@@ -287,11 +288,11 @@ fn search_finds_games_in_every_system_best_first_and_plays_them() {
         RowKind::Image { detail: Some(d), .. } => format!("{} {d}", r.label),
         _ => r.label.clone(),
     }).collect::<Vec<_>>();
-    assert_eq!(results(&a), ["Metroid Fusion GBA", "Super Metroid SNES"]);
+    assert_eq!(results(&a), ["Metroid Fusion Game Boy Advance", "Super Metroid Super Nintendo"]);
     // A rescan keeps the results (the query is the screen's params) and the focus.
     tap(&mut a, Button::Down, 0);
     a.handle(Msg::Library(vec![game("gb", "Metroid II"), game("gba", "Metroid Fusion"), game("snes", "Super Metroid")]));
-    assert_eq!(results(&a), ["Metroid Fusion GBA", "Metroid II GB", "Super Metroid SNES"]);
+    assert_eq!(results(&a), ["Metroid Fusion Game Boy Advance", "Metroid II Game Boy", "Super Metroid Super Nintendo"]);
     assert_eq!(focused(&a), "Super Metroid");
     assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Launch(game("snes", "Super Metroid")), scaling("integer"), Effect::Apply { key: builtin::ART, value: json!("boxart") }, Effect::Apply { key: builtin::CPU_MIN, value: json!("auto") }, Effect::Apply { key: builtin::AUTOSAVE, value: json!(builtin::AUTOSAVE_CORE) }, Effect::Redraw(None)]);
     a.handle(Msg::GameEnded(None));
@@ -366,6 +367,7 @@ fn the_game_menu_pauses_and_quits() {
     assert_eq!(tap(&mut a, Button::Down, 20), vec![]); // goes to the game
     assert_eq!(tap(&mut a, Button::Menu, 30), vec![Effect::PauseGame(true), Effect::Redraw(Some(Transition::Push))]);
     assert_eq!((a.input_target(), a.view().title.as_str()), (InputTarget::App, "Paused"));
+    assert!(labels(&a).contains(&"Quitting keeps your place: the game goes on from there next time.".into()));
     assert_eq!(tap(&mut a, Button::B, 40), vec![Effect::PauseGame(false), Effect::Redraw(Some(Transition::Pop))]);
     assert_eq!(a.input_target(), InputTarget::Game);
     tap(&mut a, Button::Menu, 42);
@@ -567,6 +569,8 @@ fn home_says_where_games_go_when_there_are_none() {
     a.handle(Msg::Card(Card::mounted()));
     a.handle(Msg::Library(vec![]));
     assert!(labels(&a).contains(&"No games found".to_string()));
+    let place = labels(&a).into_iter().find(|l| l.starts_with("Put games in roms/")).unwrap();
+    assert!(place.contains(" .gba ") && place.ends_with(", or a .zip holding one."), "{place}");
     assert_eq!(a.view().rows[a.focus()].label, "Settings"); // notes are never focused
     a.handle(Msg::Card(Card::parse("absent\nNo SD card: insert the one with your games.\n")));
     assert!(labels(&a).contains(&"No SD card: insert the one with your games.".to_string()));
@@ -638,7 +642,7 @@ mod credits {
         a.set_credits(Credits { projects: PROJECTS, texts: None });
         assert_eq!(a.splash(), Some(Splash { core: "mGBA", copyright: Some("Copyright © 2013 – 2026 Jeffrey Pfau"), url: Some("https://github.com/libretro/mgba") }));
         // A game that can't start takes its splash with it, and says why.
-        assert_eq!(a.handle(Msg::GameEnded(Some("no such file".into()))), vec![Effect::Notice("The game couldn't start: no such file".into()), Effect::Redraw(None)]);
+        assert_eq!(a.handle(Msg::GameEnded(Some("no such file".into()))), vec![Effect::Notice("no such file".into()), Effect::Redraw(None)]);
         assert_eq!(a.splash(), None);
     }
 }
@@ -820,8 +824,8 @@ mod wireless {
         let wpa3 = Network { supported: false, ..net("Lab", true, false) };
         a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Home", true, true), wpa3])));
         focus_on(&mut a, "Lab");
-        assert_eq!(a.view().rows[a.focus()].kind, RowKind::Text { detail: Some("Not supported".into()) });
-        assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Notice("Lab uses security this device doesn't support".into())]);
+        assert_eq!(a.view().rows[a.focus()].kind, RowKind::Text { detail: Some("Security not supported".into()) });
+        assert_eq!(tap(&mut a, Button::A, 0), vec![Effect::Notice("Lab can't be joined: only open networks and WPA or WPA2 passwords work here, not WPA3, WEP or work logins".into())]);
         focus_on(&mut a, "Home");
         assert_eq!(radio_effects(&tap(&mut a, Button::A, 0)), [&Effect::Wifi(WifiCmd::Join { ssid: "Home".into(), password: None })]);
         a.handle(Msg::Wifi(WifiEvent::Failed(crate::wireless::wifi::WifiError::WrongPassword { ssid: "Home".into() })));
@@ -836,7 +840,10 @@ mod wireless {
         a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Office", true, false)])));
         focus_on(&mut a, "Office");
         tap(&mut a, Button::A, 0);
+        let b_hint = |a: &App| a.view().hints.iter().find(|(b, _)| *b == Button::B).unwrap().1.clone();
+        assert_eq!(b_hint(&a), "Cancel");
         tap(&mut a, Button::A, 0);
+        assert_eq!(b_hint(&a), "Delete");
         tap(&mut a, Button::B, 0); // deletes the letter
         assert_eq!(a.view().layout, Layout::Keys);
         tap(&mut a, Button::B, 0);
@@ -849,6 +856,7 @@ mod wireless {
         open(&mut a, "Wi-Fi", 0);
         a.handle(Msg::Wifi(WifiEvent::Networks(vec![net("Home", true, true)])));
         focus_on(&mut a, "Home");
+        assert_eq!(a.view().rows[a.focus()].hints, [(Button::X, "Forget".into())]); // a saved network
         tap(&mut a, Button::X, 0);
         assert_eq!(a.view().title, "Forget Home?");
         assert_eq!(focused(&a), "Cancel");
@@ -890,9 +898,9 @@ mod wireless {
         a.handle(Msg::Wifi(WifiEvent::Interfaces(vec![Interface { name: "usb0".into(), address: "10.1.1.2".into() }])));
         assert_eq!(addresses(&a), []);
         a.handle(connected("Home"));
-        assert_eq!(addresses(&a), [row("Address", "10.0.0.2")]);
+        assert_eq!(addresses(&a), [row("Address for File transfer", "10.0.0.2")]);
         a.handle(Msg::SettingsLoaded(Layer::Global, json!({"ui.developer_details": true}).as_object().unwrap().clone()));
-        assert_eq!(addresses(&a), [row("Address", "10.0.0.2"), row("usb0", "10.1.1.2")]);
+        assert_eq!(addresses(&a), [row("Address for File transfer", "10.0.0.2"), row("usb0", "10.1.1.2")]);
         a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
         assert_eq!(addresses(&a), [row("usb0", "10.1.1.2")]);
     }
@@ -915,7 +923,7 @@ mod wireless {
         let connected = BtDevice { paired: true, connected: true, audio: true, ..headset };
         let e = a.handle(Msg::Bluetooth(BtEvent::Devices(vec![connected.clone()])));
         assert_eq!(radio_effects(&e), [&Effect::SoundTo(Output::Bluetooth(address.clone()))]);
-        assert_eq!(a.view().rows.iter().find(|r| r.label == "Buds").unwrap().kind, RowKind::Text { detail: Some("Connected · sound".into()) });
+        assert_eq!(a.view().rows.iter().find(|r| r.label == "Buds").unwrap().kind, RowKind::Text { detail: Some("Connected · sound plays here".into()) });
         // The volume keys now set the headset's volume.
         let e = tap(&mut a, Button::VolUp, 0);
         assert!(e.contains(&Effect::Apply { key: builtin::BLUETOOTH_VOLUME, value: json!(11) }), "{e:?}");
@@ -1012,9 +1020,12 @@ mod install {
         let mut a = install_app();
         settings(&mut a, offer());
         let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
-        assert!(labels.ends_with(&["Internal storage".into(), "Install to internal storage".into(), "Restore internal storage".into()]), "{labels:?}");
+        assert!(labels.ends_with(&["Internal storage".into(), "Install to internal storage".into(),
+            "Copies the system onto the device, so it starts from its internal storage. Games and saves stay on the SD card.".into(), "Restore internal storage".into()]), "{labels:?}");
         a.handle(Msg::InstallOffer(Ok(Offer { why_not: Some("running from the internal storage".into()), ..Offer::default() })));
-        assert!(!a.view().rows.iter().any(|r| r.label == "Internal storage" || r.label == "Updates"));
+        assert!(!a.view().rows.iter().any(|r| r.label == "Updates" || r.label == "Install to internal storage"));
+        let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
+        assert!(labels.ends_with(&["Internal storage".into(), "Installing to internal storage isn't possible on this device.".into()]), "{labels:?}");
     }
 
     #[test]
@@ -1023,7 +1034,7 @@ mod install {
         settings(&mut a, offer());
         let rows = a.view().rows.clone();
         let at = rows.iter().position(|r| r.label == "Updates").expect("an Updates section");
-        assert_eq!(rows[at + 1].kind, RowKind::Note { detail: Some("20261018-212347-b3a6d97".into()) });
+        assert_eq!(rows[at + 1].kind, RowKind::Note { detail: Some("2026-10-18 21:23 UTC".into()) });
         assert_eq!(rows[at + 2..at + 4].iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["Install update", "Start previous version"]);
         // An older installer reports none of it.
         a.handle(Msg::InstallOffer(Ok(Offer { version: None, previous: None, updates: vec![], ..offer() })));
@@ -1043,7 +1054,7 @@ mod install {
         press(&mut a, "old.update");
         assert_eq!(a.view().title, "Install update?");
         assert_eq!(focused(&a), "Cancel");
-        assert!(labels(&a).contains(&"This update is older than version 20261018-212347-b3a6d97.".into()), "{:?}", labels(&a));
+        assert!(labels(&a).contains(&"This update is older than version 2026-10-18 21:23 UTC.".into()), "{:?}", labels(&a));
         let e = press(&mut a, "Install");
         assert_eq!(e[0], Effect::Installer(InstallCmd::Start(Task::Update { file: "/mnt/SDCARD/updates/old.update".into() })));
         assert_eq!(a.view().title, "Updating…");
@@ -1329,16 +1340,17 @@ fn games_show_the_kind_of_picture_set_for_their_system_in_its_shape() {
 fn start_opens_a_games_settings_where_it_can_differ_from_its_systems() {
     let mut a = app();
     tap(&mut a, Button::A, 0); // Game Boy Advance
-    assert!(a.view().hints.contains(&(Button::Start, "Settings".into())));
+    assert!(a.view().hints.contains(&(Button::Start, "Game settings".into())));
     tap(&mut a, Button::Start, 10);
     assert_eq!((a.view().title.as_str(), a.parent_title().as_deref()), ("Golden Sun", Some("Game Boy Advance")));
-    assert_eq!(labels(&a), ["Display", "Scaling", "Game Boy Advance", "All Game Boy Advance games…"]);
+    assert_eq!(labels(&a), ["Changes here apply only to Golden Sun. A dot marks each one; X puts it back to what all Game Boy Advance games use.",
+                            "Display", "Scaling", "Game Boy Advance", "All Game Boy Advance games…"]);
     assert_eq!(focused(&a), "Scaling");
     let golden_sun = game("gba", "Golden Sun").settings_layer();
     assert_eq!(tap(&mut a, Button::Right, 20), vec![Effect::Redraw(None), Effect::SaveSettings(golden_sun.clone()), scaling("integer")]); // not playing
     let row = &a.view().rows[a.focus()];
     assert!(row.overridden);
-    assert_eq!(row.hint, Some((Button::X, "Reset".into())));
+    assert_eq!(row.hints, [(Button::X, "Reset".into()), (Button::Y, "About".into())]);
     // all of the system's games: set there, it is inherited, so not marked in the game's
     focus_on(&mut a, "All Game Boy Advance games…");
     tap(&mut a, Button::A, 30);
@@ -1351,7 +1363,7 @@ fn start_opens_a_games_settings_where_it_can_differ_from_its_systems() {
     // X resets the game's own value, which then follows the system's
     assert_eq!(tap(&mut a, Button::X, 70), vec![Effect::Redraw(None), Effect::SaveSettings(golden_sun.clone()), scaling("integer")]);
     let row = &a.view().rows[a.focus()];
-    assert_eq!((row.overridden, &row.hint), (false, &None));
+    assert_eq!((row.overridden, &row.hints[..]), (false, &[(Button::Y, "About".into())][..]));
     assert_eq!(a.ctx().settings.get(builtin::SCALING, &golden_sun).unwrap().0, &json!("stretch"));
     assert_eq!(tap(&mut a, Button::X, 80), vec![]); // nothing to reset
 }
@@ -1528,7 +1540,7 @@ mod user_cores {
         assert_eq!(a.ctx().settings.get("core.gb", &at).unwrap().0, &json!("mgba"));
         open_a_system(&mut a, "Game Boy");
         tap(&mut a, Button::Start, 0);
-        focus_on(&mut a, "Core");
+        focus_on(&mut a, "Emulator");
         let e = tap(&mut a, Button::Right, 10);
         assert!(e.contains(&Effect::SaveSettings(at.clone())), "{e:?}");
         assert_eq!(a.ctx().settings.get("core.gb", &at).unwrap().0, &json!("gambatte"));
@@ -1541,8 +1553,7 @@ mod user_cores {
     fn the_cores_screen_lists_every_core_and_the_files_turned_away() {
         let (mut a, _card) = with_user_cores();
         a.handle(Msg::SettingsLoaded(Layer::Global, json!({ builtin::DEVELOPER_DETAILS: true }).as_object().unwrap().clone()));
-        tap(&mut a, Button::Up, 0); // Settings
-        tap(&mut a, Button::A, 10);
+        press(&mut a, "Settings");
         focus_on(&mut a, "Cores");
         tap(&mut a, Button::A, 20);
         let rows: Vec<(String, Option<String>)> = a.view().rows.iter().map(|r| (r.label.clone(), match &r.kind {
@@ -1642,7 +1653,7 @@ mod transfer {
         let mut a = transfer_app();
         open(&mut a, 0);
         a.handle(Msg::FileTransfer { start: true, result: Err("Failed to bind `0.0.0.0:80`".into()) });
-        assert!(labels(&a).contains(&"File transfer didn't start: Failed to bind `0.0.0.0:80`".into()));
+        assert!(labels(&a).contains(&"File transfer didn't start. Try again; if it still doesn't, restart the device.".into()));
         assert!(press(&mut a, "Try again").contains(&Effect::FileTransfer(true)));
         assert!(labels(&a).contains(&"Starting…".into()));
     }
@@ -1657,7 +1668,7 @@ mod transfer {
         a.handle(Msg::FileTransfer { start: false, result: Ok(()) });
         assert_eq!(a.ctx().transfer.as_ref().unwrap().server, Server::Stopped);
         assert_eq!(a.handle(Msg::FileTransfer { start: false, result: Err("timeout: run: webdav".into()) }),
-                   vec![Effect::Notice("File transfer may still be on: timeout: run: webdav".into())]);
+                   vec![Effect::Notice("File transfer may still be on. Restart the device to be sure it is off.".into())]);
     }
 }
 
@@ -1876,7 +1887,7 @@ mod time_zone {
         assert_eq!(a.view().title, "Library"); // manual: not asked
         open_time_zone(&mut a);
         assert_eq!(a.view().title, "Time zone");
-        assert_eq!(focused(&a), "Set");
+        assert_eq!(focused(&a), "Set time zone");
         tap(&mut a, Button::Right, 0);
         assert_eq!(a.view().title, "Look up the time zone?");
         let e = press(&mut a, "Allow");
@@ -2130,3 +2141,6 @@ mod card {
         assert_eq!(a.handle(Msg::CardReadOnly), vec![]); // known to be read-only
     }
 }
+
+mod problems;
+mod explained;

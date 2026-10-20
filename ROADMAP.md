@@ -43,7 +43,7 @@ Completed:
  - Sound resampled to the output's rate, the game's speed matched to the display (e.g. 59.73 → 60.2 Hz), with small rate adjustments to keep the sound queue half full
  - Frame pacing: the core runs once per vsync of the display (`FBIO_WAITFORVSYNC`; a timer when the device has none), after a delay that adapts to how long it takes (lower input latency)
  - Battery saves: written when the game writes its save, else checked every 10 s of play; also on quit, sleep and stop. Written off the game's thread
- - One save state slot, from the in-game menu
+ - One save state slot, from the in-game menu, which says when it was saved; loading it and restarting the game ask first, saying what is lost
  - Autosave as the game menu opens, on sleep and on quit, and every 10 s of play for cores whose state is quick to make (not SwanStation's: it cost PS1 games a frame each time; `game.autosave` in the config files overrides it); games resume from it at launch. Each state reuses the last one's buffer once the writer hands it back, and the frames just after a state is made don't count as misses for the CPU minimum. Checked on the Brick: the 10 s misses of PS1 games are gone, their autosave is written as the menu opens and on quit and resumed at launch, and GBA games still autosave every 10 s without misses, with repeated save states and loads
  - Save states compressed (about 11× smaller, less card wear)
  - Watchdog: a core stuck on one frame for 6 s restarts Specular
@@ -59,7 +59,7 @@ Completed:
  - A game that needs a BIOS file it doesn't have says which file to put in `bios/`; environment calls a core makes that Specular refuses are logged
  - A PS1 game that OpenBIOS halts (a BIOS function or patch it lacks, or its fatal error) is quit, saying which BIOS files to put in `bios/` on the SD card; its autosave, which would halt again, is removed. Crashes, the watchdog and games that hang in their own code carry no sign of the BIOS, so say nothing of it
  - PS1 games on several discs (an `.m3u`, or a `.pbp` holding several): the disc changes from the in-game menu, and a game resumes on the disc it was on
- - Cores added to the SD card (`cores/<name>_libretro.so` with its `.info`, as the libretro buildbot ships them) for the systems Specular has: the SNES and Mega Drive appear once one serves them, and a "Core" setting per system and per game chooses where there are several (Specular's own by default). Their options are learned at their first game, and are settings from then on (relearned when the core is replaced). A core without an `.info`, for no system Specular has, or built for another processor is turned away with why, in the log and (with Developer details) on Settings → Cores. Their splash shows their `.info`'s name, authors and licence; their battery saves are protected as if their states restore save memory
+ - Cores added to the SD card (`cores/<name>_libretro.so` with its `.info`, as the libretro buildbot ships them) for the systems Specular has: the SNES and Mega Drive appear once one serves them, and a "Core" setting per system and per game chooses where there are several (Specular's own by default). Their options are learned at their first game, and are settings from then on (relearned when the core is replaced). A core without an `.info`, for no system Specular has, or built for another processor is turned away with why, in the log, on Settings → Cores and among what needs attention on home. Their splash shows their `.info`'s name, authors and licence; their battery saves are protected as if their states restore save memory
 
 TODO:
  - The OpenBIOS halt notice with a real game (only a generated disc has been tried: Symphony of the Night and Metal Gear Solid run on OpenBIOS)
@@ -110,6 +110,8 @@ Completed:
  - Settings files in `{sd card}/config/v0/` (`specular.json`, `systems/<system>.json`, `games/<game>.json`; see docs/settings.md), beside fully documented JSON Schemas generated from the declarations: every setting with what it does, its values and its default. Schemas are read-only and rewritten only when they change; each settings file names its schema (`$schema`), so editors explain and check it
  - Settings moved from `configs/` to `config/v0/` at start-up, safe against power cuts; the old folder is kept. Each future format change adds a step to a new `vN/` folder
  - Per-system and per-game settings: Start on a game (or "Game settings" in the in-game menu) opens its settings, with "All <system> games…" for its system's; overrides are marked, X resets one, and changes apply to the running game. Every layer is loaded before its games are listed
+ - A `README.txt` in each folder of the card the user fills (`roms/`, `bios/`, `cores/`, `fonts/`) and in `cache/` and old config folders, generated from the declarations (file types per system, BIOS files per core, what a core needs), read-only and rewritten only when it changes (see docs/guides-and-problems.md)
+ - "N things need attention" on home, opening a list of what Specular can't use, each with why and what to do: games no emulator plays, cores and fonts turned away, settings files set aside or for no game, settings values ignored, and settings that failed to save
  - Core options as settings (`cores/<core>.json`, overridable per system and per game), with their schemas; shown with Developer details on the game and system screens, and changed mid-game. Specular's own choices (mGBA's idle loop removal, Nestopia's NTSC filter off, SwanStation's software renderer) are those options' defaults
 
 ### Aesthetics and Presentation
@@ -128,6 +130,9 @@ Completed:
  - 60 fps while animating; nothing drawn while idle
  - Scrolling measured on the Brick: 6.1–6.6 ms of UI-thread CPU a frame, 37–40 % of a core at the 1.0–1.2 GHz the governor picks (47 % before the fixes)
  - The design mockup (`design/mockup.html`) shows the Light Bar look only
+ - Every setting's help on screen (Y About on its row), the same text as its schema's; the help texts name values by their labels
+ - Hints for L1/R1 Page and L2/R2 Letter on game lists, on a line above the hint bar; "Game menu" with the Menu button on a game's splash
+ - At start-up, a notice when the last run didn't end in order (the battery ran out, or the device stopped without powering off), from Crystaline OS's `/run/brick/last-shutdown`
  - Credits in Settings: every project shipped (cores, fonts, data, libraries) and its licence, worked out when the binary is built; the full licence texts installed beside it
  - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
  - A splash while a game starts: "Powered by" its core, the core's copyright notice and web address (from the credits), over the zooming picture until the game's first frame, for at least 1 s
@@ -138,6 +143,7 @@ Completed:
 
 TODO:
  - Interface sounds: to check on the Brick by ear (how loud they are, and that the speaker doesn't pop as their output opens and closes). With the FN switch on mute none play, as designed
+ - No Manuals gaps found in the 2026-10-19 audit, not yet decided: toasts vanish and replace each other, so an important error can't be read again (a short message history, or errors that wait for a press); the power button's tap (sleep) and hold (power menu) are explained nowhere on screen
 
 ## V1
 

@@ -3,8 +3,9 @@
 
 use serde_json::json;
 
-use super::{Scope, SettingDecl, SettingKind, Visibility};
+use super::{leak, Scope, SettingDecl, SettingKind, Visibility};
 use crate::cpu;
+use crate::library::{Autosave, CoreDecl};
 
 pub const BRIGHTNESS: &str = "display.brightness";
 /// How a game's picture fills the screen: "integer" (the largest whole multiple of its size),
@@ -92,7 +93,7 @@ pub fn settings() -> Vec<SettingDecl> {
             kind: SettingKind::Int { min: 1, max: 10, step: 1, unit: "" }, default: json!(6),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: SCALING, section: "Display", label: "Scaling",
-            help: "How a game's picture fills the screen: \"integer\" makes it the largest whole multiple of its size that fits, for the sharpest pixels; \"fit\" makes it as large as fits, keeping its shape; \"stretch\" fills the whole screen.",
+            help: "How a game's picture fills the screen. Integer: as large as fits at a whole multiple of the game's own size, for the sharpest pixels. Fit: as large as fits, keeping its shape. Stretch: the whole screen.",
             kind: SettingKind::Choice(&[("integer", "Integer"), ("fit", "Fit"), ("stretch", "Stretch")]), default: json!("integer"),
             visibility: Visibility::User, deepest: Scope::Game, core: None, system: None },
         SettingDecl { key: VOLUME, section: "Sound", label: "Speaker volume",
@@ -128,59 +129,84 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "Whether the device also rumbles with the game's loud sounds, such as explosions and drums, even in games that don't rumble.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: ACCENT, section: "Appearance", label: "Accent",
-            help: "The main accent colour, by name. It colours the glowing bar along the top of the screen, switches, gauges that aren't selected, and some of the device's lights.",
+            help: "The interface's main colour, used for the glowing bar along the top of the screen, switches, gauges that aren't selected, and some of the device's lights.",
             kind: SettingKind::Colour { same_as: None }, default: json!("teal"),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: SECOND_ACCENT, section: "Appearance", label: "Second accent",
-            help: "The second accent colour, by name, or \"same\" for the main accent colour. It marks what is selected, and colours the rest of the device's lights.",
+            help: "The colour that marks what is selected, and of the rest of the device's lights. Choosing Same as accent uses the main accent colour for both.",
             kind: SettingKind::Colour { same_as: Some(ACCENT) }, default: json!("coral"),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: TINT_BY_SYSTEM, section: "Appearance", label: "Tint by system",
             help: "Whether the glowing bar along the top of the screen, and the lights that show the main accent colour, take each system's own colour while its games are listed or one of them is played.",
             kind: SettingKind::Bool, default: json!(true), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: LIBRARY_VIEW, section: "Library", label: "Games shown as",
-            help: "How a system's games are shown: \"list\" lists them beside the selected game's picture (see \"Art\"); \"grid\" shows their pictures side by side.",
+            help: "How a system's games are shown. List: a list, with the selected game's picture beside it. Grid: their pictures side by side. The Art setting chooses which picture.",
             kind: SettingKind::Choice(&[("list", "List"), ("grid", "Grid")]), default: json!("list"),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: ART, section: "Library", label: "Art",
-            help: "What games are shown with: \"boxart\", their box art (an image of your own beside the game, with the same name, counts as box art); \"title\", their title screen; \"screenshot\", a moment of play; \"left-off\", the last thing on screen when you last quit the game. A game without that picture shows its box art, else a cover made from its name. Title screens and screenshots are downloaded like box art.",
+            help: "Which picture games are shown with. Box art: the game's box; to use a picture of your own, put a .png, .jpg or .jpeg with the game's file name next to the game. Title screen: the game's title screen. Screenshot: a moment of play. Where you left off: the screen as you last quit the game. A game without that picture shows its box art, else a cover made from its name. Box art, title screens and screenshots are downloaded while Wi-Fi is connected.",
             kind: SettingKind::Choice(&[("boxart", "Box art"), ("title", "Title screen"), ("screenshot", "Screenshot"), ("left-off", "Where you left off")]), default: json!("boxart"),
             visibility: Visibility::User, deepest: Scope::System, core: None, system: None },
         SettingDecl { key: SLEEP_AFTER, section: "Power", label: "Sleep after",
-            help: "Sleep after this many seconds without a button press: \"30\", \"60\", \"180\", \"300\" or \"600\" (in quotes), or \"never\". The device never goes to sleep by itself while a game is being played.",
+            help: "How long the device waits, with no button pressed, before it goes to sleep. It never goes to sleep by itself while a game is being played, while File transfer is open, or while a computer is connected by USB cable.",
             kind: SettingKind::Choice(&[("never", "Never"), ("30", "30 sec"), ("60", "1 min"), ("180", "3 min"), ("300", "5 min"), ("600", "10 min")]), default: json!("30"),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: CPU_MIN, section: "Power", label: "Lowest CPU speed while playing",
-            help: "The lowest speed the CPU may run at while a game plays (in menus, and while a game is paused, the system chooses). \"auto\" lets Specular choose: it starts at the speed Specular sets for the emulator (1800 MHz for SwanStation, which plays PlayStation games; the system's choice for the others), and goes a step faster each time frames come late, never slower until the game is closed. \"off\" leaves the speed to the system. A speed in MHz, in quotes, holds that minimum for the whole game: the TrimUI Brick's speeds are listed; another device takes its next speed up. A heat limit can still slow the CPU.",
+            help: "The lowest speed the processor may run at while a game plays (in the menus, and while a game is paused, the system chooses). Automatic: Specular chooses, starting at a speed set for each emulator (given at the end), and going a step faster each time the game can't keep up; it never slows down again until the game is closed. Off: the system chooses. A speed: at least that, for the whole game; the speeds listed are the TrimUI Brick's, and other devices use the nearest faster speed. The processor can still slow down if it gets too hot.",
             kind: SettingKind::Choice(&[(cpu::AUTO, "Automatic"), (cpu::OFF, "Off"), ("408", "408 MHz"), ("600", "600 MHz"), ("816", "816 MHz"),
                 ("1008", "1008 MHz"), ("1200", "1200 MHz"), ("1416", "1416 MHz"), ("1608", "1608 MHz"), ("1800", "1800 MHz"), ("2000", "2000 MHz")]),
             default: json!(cpu::AUTO), visibility: Visibility::ConfigFiles, deepest: Scope::Game, core: None, system: None },
         SettingDecl { key: AUTOSAVE, section: "Saves", label: "Autosave during play",
-            help: "When the game is saved automatically, to resume from where it was left. It always is as the game menu opens, before sleep and on quitting. \"every 10 s\" also saves every 10 seconds of play; \"at pauses\" doesn't, as making the save can make a game stutter for a frame (PlayStation games do); \"core default\" is the emulator's own choice (\"at pauses\" for SwanStation, \"every 10 s\" for the others). With \"at pauses\", a crash, a hang or a failing card loses the play since play last stopped.",
+            help: "When a game is saved automatically, so that it resumes where it was left. A game is always saved as its menu opens, before the device sleeps and when it is quit. Every 10 s: also every 10 seconds of play. At pauses: only then, as saving can make a game stutter for a moment (PlayStation games do); a crash, a hang or a failing SD card then loses the play since the game was last paused. Core default: the emulator's own choice (given at the end).",
             kind: SettingKind::Choice(&[(AUTOSAVE_CORE, "Core default"), (AUTOSAVE_EVERY_10S, "Every 10 s"), (AUTOSAVE_AT_PAUSES, "At pauses")]),
             default: json!(AUTOSAVE_CORE), visibility: Visibility::ConfigFiles, deepest: Scope::Game, core: None, system: None },
         SettingDecl { key: DEVELOPER_DETAILS, section: "System", label: "Developer details",
-            help: "Also shows, in Specular's menus, the settings and technical details meant for developers.",
+            help: "Also shows the settings and technical details meant for developers.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: WIFI, section: "Wireless", label: "Wi-Fi",
-            help: "\"on\", \"off\", or \"auto\", which turns Wi-Fi on only while something needs it (such as downloading box art).",
+            help: "Whether Wi-Fi is on. Auto turns it on only while something needs it, such as downloading box art.",
             kind: SettingKind::Choice(&[("auto", "Auto"), ("on", "On"), ("off", "Off")]), default: json!("auto"),
             visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: BLUETOOTH, section: "Wireless", label: "Bluetooth",
             help: "Whether Bluetooth is on, for headphones and speakers.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
-        SettingDecl { key: TIME_ZONE, section: "Time", label: "Set",
-            help: "\"auto\" looks the time zone up each time Wi-Fi connects (once time.zone_lookup_allowed allows it); \"manual\" keeps the zone chosen in Settings. The zone itself is kept by the system.",
+        SettingDecl { key: TIME_ZONE, section: "Time", label: "Set time zone",
+            help: "How the time zone is set. Automatically: it is looked up each time Wi-Fi connects, once Look up the time zone allows it. By hand: the zone chosen in Settings, under Time zone, stays.",
             kind: SettingKind::Choice(&[("auto", "Automatically"), ("manual", "By hand")]), default: json!("auto"),
             visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: TIME_ZONE_LOOKUP, section: "Time", label: "Look up the time zone",
-            help: "Whether the time zone may be looked up by asking ipinfo.io, which tells it the network's public address. Asked when the time zone is automatic and this isn't allowed yet.",
+            help: "Whether the time zone may be looked up on the internet, from ipinfo.io, which then sees the network's public IP address. Specular asks before the first lookup.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: WIFI_KEEP_ON, section: "Developer", label: "Keep Wi-Fi on",
-            help: "Keeps Wi-Fi on while it is set to \"auto\", so the device can still be reached over Wi-Fi (for SSH, or copying files).",
+            help: "Keeps Wi-Fi on while it is set to Auto, so the device can still be reached over Wi-Fi (for SSH, or copying files).",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: FRAME_STATS, section: "Developer", label: "Frame statistics",
             help: "Shows, over the game, its frame rate, how long the emulator spends on each frame, and how much sound is waiting to be played: for finding what causes slowdowns or crackling sound.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global, core: None, system: None },
     ]
+}
+
+/// For the settings whose default depends on the core (`CPU_MIN`'s start speed, `AUTOSAVE`'s "core
+/// default"), appends to their help what that value is for each of `cores`, naming values by their
+/// labels.
+pub fn describe_cores(decls: &mut [SettingDecl], cores: &[&CoreDecl]) {
+    for d in decls {
+        let SettingKind::Choice(options) = d.kind else { continue };
+        let label = |value: &str| options.iter().find(|(v, _)| *v == value).map_or(value.to_string(), |(_, l)| l.to_string());
+        let (value, verb, each) = match d.key {
+            CPU_MIN => (cpu::AUTO, "starts at", by_core(cores, |c| c.cpu_start.map(|mhz| format!("{mhz} MHz")), "the speed the system chooses")),
+            AUTOSAVE => (AUTOSAVE_CORE, "is", by_core(cores, |c| match c.autosave { Autosave::AtPauses => Some(label(AUTOSAVE_AT_PAUSES)), Autosave::Every10s => None },
+                &label(AUTOSAVE_EVERY_10S))),
+            _ => continue,
+        };
+        d.help = leak(format!("{} {} {verb} {each}.", d.help, label(value)));
+    }
+}
+
+/// Text such as "A for SwanStation; B for the others": the value `special` returns for each core it
+/// returns one for, then `usual` for the rest.
+fn by_core(cores: &[&CoreDecl], special: impl Fn(&CoreDecl) -> Option<String>, usual: &str) -> String {
+    let mut each: Vec<String> = cores.iter().filter_map(|c| special(c).map(|v| format!("{v} for {}", c.name))).collect();
+    if each.len() < cores.len() { each.push(format!("{usual} for {}", if each.is_empty() { "all" } else { "the others" })); }
+    each.join("; ")
 }

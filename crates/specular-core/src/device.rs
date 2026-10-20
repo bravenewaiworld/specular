@@ -62,6 +62,34 @@ pub trait Power: Send {
     fn shutdown(&self) -> io::Result<()>;
     /// Restarts the device. As with `shutdown`, Specular may be stopped before this returns.
     fn restart(&self) -> io::Result<()>;
+    /// How the device's last run ended, if not cleanly (by an orderly power-off or restart): the
+    /// reason word its system recorded (see `LastShutdown::parse`). The record is deleted after
+    /// reading, so it is reported once, even if Specular starts again. Called once, at start-up;
+    /// a device that keeps no record returns None.
+    fn last_shutdown(&self) -> io::Result<Option<String>> { Ok(None) }
+}
+
+/// How the device's last run ended, when not cleanly (by an orderly power-off or restart).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastShutdown {
+    /// The battery ran out: the system turned the device off (cleanly, saving the game).
+    BatteryEmpty,
+    /// It stopped without powering off cleanly: the power button held down, a crash, the power
+    /// cut, or the system's SD card taken out.
+    Unexpected,
+}
+
+impl LastShutdown {
+    /// The system's word for it (`battery-empty`, `unexpected`); None for a word Specular doesn't
+    /// know (a newer system's), which Crystaline OS's contract (its docs/system-image.md, How the
+    /// last run ended) says to treat as `Unexpected`.
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.trim() {
+            "battery-empty" => Some(Self::BatteryEmpty),
+            "unexpected" => Some(Self::Unexpected),
+            _ => None,
+        }
+    }
 }
 
 /// The screen's backlight and panel.
@@ -274,7 +302,8 @@ pub trait Device {
 /// battery drains by 1 % a minute from 80 % (or $SPECULAR_BATTERY %) down to 5 %, it has no
 /// headphone jack (a desktop key simulates one, see `specular_ui::run`), and its radios follow a
 /// scenario (`wireless::scenario`): the file named by $SPECULAR_SCENARIO, `{"wifi": <script>,
-/// "bluetooth": <script>}`, else a built-in one with a few networks and devices. File transfer and
+/// "bluetooth": <script>}`, else a built-in one with a few networks and devices. Its last run ended
+/// as $SPECULAR_LAST_SHUTDOWN says (`Power::last_shutdown`; cleanly if unset). File transfer and
 /// SSH are pretend (see `SimTransfer`, `SimSsh`). Its time zone is `timezone::Simulated`. A
 /// scenario with a `"card"` script also plays the SD card's states (its events are
 /// `card::Card`s); without one, the card is always mounted. Its CPU has the Brick's speed steps.
@@ -297,6 +326,8 @@ pub mod simulated {
         fn sleep(&self) -> io::Result<()> { eprintln!("simulated: sleep"); std::thread::sleep(Duration::from_millis(500)); Ok(()) }
         fn shutdown(&self) -> io::Result<()> { eprintln!("simulated: shut down"); Ok(()) }
         fn restart(&self) -> io::Result<()> { eprintln!("simulated: restart"); Ok(()) }
+        /// $SPECULAR_LAST_SHUTDOWN, as if the system had recorded it.
+        fn last_shutdown(&self) -> io::Result<Option<String>> { Ok(std::env::var("SPECULAR_LAST_SHUTDOWN").ok()) }
     }
     impl Display for Sim {
         fn set_brightness(&self, level: u8) -> io::Result<()> { eprintln!("simulated: brightness {level}"); Ok(()) }

@@ -16,6 +16,9 @@ Specular is a retro-gaming frontend: a launcher plus a libretro emulation runtim
 4. Full Control.
    All possible settings not in the UI, are available through documented config files.
 
+5. No Manuals.
+   All features, errors, configurations, menus, etc. that the user is exposed to or needs to make a decision or act on are either very obvious, or are explained directly in the UI where they are presented (or in an adjacent file, e.g. a schema file for file-based interfaces such as configs and cores).
+
 ## Installing on your device
 
 ### Supported Devices

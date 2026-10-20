@@ -195,16 +195,19 @@ impl App {
     }
 }
 
-/// Settings' Updates and Internal storage sections, from the last offer. Why something isn't
-/// offered is shown only with developer details on.
+/// Settings' Updates and Internal storage sections, from the last offer. Why installing isn't
+/// offered is said plainly; the installer's own words, and why a restore can't be prepared, only
+/// with developer details on.
 pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
     let Some(state) = &ctx.install else { return vec![] };
     let developer = ctx.visibility() == Visibility::Developer;
     let (mut updates, mut storage) = (vec![], vec![]);
     match &state.offer {
         Some(Ok(o)) => {
-            if let Some(v) = &o.version { updates.push(Row::new("install:version", "Version", RowKind::Note { detail: Some(v.clone()) })); }
+            if let Some(v) = &o.version { updates.push(Row::new("install:version", "Version", RowKind::Note { detail: Some(version(ctx, v)) })); }
             if !o.updates.is_empty() { updates.push(action("install:update", "Install update")); }
+            // No version reported: the installer can't take updates, so how isn't said.
+            else if o.version.is_some() { updates.push(Row::note("install:how", "To update, copy a .update file into updates/ on the SD card.")); }
             if o.previous.is_some() { updates.push(action("install:previous", "Start previous version")); }
 
             match o.internal {
@@ -213,12 +216,19 @@ pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
                 _ => {}
             }
             if o.restore_pending.is_some() { storage.push(action("install:pending", "Continue the prepared restore")); }
-            if o.install.is_some() { storage.push(action("install:open", "Install to internal storage")); }
-            if !o.backups.is_empty() && !matches!(o.restore, Some(Err(_))) { storage.push(action("install:restore", "Restore internal storage")); }
-            if developer {
-                if let (None, Some(why)) = (&o.install, &o.why_not) { storage.push(Row::note("install:why", format!("Install: {why}"))); }
-                if let Some(Err(why)) = &o.restore { storage.push(Row::note("install:why-restore", format!("Restore: {why}"))); }
+            if o.install.is_some() {
+                storage.push(action("install:open", "Install to internal storage"));
+                storage.push(Row::note("install:what", "Copies the system onto the device, so it starts from its internal storage. Games and saves stay on the SD card."));
             }
+            if !o.backups.is_empty() && !matches!(o.restore, Some(Err(_))) { storage.push(action("install:restore", "Restore internal storage")); }
+            if let (None, Some(why)) = (&o.install, &o.why_not) {
+                // Only the installed system reports `restore` (see `confirmed_task`).
+                let plain = if o.restore.is_some() { "The system is installed: the device starts from its internal storage." }
+                            else { "Installing to internal storage isn't possible on this device." };
+                storage.push(Row::note("install:why", plain));
+                if developer { storage.push(Row::note("install:why-detail", format!("Install: {why}"))); }
+            }
+            if developer && let Some(Err(why)) = &o.restore { storage.push(Row::note("install:why-restore", format!("Restore: {why}"))); }
         }
         Some(Err(e)) if developer => storage.push(Row::note("install:why", format!("Installer: {e}"))),
         _ => {}
@@ -375,7 +385,7 @@ struct ConfirmScreen;
 impl Screen for ConfirmScreen {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let o = offer(ctx);
-        let running = o.and_then(|o| o.version.as_ref()).map_or("the version running now".into(), |v| format!("version {v}"));
+        let running = o.and_then(|o| o.version.as_ref()).map_or("the version running now".into(), |v| format!("version {}", version(ctx, v)));
         let created = |dir: &str| o.and_then(|o| o.backups.iter().find(|b| b.dir == dir)).map_or(String::new(), |b| when(&b.created));
         let (title, notes, go) = match state.params.as_deref().and_then(|p| confirmed_task(ctx, p)) {
             Some(Task::Restore { dir }) => ("Restore the internal storage?",
@@ -384,13 +394,13 @@ impl Screen for ConfirmScreen {
                 vec![format!("The SD card is made to start the device, to restore the backup from {}. After a restart it asks before replacing everything on the internal storage.", created(&dir))], Some("Restore")),
             Some(Task::Update { file }) => {
                 let update = o.and_then(|o| o.updates.iter().find(|u| u.file == file));
-                let version = update.and_then(|u| u.version.clone()).unwrap_or_else(|| file_name(&file).into());
-                let mut notes = vec![format!("Version {version} starts at the next restart; {running} stays installed, to go back to.")];
+                let new = update.and_then(|u| u.version.as_deref()).map_or_else(|| file_name(&file).into(), |v| version(ctx, v));
+                let mut notes = vec![format!("Version {new} starts at the next restart; {running} stays installed, to go back to.")];
                 if update.is_some_and(|u| u.older) { notes.push(format!("This update is older than {running}.")); }
                 ("Install update?", notes, Some("Install"))
             }
-            Some(Task::Activate { version }) => ("Start the previous version?",
-                vec![format!("Version {version} starts at the next restart; {running} stays installed, to switch back to.")], Some("Switch")),
+            Some(Task::Activate { version: v }) => ("Start the previous version?",
+                vec![format!("Version {} starts at the next restart; {running} stays installed, to switch back to.", version(ctx, &v))], Some("Switch")),
             _ => ("", vec![], None),
         };
         let mut rows: Vec<Row> = notes.into_iter().enumerate().map(|(i, n)| Row::note(format!("note:{i}"), n)).collect();
@@ -489,8 +499,15 @@ impl Screen for TaskScreen {
     fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
 }
 
-/// "2026-10-14 23:24 UTC" from "20261014-232447" (the device's clock knows no time zone).
+/// "2026-10-14 23:24 UTC" from "20261014-232447" (the device's clock knows no time zone); other
+/// text is returned unchanged.
 fn when(created: &str) -> String {
-    if created.len() < 13 || !created.is_ascii() { return created.into(); }
+    let b = created.as_bytes();
+    let stamp = b.len() >= 13 && b[8] == b'-' && b[..8].iter().chain(&b[9..13]).all(u8::is_ascii_digit);
+    if !stamp { return created.into(); }
     format!("{}-{}-{} {}:{} UTC", &created[0..4], &created[4..6], &created[6..8], &created[9..11], &created[11..13])
 }
+
+/// A system version ("20261018-212347-b3a6d97": its build time and commit) for the user: when it
+/// was built; whole with developer details on.
+fn version(ctx: &Ctx, v: &str) -> String { if ctx.visibility() == Visibility::Developer { v.into() } else { when(v) } }

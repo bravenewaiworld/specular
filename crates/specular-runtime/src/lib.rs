@@ -207,6 +207,28 @@ pub fn joypad_bit(b: Button) -> Option<u16> {
     Some(1 << id)
 }
 
+/// Why `Session::start` failed: what failed, with words for the log (paths, the core's own),
+/// except `Unzip`'s, which are for the player.
+#[derive(Debug, PartialEq)]
+pub enum StartError {
+    /// The core's library couldn't be loaded, or isn't a libretro core this runtime can use.
+    Core(String),
+    /// The game's zip couldn't be unzipped: why, for the player ("the zip is damaged"); the
+    /// details are logged.
+    Unzip(String),
+    /// The game's file couldn't be read, or the core refused it.
+    Game(String),
+    /// Anything else (another game is running, a thread didn't start).
+    Other(String),
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let (StartError::Core(s) | StartError::Unzip(s) | StartError::Game(s) | StartError::Other(s)) = self;
+        f.write_str(s)
+    }
+}
+
 /// Whether a game is running (see `Session::start`).
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -249,8 +271,8 @@ pub struct Session {
 impl Session {
     /// Loads the core and the game, on the game's own thread, and starts it running.
     /// Fails if another game is running (see the module's documentation).
-    pub fn start(spec: LaunchSpec, out: Outputs) -> Result<Session, String> {
-        if RUNNING.swap(true, Relaxed) { return Err("another game is running".into()); }
+    pub fn start(spec: LaunchSpec, out: Outputs) -> Result<Session, StartError> {
+        if RUNNING.swap(true, Relaxed) { return Err(StartError::Other("another game is running".into())); }
         let running = Running;
         let (cmds, rx) = mpsc::channel();
         let (started, ready) = mpsc::channel();
@@ -258,11 +280,11 @@ impl Session {
         let (b, r) = (buttons.clone(), runs.clone());
         let thread = std::thread::Builder::new().name("game".into())
             .spawn(move || { let _running = running; game_thread(spec, out, b, r, rx, started) })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| StartError::Other(e.to_string()))?;
         match ready.recv() {
             Ok(Ok(info)) => Ok(Session { cmds, buttons, thread: Some(thread), info, runs }),
             Ok(Err(e)) => { let _ = thread.join(); Err(e) }
-            Err(_) => { let _ = thread.join(); Err("the game's thread stopped while loading".into()) }
+            Err(_) => { let _ = thread.join(); Err(StartError::Other("the game's thread stopped while loading".into())) }
         }
     }
 
@@ -414,7 +436,7 @@ impl Pacer {
 }
 
 fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
-               started: mpsc::Sender<Result<GameInfo, String>>) {
+               started: mpsc::Sender<Result<GameInfo, StartError>>) {
     let report = |r: io::Result<()>, path: &Path| if let Err(e) = r { eprintln!("game: launch record {}: {e}", path.display()); };
     if let Some((path, r)) = &spec.record { report(r.write(path), path); }
     play(&spec, out, buttons, runs, cmds, started);
@@ -425,7 +447,7 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
 
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
 fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
-        started: mpsc::Sender<Result<GameInfo, String>>) {
+        started: mpsc::Sender<Result<GameInfo, StartError>>) {
     let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble, out.write_failed) {
         Ok(g) => g,
         Err(e) => { let _ = started.send(Err(e)); return; }
@@ -545,21 +567,21 @@ struct Game {
 
 impl Game {
     fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>, rumble: Option<RumbleLine>,
-            write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, String> {
-        let core = Core::load(&spec.core)?;
+            write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, StartError> {
+        let core = Core::load(&spec.core).map_err(StartError::Core)?;
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
         unsafe { (core.get_system_info)(&mut info) };
         let name = info.name();
         log::start(name.clone());
-        let unzipped = unzip::if_needed(&spec.rom, &info)?;
+        let unzipped = unzip::if_needed(&spec.rom, &info).map_err(StartError::Unzip)?;
         let rom_file = unzipped.as_ref().map_or(spec.rom.as_path(), |u| &u.path);
-        let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string());
+        let cstring = |p: &Path| CString::new(p.as_os_str().as_encoded_bytes()).map_err(|e| StartError::Other(e.to_string()));
         let (system_dir, save_dir, rom_path) = (cstring(&spec.system_dir)?, cstring(spec.save.parent().unwrap_or(Path::new(".")))?, cstring(rom_file)?);
         // A core that reads the file itself (as it says, or as the spec says) gets only its path;
         // others get its contents too.
         let rom = if info.need_fullpath || spec.rom_by_path { None } else {
-            Some(MappedFile::open(rom_file).map_err(|e| format!("reading {}: {e}", spec.rom.display()))?)
+            Some(MappedFile::open(rom_file).map_err(|e| StartError::Game(format!("reading {}: {e}", spec.rom.display())))?)
         };
         let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());
         frontend::install(Some(Frontend {
@@ -579,7 +601,7 @@ impl Game {
         if !unsafe { (core.load_game)(&game) } {
             unsafe { (core.deinit)() };
             frontend::install(None);
-            return Err(format!("the core could not load {}", spec.rom.display()));
+            return Err(StartError::Game(format!("the core could not load {}", spec.rom.display())));
         }
         // After the game is loaded, as RetroArch does (SwanStation applies it at its next frame;
         // docs/runtime.md, Findings).
@@ -590,7 +612,7 @@ impl Game {
         log_options(&name, spec);
         let mut av = core::AvInfo::default();
         unsafe { (core.get_system_av_info)(&mut av) };
-        let writer = Writer::new(write_failed).map_err(|e| format!("starting the save writer: {e}"))?;
+        let writer = Writer::new(write_failed).map_err(|e| StartError::Other(format!("starting the save writer: {e}")))?;
         let mut g = Game { core, name, av, save: spec.save.clone(), saved: Vec::new(), save_pending: false,
                            states_restore_save: spec.states_restore_save, loaded_state: None,
                            autosave: spec.autosave.clone(), writer, _rom: (rom_path, unzipped) };

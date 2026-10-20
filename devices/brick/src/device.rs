@@ -96,7 +96,23 @@ impl Power for BrickPower {
     fn shutdown(&self) -> io::Result<()> { run("/sbin/poweroff", &[]) }
 
     fn restart(&self) -> io::Result<()> { run("/sbin/reboot", &[]) }
+
+    /// Crystaline OS writes this file at boot under /run (in memory, so it is gone after the next
+    /// restart), and leaves deleting it to Specular: Crystaline OS's docs/system-image.md, How the last run
+    /// ended.
+    fn last_shutdown(&self) -> io::Result<Option<String>> {
+        let text = match std::fs::read_to_string(LAST_SHUTDOWN) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            read => read?,
+        };
+        // Told anyway if it can't be removed; a restarted Specular then tells it again.
+        if let Err(e) = std::fs::remove_file(LAST_SHUTDOWN) { eprintln!("power: can't remove {LAST_SHUTDOWN}: {e}"); }
+        Ok(Some(text))
+    }
 }
+
+/// How the last run ended, when not cleanly: one word and a newline.
+const LAST_SHUTDOWN: &str = "/run/brick/last-shutdown";
 
 fn run(program: &str, args: &[&str]) -> io::Result<()> {
     let status = std::process::Command::new(program).args(args).status()?;

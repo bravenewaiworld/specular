@@ -1,6 +1,7 @@
 //! The settings of one game, and of all of one system's games: the settings that may be set that
 //! specifically (with "Developer details", the system's core's options too), each marked when it
-//! overrides a less specific layer. X resets a marked one, so it inherits again.
+//! overrides a less specific layer. X resets a marked one, so it inherits again; Y shows a
+//! setting's help.
 
 use std::collections::HashMap;
 
@@ -35,7 +36,8 @@ impl Screen for GameSettings {
         };
         let all = [Row::new("header:system", system.name, RowKind::Header),
                    Row::new("open:system", format!("All {} games…", system.name), RowKind::Action { value: None })];
-        ScreenView::list(game.title.clone(), rows(ctx, &game.settings_layer(), system, all.into()))
+        let scope = format!("Changes here apply only to {}. A dot marks each one; X puts it back to what all {} games use.", game.title, system.name);
+        ScreenView::list(game.title.clone(), rows(ctx, &game.settings_layer(), system, scope, all.into()))
     }
 
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
@@ -58,7 +60,8 @@ impl SystemSettings {
 impl Screen for SystemSettings {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let Some(system) = Self::system(ctx, state) else { return ScreenView::list("Settings", vec![]) };
-        ScreenView::list(format!("All {} games", system.name), rows(ctx, &Layer::System(system.id.into()), system, vec![]))
+        let scope = format!("Changes here apply to every {} game, unless its own settings differ. A dot marks each one; X puts it back to what Settings says.", system.name);
+        ScreenView::list(format!("All {} games", system.name), rows(ctx, &Layer::System(system.id.into()), system, scope, vec![]))
     }
 
     fn press(&self, ctx: &mut Ctx, state: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome {
@@ -66,22 +69,24 @@ impl Screen for SystemSettings {
     }
 }
 
-/// The rows of `at`'s settings: Specular's, then `between`, then the options of the core that
-/// plays `system`'s games there (developer settings, so only with "Developer details"). A row
-/// that overrides has a hint for resetting it.
-fn rows(ctx: &Ctx, at: &Layer, system: &SystemDecl, between: Vec<Row>) -> Vec<Row> {
+/// The rows of `at`'s settings: a note saying what `scope` they have, Specular's, then `between`,
+/// then the options of the core that plays `system`'s games there (developer settings, so only
+/// with "Developer details"). A row that overrides has a hint for resetting it.
+fn rows(ctx: &Ctx, at: &Layer, system: &SystemDecl, scope: String, between: Vec<Row>) -> Vec<Row> {
     let show = ctx.visibility();
     let core = crate::settings::core_of(&ctx.settings, system, at).map(|c| ctx.settings.rows(at, show, Some(c.id()))).unwrap_or_default();
-    let mut rows: Vec<Row> = ctx.settings.rows(at, show, None).into_iter().chain(between).chain(core).collect();
-    for r in rows.iter_mut().filter(|r| r.overridden) { r.hint = Some((Button::X, "Reset".into())); }
+    let mut rows: Vec<Row> = std::iter::once(Row::note("note:scope", scope)).chain(ctx.settings.rows(at, show, None)).chain(between).chain(core).collect();
+    for r in rows.iter_mut().filter(|r| r.overridden) { r.hints.push((Button::X, "Reset".into())); }
+    super::setting_hints(ctx, &mut rows);
     rows
 }
 
 /// A press on a screen of `at`'s settings (None: its game or system is gone): B goes back; on a
-/// setting's row A, left and right change it, and X resets it if it overrides.
+/// setting's row A, left and right change it, X resets it if it overrides, and Y shows its help.
 fn press(ctx: &mut Ctx, at: Option<Layer>, focused: Option<&Row>, p: Press) -> Outcome {
     if p.button == Button::B { return Outcome::Back; }
     let (Some(at), Some(row)) = (at, focused) else { return Outcome::None };
+    if let Some(about) = super::about::press(ctx, row, p) { return about; }
     let key = match p.button {
         Button::X if row.overridden && !p.repeat => ctx.settings.reset(&row.id.0, &at),
         _ => ctx.settings.press(&row.id.0, &at, p).map(|(key, _)| key),

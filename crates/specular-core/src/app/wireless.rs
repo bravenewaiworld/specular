@@ -330,7 +330,7 @@ fn network_detail(n: &Network, link: &WifiLink) -> String {
         }.into(),
         _ => {}
     }
-    if !n.supported { return "Not supported".into(); }
+    if !n.supported { return "Security not supported".into(); }
     match (n.saved, n.in_range) {
         (true, false) => "Saved · out of range",
         (true, true) => "Saved",
@@ -351,8 +351,9 @@ impl Screen for WifiScreen {
         let mode = wifi_mode(ctx);
         let address = |id: String, label: &str, address: &str| Row::new(id, label, RowKind::Note { detail: Some(address.into()) });
         let wifi = ctx.wifi.as_ref().filter(|_| mode != "off");
-        if mode == "auto" && wifi.is_some() { rows.push(Row::note("note:auto", "On only while needed")); }
-        if let Some(WifiLink::Connected { address: a, .. }) = wifi.map(|w| &w.link) { rows.push(address("address".into(), "Address", a)); }
+        // What needs it: `WifiNeed`, and the screens `App::wifi_needed` counts.
+        if mode == "auto" && wifi.is_some() { rows.push(Row::note("note:auto", "On only while needed: on this screen, for File transfer, and to download box art.")); }
+        if let Some(WifiLink::Connected { address: a, .. }) = wifi.map(|w| &w.link) { rows.push(address("address".into(), "Address for File transfer", a)); }
         if ctx.visibility() == Visibility::Developer && let Some(w) = &ctx.wifi {
             rows.extend(w.interfaces.iter().map(|i| address(format!("address:{}:{}", i.name, i.address), &i.name, &i.address)));
         }
@@ -367,12 +368,14 @@ impl Screen for WifiScreen {
             let mut networks: Vec<&Network> = w.networks.iter().collect();
             networks.sort_by_key(|n| (Some(&n.ssid) != current, !n.in_range, std::cmp::Reverse(n.bars), n.ssid.to_lowercase()));
             rows.extend(networks.iter().map(|n| {
-                Row::new(format!("net:{}", n.ssid), &n.ssid, RowKind::Text { detail: Some(network_detail(n, &w.link)) }).icon(network_icon(n, &w.link))
+                let mut row = Row::new(format!("net:{}", n.ssid), &n.ssid, RowKind::Text { detail: Some(network_detail(n, &w.link)) }).icon(network_icon(n, &w.link));
+                if n.saved { row.hints.push((Button::X, "Forget".into())); }
+                row
             }));
         }
         ScreenView {
             title: "Wi-Fi".into(), layout: Layout::List, rows,
-            hints: vec![(Button::Y, "Search".into()), (Button::X, "Forget".into()), (Button::B, "Back".into()), (Button::A, "Join".into())],
+            hints: vec![(Button::Y, "Search".into()), (Button::B, "Back".into()), (Button::A, "Join".into())],
             entry: None,
         }
     }
@@ -428,7 +431,7 @@ fn device_detail(d: &BtDevice, busy: Option<&BtCmd>) -> String {
         _ => {}
     }
     if d.paired {
-        return match (d.connected, d.audio) { (true, true) => "Connected · sound", (true, false) => "Connected", _ => "Not connected" }.into();
+        return match (d.connected, d.audio) { (true, true) => "Connected · sound plays here", (true, false) => "Connected", _ => "Not connected" }.into();
     }
     String::new()
 }
@@ -438,9 +441,13 @@ impl Screen for BluetoothScreen {
         let mut rows: Vec<Row> = ctx.settings.row(builtin::BLUETOOTH, &Layer::Global).into_iter().collect();
         if let Some(b) = ctx.bluetooth.as_ref().filter(|_| bluetooth_on(ctx)) {
             let row = |d: &BtDevice| {
-                Row::new(format!("dev:{}", d.address.0), &d.name, RowKind::Text { detail: Some(device_detail(d, b.busy.as_ref())) })
-                    .icon(Icon::Bluetooth { kind: d.kind, lit: d.connected })
+                let mut row = Row::new(format!("dev:{}", d.address.0), &d.name, RowKind::Text { detail: Some(device_detail(d, b.busy.as_ref())) })
+                    .icon(Icon::Bluetooth { kind: d.kind, lit: d.connected });
+                if d.paired { row.hints.push((Button::X, "Forget".into())); }
+                row
             };
+            // Only sound goes over Bluetooth (see `reconcile_radios`).
+            rows.push(Row::note("note:what", "For headphones and speakers. To add one, put it in pairing mode: it shows under Other devices."));
             if !b.powered {
                 rows.push(Row::note("note:starting", "Starting…"));
             } else {
@@ -456,7 +463,7 @@ impl Screen for BluetoothScreen {
         }
         ScreenView {
             title: "Bluetooth".into(), layout: Layout::List, rows,
-            hints: vec![(Button::X, "Forget".into()), (Button::B, "Back".into()), (Button::A, "Select".into())],
+            hints: vec![(Button::B, "Back".into()), (Button::A, "Select".into())],
             entry: None,
         }
     }
@@ -508,10 +515,15 @@ struct ForgetScreen;
 
 impl Screen for ForgetScreen {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
-        let name = state.params.as_deref().and_then(Forget::parse).map_or_else(String::new, |f| f.name(ctx));
+        let forget = state.params.as_deref().and_then(Forget::parse);
+        let name = forget.as_ref().map_or_else(String::new, |f| f.name(ctx));
+        let what = match forget {
+            Some(Forget::Wifi(_)) => "Its saved password is deleted, and the device stops joining it by itself.",
+            _ => "It is unpaired: to use it again, put it in pairing mode and pair it again.",
+        };
         ScreenView {
             title: format!("Forget {name}?"), layout: Layout::List,
-            rows: vec![action("cancel", "Cancel"), action("forget", "Forget")],
+            rows: vec![Row::note("note:what", what), action("cancel", "Cancel"), action("forget", "Forget")],
             hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())],
             entry: None,
         }

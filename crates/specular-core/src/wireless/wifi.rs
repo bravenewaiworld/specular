@@ -96,11 +96,12 @@ impl WifiError {
         match self {
             WifiError::NotAvailable { .. } => "Wi-Fi didn't start".into(),
             WifiError::WrongPassword { ssid } => format!("Wrong password for {ssid}"),
-            WifiError::NoAddress { ssid } => format!("{ssid} didn't give an address"),
+            WifiError::NoAddress { ssid } => format!("{ssid} didn't let the device on. Try again, or restart the router."),
             WifiError::OutOfRange { ssid } => format!("{ssid} is out of range"),
             WifiError::BadPassword { .. } => "A Wi-Fi password has 8 to 63 characters".into(),
-            WifiError::Unsupported { ssid, .. } => format!("{ssid} uses security this device doesn't support"),
-            WifiError::Service { step, .. } => format!("Wi-Fi: {step} failed"),
+            WifiError::Unsupported { ssid, .. } => format!("{ssid} can't be joined: only open networks and WPA or WPA2 passwords work here, not WPA3, WEP or work logins"),
+            // (The step and detail are in the trace.)
+            WifiError::Service { .. } => "Wi-Fi had a problem. Try again, or turn Wi-Fi off and on.".into(),
         }
     }
 }

@@ -44,9 +44,9 @@ impl Screen for CoresScreen {
     }
 }
 
-/// `why` with its first letter in capitals: it is written to follow "not using <file>: " in the
-/// log, and here stands as a sentence of its own.
-fn sentence(why: &str) -> String {
+/// `why` with its first letter in capitals: reasons are written to follow a colon in the log
+/// ("not using <file>: …"), and on screen stand as sentences of their own.
+pub(super) fn sentence(why: &str) -> String {
     let mut chars = why.chars();
     chars.next().map_or(String::new(), |c| c.to_uppercase().chain(chars).collect())
 }

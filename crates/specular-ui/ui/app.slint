@@ -54,8 +54,9 @@ export struct RowData {
 
 export struct Hint { button: string, label: string }
 
-// What the splash says about the core running a game that is starting ("" for what isn't known).
-export struct SplashText { core: string, copyright: string, url: string }
+// What the splash says about the core running a game that is starting ("" for what isn't known),
+// and the hint for the button that opens the game's menu.
+export struct SplashText { core: string, copyright: string, url: string, menu: Hint }
 
 // The focus plate: sharp top corners, rounded bottom ones (like the device's case), a chamfer
 // highlight along the top and the focus colour along its left edge.
@@ -93,6 +94,19 @@ component LetterPlate inherits RaisedPlate {
     }
 }
 
+// A button's badge and what it does.
+component HintView inherits HorizontalLayout {
+    in property <Hint> hint;
+    spacing: 12px * Theme.u;
+    Rectangle {
+        width: max(40px * Theme.u, label.preferred-width + 16px * Theme.u); height: 40px * Theme.u;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.height / 2; background: Theme.raised;
+        label := Text { text: hint.button; font-size: 22px * Theme.u; font-weight: 600; color: Theme.fg; }
+    }
+    Text { text: hint.label; vertical-alignment: center; font-size: Theme.caption; font-weight: 500; color: Theme.dim; }
+}
+
 // The splash while a game starts: what powers it, on a raised plate. Lines too long for `widest`
 // are cut short.
 component SplashPlate inherits RaisedPlate {
@@ -105,6 +119,11 @@ component SplashPlate inherits RaisedPlate {
         Text { text: "Powered by " + text.core; horizontal-alignment: center; overflow: elide; font-size: Theme.secondary; font-weight: 500; color: Theme.fg; }
         if text.copyright != "" : Text { text: text.copyright; horizontal-alignment: center; overflow: elide; font-size: Theme.caption; color: Theme.dim; }
         if text.url != "" : Text { text: text.url; horizontal-alignment: center; overflow: elide; font-family: Theme.mono; font-size: Theme.caption; color: Theme.dim; }
+        // What opens the game's menu, once it plays (hidden on a device with no Menu button).
+        if text.menu.button != "" : HorizontalLayout {
+            alignment: center; padding-top: 10px * Theme.u;
+            HintView { hint: text.menu; }
+        }
     }
 }
 
@@ -316,16 +335,7 @@ component HintBar inherits Rectangle {
     height: Theme.hint-bar;
     HorizontalLayout {
         alignment: end; padding-right: Theme.gutter; spacing: 34px * Theme.u;
-        for h in hints : HorizontalLayout {
-            spacing: 12px * Theme.u;
-            Rectangle {
-                width: max(40px * Theme.u, label.preferred-width + 16px * Theme.u); height: 40px * Theme.u;
-                y: (parent.height - self.height) / 2;
-                border-radius: self.height / 2; background: Theme.raised;
-                label := Text { text: h.button; font-size: 22px * Theme.u; font-weight: 600; color: Theme.fg; }
-            }
-            Text { text: h.label; vertical-alignment: center; font-size: Theme.caption; font-weight: 500; color: Theme.dim; }
-        }
+        for h in hints : HintView { hint: h; }
     }
 }
 
@@ -360,6 +370,9 @@ export component AppWindow inherits Window {
     in property <string> entry-after;
     in property <float> entry-height;
     in property <[Hint]> hints;
+    // Hints for the buttons that move the focus, on a line above the bar (none: no line).
+    in property <[Hint]> move-hints;
+    property <length> hints-height: Theme.hint-bar + (root.move-hints.length > 0 ? Theme.hint-line : 0);
     in property <string> clock;
     in property <[IconData]> status-icons;
     // A game being played: its newest frame, how it is scaled ("integer", "fit" or "stretch"),
@@ -497,7 +510,7 @@ export component AppWindow inherits Window {
     content := Rectangle {
         visible: root.screens-shown;
         width: root.game-menu ? root.width * 0.46 : root.width;
-        y: Theme.status-bar; height: root.height - Theme.status-bar - Theme.hint-bar;
+        y: Theme.status-bar; height: root.height - Theme.status-bar - root.hints-height;
         x: root.shift * root.arriving * 1px * Theme.u;
         opacity: 1 - root.arriving;
         Text {
@@ -561,8 +574,12 @@ export component AppWindow inherits Window {
     }
 
     HintBar { visible: root.screens-shown; y: root.height - Theme.hint-bar; width: root.width; hints: root.hints; cache-rendering-hint: true; }
+    if root.move-hints.length > 0 : HintBar {
+        visible: root.screens-shown; y: root.height - root.hints-height; height: Theme.hint-line; width: root.width;
+        hints: root.move-hints; cache-rendering-hint: true;
+    }
     if root.ui-stats != "" : Text {
-        x: root.width - self.width - 16px * Theme.u; y: root.height - Theme.hint-bar - self.height - 8px * Theme.u;
+        x: root.width - self.width - 16px * Theme.u; y: root.height - root.hints-height - self.height - 8px * Theme.u;
         text: root.ui-stats; font-family: Theme.mono; font-size: Theme.caption; color: Theme.accent;
     }
 
@@ -590,7 +607,7 @@ export component AppWindow inherits Window {
     // The toast: a short message above the hint bar. A long one wraps to stay within the gutters.
     property <length> toast-pad: 32px * Theme.u;
     Rectangle {
-        y: root.height - Theme.hint-bar - self.height - 24px * Theme.u;
+        y: root.height - root.hints-height - self.height - 24px * Theme.u;
         width: min(toast-text.preferred-width + 2 * root.toast-pad, root.width - 2 * Theme.gutter);
         height: max(64px * Theme.u, toast-text.preferred-height + 2 * 16px * Theme.u);
         border-radius: 32px * Theme.u; background: Theme.raised;

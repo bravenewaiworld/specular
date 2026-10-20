@@ -126,20 +126,36 @@ fn decl(core: &'static CoreDecl, list: &'static CoreOptions, o: &'static CoreOpt
     let section = category.map_or(core.name, |c| leak(format!("{}: {}", core.name, c.label)));
     let ours = core.default_of(&o.key);
     let choices: Vec<(&'static str, &'static str)> = o.values.iter().map(|v| (v.value.as_str(), v.label.as_deref().unwrap_or(&v.value))).collect();
-    // The schema lists the values but not their labels, nor the core's default if it isn't
-    // Specular's, so the help says them.
-    let mut help = o.info.clone().unwrap_or_else(|| format!("{}.", o.label));
-    if o.values.iter().any(|v| v.label.is_some()) {
-        let each: Vec<String> = o.values.iter().map(|v| match &v.label { Some(l) => format!("\"{}\" ({l})", v.value), None => format!("\"{}\"", v.value) }).collect();
-        help += &format!(" Values: {}.", each.join(", "));
+    // Sentences, any of which may be missing (a core needn't say what an option does).
+    let mut help: Vec<String> = o.info.as_deref().map(for_specular).into_iter().collect();
+    // Specular can change options during a game, but the core reads these only as a game starts.
+    if o.label.contains("(Restart)") { help.push("Takes effect when the game next starts.".into()); }
+    if let Some(c) = category && let Some(info) = &c.info { help.push(format!("{}: {}", c.label, for_specular(info))); }
+    // The default shown is Specular's, so the help says the core's own.
+    if ours.is_some_and(|v| v != o.default) {
+        let own = choices.iter().find(|(v, _)| *v == o.default).map_or(o.default.as_str(), |(_, label)| label);
+        help.push(format!("This default is Specular's; {}'s own is {own}.", core.name));
     }
-    if ours.is_some_and(|v| v != o.default) { help += &format!(" Specular's default; {}'s own is \"{}\".", core.name, o.default); }
     SettingDecl {
-        key: &o.key, section, label: &o.label, help: leak(help),
+        key: &o.key, section, label: &o.label, help: leak(help.join(" ")),
         kind: SettingKind::Choice(choices.leak()),
         default: Value::from(ours.unwrap_or(&o.default)),
         visibility: Visibility::Developer, deepest: Scope::Game, core: Some(core.id()), system: None,
     }
+}
+
+/// Phrases in cores' texts that describe RetroArch, with what they mean in Specular, whose BIOS
+/// folder (libretro's "system directory") is bios/ on the SD card.
+const RETROARCH_PHRASES: &[(&str, &str)] = &[
+    ("in RetroArch's system directory", "in bios/ on the SD card"),
+    ("in the RetroArch System/BIOS directory", "in bios/ on the SD card"),
+    ("the 'swanstation/textures' folder inside the frontend's system directory", "bios/swanstation/textures/ on the SD card"),
+];
+
+/// A core's info text, its mentions of RetroArch's folders pointing to Specular's instead
+/// (`RETROARCH_PHRASES`).
+fn for_specular(text: &str) -> String {
+    RETROARCH_PHRASES.iter().fold(text.to_string(), |t, (theirs, ours)| t.replace(theirs, ours))
 }
 
 /// The values to give a core's options for a game at `at` (as `LaunchSpec::options`): those set

@@ -41,8 +41,8 @@ fn a_cores_options_are_developer_settings_grouped_by_category() {
     let filter = d.iter().find(|d| d.key == nestopia::BLARGG_NTSC_FILTER).unwrap();
     assert_eq!(filter.section, "Nestopia: Video");
     assert_eq!(filter.default, json!("disabled")); // Specular's, not the core's "composite"
-    assert!(filter.help.contains("\"composite\" (Composite Video)"), "{}", filter.help);
-    assert!(filter.help.ends_with("Specular's default; Nestopia's own is \"composite\"."), "{}", filter.help);
+    assert!(filter.help.contains(" Video: Change aspect ratio"), "{}", filter.help); // its category's info
+    assert!(filter.help.ends_with("This default is Specular's; Nestopia's own is Composite Video."), "{}", filter.help);
     // each section once
     let mut sections: Vec<&str> = d.iter().map(|d| d.section).collect();
     sections.dedup();
@@ -50,6 +50,17 @@ fn a_cores_options_are_developer_settings_grouped_by_category() {
     unique.sort();
     unique.dedup();
     assert_eq!(sections.len(), unique.len(), "{sections:?}");
+}
+
+#[test]
+fn a_cores_texts_speak_of_specular_not_retroarch() {
+    let help = |core_id, key| decls(core(core_id)).iter().find(|d| d.key == key).unwrap().help;
+    let bios = help("mgba", mgba::USE_BIOS);
+    assert!(bios.contains("in bios/ on the SD card") && !bios.contains("RetroArch"), "{bios}");
+    assert!(bios.contains("Takes effect when the game next starts."), "{bios}"); // its label says "(Restart)"
+    let palette = help("nestopia", nestopia::PALETTE);
+    assert!(palette.contains("placed in bios/ on the SD card"), "{palette}");
+    assert!(!palette.contains("next starts"), "{palette}");
 }
 
 #[test]

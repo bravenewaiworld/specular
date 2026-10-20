@@ -12,7 +12,7 @@ use std::time::Duration;
 use crate::art::{self, ArtKind};
 use crate::card::{Card, CardCmd};
 use crate::cpu;
-use crate::device::{Battery, Output, Rgb, SshCmd, SshStatus};
+use crate::device::{Battery, LastShutdown, Output, Rgb, SshCmd, SshStatus};
 use crate::input::{Button, ButtonEvent, Press};
 use crate::keyboard::{KeyOutcome, Keyboard};
 use crate::library::{self, Game, SystemDecl};
@@ -25,12 +25,14 @@ use crate::timezone::{ZoneCmd, ZoneEvent};
 use crate::wireless::bluetooth::{BtCmd, BtEvent};
 use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
+mod about;
 mod card;
 mod cores;
 mod credits;
 mod icons;
 mod install;
 mod layers;
+mod problems;
 mod ssh;
 mod transfer;
 mod timezone;
@@ -41,6 +43,7 @@ pub use install::{InstallCmd, InstallState, TaskView};
 pub use ssh::SshState;
 pub use transfer::{Server, TransferState};
 pub use credits::{Credit, CreditKind, Credits, Splash};
+pub use problems::{LeftOut, Problem};
 
 /// Something that happened.
 #[derive(Debug)]
@@ -60,6 +63,15 @@ pub enum Msg {
     /// (`settings::declarations`), and the files in `cores/` turned away. Sent before the
     /// `Library` of the scan that used these systems.
     Cores { systems: Vec<SystemDecl>, settings: Vec<SettingDecl>, turned_away: Vec<library::user_cores::TurnedAway> },
+    /// What a library scan of the card found that Specular can't use (for `App::problems`),
+    /// replacing what the scan before found. Sent before that scan's `Library`; ignored while the
+    /// card can't be read.
+    LeftOut(LeftOut),
+    /// Settings files saved together were all written to the card (Ok), or the error of one that
+    /// wasn't (with its path), for `App::problems`. A failure stays a problem until a later save
+    /// succeeds, even of another file (whose layer's changes then reach the card; the failed
+    /// one's are saved again only when it next changes).
+    SettingsSaved(Result<(), String>),
     /// The SD card's state, as the device reports it: at startup, then on each change (see
     /// `app::card`).
     Card(Card),
@@ -68,14 +80,21 @@ pub enum Msg {
     Battery(Battery),
     /// The device woke from sleep.
     Woke,
-    /// The game launched couldn't start, and why. (None, a game that ended by itself, isn't sent
-    /// yet.)
+    /// The game launched couldn't start, and why, as a sentence for the player. (None, a game
+    /// that ended by itself, isn't sent yet.)
     GameEnded(Option<String>),
-    /// The running game can't go on (its core's built-in BIOS halted it), with the reason for the
-    /// player. The app quits the game and shows the reason; with no game playing, it is ignored.
+    /// The running game can't go on (its core's built-in BIOS halted it), with what to do, as a
+    /// sentence for the player. The app quits the game and shows it; with no game playing, it is
+    /// ignored.
     GameStopped(String),
     /// At start-up: the game last played didn't end (its launch record was left behind).
     LastGameStopped(crate::launch::LaunchRecord),
+    /// At start-up: the device's last run didn't end with an orderly power-off or restart, and
+    /// why, as its system recorded it (`device::Power::last_shutdown`).
+    LastShutdown(LastShutdown),
+    /// When the running game's save state was made, for its menu; None: it has none. Sent by the
+    /// UI once the game has started and each time its menu opens. Ignored while no game runs.
+    SavedState(Option<SavedState>),
     /// A settings layer was read from its file.
     SettingsLoaded(Layer, serde_json::Map<String, serde_json::Value>),
     Wifi(WifiEvent),
@@ -104,6 +123,29 @@ pub enum Msg {
     /// What the UI's time zone thread reports: the zone and the list at start, then the answers
     /// to `Effect::TimeZone`.
     TimeZone(ZoneEvent),
+}
+
+/// A moment in local time, to the minute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalTime { pub year: i32, pub month: u8, pub day: u8, pub hour: u8, pub minute: u8 }
+
+/// When a game's save state was made (its file's time), and the time it was looked at (None
+/// while the clock isn't set), to show the time if it was made today, else the date.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SavedState { pub made: LocalTime, pub now: Option<LocalTime> }
+
+impl SavedState {
+    /// When it was made, after "saved": "at 14:32" today, else "on 18 Oct" (and the year, if
+    /// another).
+    fn when(&self) -> String {
+        const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let LocalTime { year, month, day, hour, minute } = self.made;
+        let today = self.now.is_some_and(|n| (n.year, n.month, n.day) == (year, month, day));
+        let month = MONTHS.get((month as usize).wrapping_sub(1)).unwrap_or(&"");
+        if today { format!("at {hour:02}:{minute:02}") }
+        else if self.now.is_some_and(|n| n.year == year) { format!("on {day} {month}") }
+        else { format!("on {day} {month} {year}") }
+    }
 }
 
 /// A game's discs, for the game menu's Disc row.
@@ -254,8 +296,16 @@ pub struct Ctx {
     pub credits: Credits,
     /// The files in the card's `cores/` that aren't used, and why (see `Msg::Cores`).
     pub turned_away: Vec<library::user_cores::TurnedAway>,
+    /// What the card's latest scan found that Specular can't use (`Msg::LeftOut`).
+    pub left_out: LeftOut,
+    /// Why the latest settings save failed (`Msg::SettingsSaved`); None if it succeeded.
+    pub settings_unsaved: Option<String>,
+    /// The files in the card's `fonts/` that aren't used, and why (`App::set_fonts_turned_away`).
+    pub fonts_turned_away: Vec<library::user_cores::TurnedAway>,
     /// The running game's discs (`Msg::Discs`); none until its core says.
     pub discs: Discs,
+    /// The running game's save state (`Msg::SavedState`); None until the UI says.
+    pub saved_state: Option<SavedState>,
     /// None on a device whose time zone can't be set; see `App::has_time_zone`.
     pub time_zone: Option<TimeZoneState>,
 }
@@ -327,14 +377,16 @@ pub mod screens {
     pub const SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("settings"));
     /// Over a paused game. Its presses are handled by the app itself (see `App::game_menu`).
     pub const GAME_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game menu"));
+    /// Over the game menu: asks before an action that loses play, named in its params ("load" or
+    /// "reset"). Its presses are handled by the app itself (see `App::game_confirm`).
+    pub const GAME_CONFIRM: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game confirm"));
     /// Power off or restart, opened by holding the power button (over the game menu during a
     /// game). Its presses are handled by the app itself (see `App::power_menu`).
     pub const POWER_MENU: ScreenId = ScreenId(std::borrow::Cow::Borrowed("power menu"));
     pub const WIFI: ScreenId = ScreenId(std::borrow::Cow::Borrowed("wifi"));
     /// Every icon in each of its states; a developer screen.
     pub const ICONS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("icons"));
-    /// Every core, Specular's and those on the SD card (and the files there turned away); a
-    /// developer screen.
+    /// Every core, Specular's and those on the SD card (and the files there turned away).
     pub const CORES: ScreenId = ScreenId(std::borrow::Cow::Borrowed("cores"));
     pub const BLUETOOTH: ScreenId = ScreenId(std::borrow::Cow::Borrowed("bluetooth"));
     /// "Forget …?", with what to forget in its params (see `app::wireless::Forget`).
@@ -363,6 +415,8 @@ pub mod screens {
     pub const GAME_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("game settings"));
     /// The settings of all of one system's games, with the system's id in its params.
     pub const SYSTEM_SETTINGS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("system settings"));
+    /// One setting's help, with its key in the params (see `app::about`).
+    pub const ABOUT_SETTING: ScreenId = ScreenId(std::borrow::Cow::Borrowed("about setting"));
     /// While it is open, PCs can read and write the SD card (see `app::transfer`).
     pub const FILE_TRANSFER: ScreenId = ScreenId(std::borrow::Cow::Borrowed("file transfer"));
     /// Settings → Time zone (see `app::timezone`).
@@ -379,6 +433,8 @@ pub mod screens {
     /// hold the id of the card the game runs from (see `app::card`). Its presses are handled by
     /// the app itself.
     pub const CARD_WAIT: ScreenId = ScreenId(std::borrow::Cow::Borrowed("card wait"));
+    /// What needs the user's attention (`App::problems`), opened from home.
+    pub const PROBLEMS: ScreenId = ScreenId(std::borrow::Cow::Borrowed("problems"));
 }
 
 /// Makes a `ScreenId` from a name (for screens registered later).
@@ -431,6 +487,11 @@ pub struct App {
     /// Whether a write that failed as read-only had the device look at the card again, and its
     /// answer (`Msg::Card`) hasn't come yet.
     rechecking_card: bool,
+    /// How the last run ended, as reported so far at start-up: the device's shutdown record
+    /// (`Msg::LastShutdown`) and the game it interrupted (`Msg::LastGameStopped`: its title, and
+    /// why it was closed). Kept together so both go in one notice, as a second would replace the
+    /// first.
+    last_run: (Option<LastShutdown>, Option<(String, Option<String>)>),
 }
 
 impl App {
@@ -444,6 +505,7 @@ impl App {
         screens.insert(screens::SEARCH, Box::new(Search));
         screens.insert(screens::SETTINGS, Box::new(SettingsScreen));
         screens.insert(screens::GAME_MENU, Box::new(GameMenu));
+        screens.insert(screens::GAME_CONFIRM, Box::new(GameConfirm));
         screens.insert(screens::POWER_MENU, Box::new(PowerMenu));
         wireless::register(&mut screens);
         icons::register(&mut screens);
@@ -454,10 +516,13 @@ impl App {
         transfer::register(&mut screens);
         timezone::register(&mut screens);
         card::register(&mut screens);
+        problems::register(&mut screens);
+        about::register(&mut screens);
         Self {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card: None, card_note: false, settings: Settings::new(settings), battery: None,
                        wifi: None, bluetooth: None, install: None, transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(),
-                       discs: Discs::default(), time_zone: None },
+                       left_out: LeftOut::default(), settings_unsaved: None, fonts_turned_away: Vec::new(),
+                       discs: Discs::default(), saved_state: None, time_zone: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -477,6 +542,7 @@ impl App {
             last_tick: None,
             asleep: false,
             rechecking_card: false,
+            last_run: (None, None),
         }
     }
 
@@ -584,6 +650,13 @@ impl App {
     fn apply_all(&self, which: impl Fn(&SettingDecl) -> bool) -> Vec<Effect> {
         self.ctx.settings.decls().iter().filter(|d| d.core.is_none() && which(d)).filter_map(|d| self.apply(d.key)).collect()
     }
+
+    /// What needs the user's attention now, as `screens::PROBLEMS` lists it.
+    pub fn problems(&self) -> Vec<Problem> { problems::problems(&self.ctx) }
+
+    /// Tells the app which files in the card's `fonts/` aren't used, and why (fonts are read once,
+    /// at start-up).
+    pub fn set_fonts_turned_away(&mut self, fonts: Vec<library::user_cores::TurnedAway>) { self.ctx.fonts_turned_away = fonts; self.changed(); }
 
     /// What the screens see (read-only: changes go through messages, so the cache stays right).
     pub fn ctx(&self) -> &Ctx { &self.ctx }
@@ -756,6 +829,19 @@ impl App {
                 let options = self.playing.is_some().then(|| Effect::CoreOptions(self.core_options()));
                 std::iter::once(Effect::Redraw(None)).chain(options).collect()
             }
+            Msg::LeftOut(left_out) => {
+                if !self.ctx.card_in() || self.ctx.left_out == left_out { return vec![]; }
+                self.ctx.left_out = left_out;
+                self.changed();
+                vec![Effect::Redraw(None)]
+            }
+            Msg::SettingsSaved(result) => {
+                let unsaved = result.err();
+                if self.ctx.settings_unsaved == unsaved { return vec![]; }
+                self.ctx.settings_unsaved = unsaved;
+                self.changed();
+                vec![Effect::Redraw(None)]
+            }
             Msg::Card(card) => self.card_changed(card),
             Msg::CardReadOnly => self.card_read_only(),
             // A game slept through stays paused, with its menu open.
@@ -772,7 +858,7 @@ impl App {
                 self.nav.close(&screens::CARD_WAIT);
                 self.nav.close(&screens::GAME_MENU);
                 self.changed();
-                why.map(|w| Effect::Notice(format!("The game couldn't start: {w}"))).into_iter().chain([Effect::Redraw(None)]).collect()
+                why.map(Effect::Notice).into_iter().chain([Effect::Redraw(None)]).collect()
             }
             Msg::GameStopped(why) => {
                 // A game waiting for its card isn't saved: another card may be in.
@@ -783,14 +869,19 @@ impl App {
                 self.nav.close(&screens::GAME_MENU);
                 self.changed();
                 let end = if self.ctx.card_writable() && !waiting { Effect::QuitGame } else { Effect::AbandonGame };
-                vec![end, Effect::Notice(format!("The game stopped: {why}")), Effect::Redraw(None)]
+                vec![end, Effect::Notice(format!("The game stopped. {why}")), Effect::Redraw(None)]
             }
             Msg::LastGameStopped(r) => {
                 let title = crate::library::display_title(r.game.file_stem().unwrap_or_default().to_str().unwrap_or_default());
-                vec![Effect::Notice(match r.reason {
-                    Some(why) => format!("{} was stopped while playing {title}: {why}", r.core),
-                    None => format!("{} stopped unexpectedly while playing {title}", r.core),
-                })]
+                self.last_run.1 = Some((title, r.reason));
+                vec![self.last_run_notice()]
+            }
+            Msg::LastShutdown(how) => { self.last_run.0 = Some(how); vec![self.last_run_notice()] }
+            Msg::SavedState(state) => {
+                if self.playing.is_none() || self.ctx.saved_state == state { return vec![]; }
+                self.ctx.saved_state = state;
+                self.changed();
+                vec![Effect::Redraw(None)]
             }
             Msg::Battery(b) => {
                 let changed = self.ctx.battery != Some(b);
@@ -879,6 +970,7 @@ impl App {
         let focused = view.rows.get(focus).filter(|r| r.kind.focusable());
         let row = focused.map(|r| r.id.0.as_str());
         if id == screens::GAME_MENU { return self.game_menu(p.button, row); }
+        if id == screens::GAME_CONFIRM { return self.game_confirm(p.button, row); }
         if id == screens::POWER_MENU { return self.power_menu(p.button, row); }
         if let Some(e) = self.install_press(&id, p.button, row) { return e; }
         if id == screens::ZONE_CONSENT { return self.zone_consent(p.button, row); }
@@ -916,6 +1008,7 @@ impl App {
             Outcome::Launch(game) => {
                 self.playing = Some(game.clone());
                 self.ctx.discs = Discs::default();
+                self.ctx.saved_state = None;
                 self.repeater.reset();
                 // The settings that may differ for this game.
                 let per_game = self.apply_all(|d| d.deepest > crate::settings::Scope::Global);
@@ -1016,7 +1109,8 @@ impl App {
 
     /// A press in the in-game menu: B and Menu resume, A does the focused row's action, and on the
     /// Disc row, right (or A) and left change to the next or previous disc, wrapping around. Every
-    /// action closes the menu, resuming the game unless it was quit.
+    /// action closes the menu, resuming the game unless it was quit; but loading the state and
+    /// restarting the game ask first (`game_confirm`), and Game settings opens over it.
     fn game_menu(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
         let mut e = match (button, row) {
             (Button::B | Button::Menu, _) | (Button::A, Some("resume")) => vec![Effect::PauseGame(false)],
@@ -1029,8 +1123,12 @@ impl App {
             }
             (Button::A, Some("save")) if !self.ctx.card_writable() => return vec![Effect::Notice("The SD card is read-only: the state can't be saved".into())],
             (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
-            (Button::A, Some("load")) => vec![Effect::LoadState, Effect::PauseGame(false)],
-            (Button::A, Some("reset")) => vec![Effect::ResetGame, Effect::PauseGame(false)],
+            // Both lose play, so they ask first (`game_confirm`); with no state, there is none to load.
+            (Button::A, Some(what @ ("load" | "reset"))) => {
+                if what == "load" && self.ctx.saved_state.is_none() { return vec![]; }
+                let ask = ScreenState::new(screens::GAME_CONFIRM, Some(what.into()));
+                return self.go(|nav| Some(nav.push(ask)));
+            }
             (Button::A, Some("settings")) => {
                 let Some(game) = &self.playing else { return vec![] };
                 let path = game.path.to_string_lossy().into_owned();
@@ -1041,6 +1139,38 @@ impl App {
         };
         e.extend(self.go(|nav| nav.pop()));
         e
+    }
+
+    /// A press on the question before loading the state or restarting the game: A on its action
+    /// does it and resumes the game; B, or A on Cancel, goes back to the menu; Menu resumes.
+    fn game_confirm(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
+        let action = match (button, row) {
+            (Button::Menu, _) => return self.resume(),
+            (Button::B, _) | (Button::A, Some("cancel")) => return self.go(|nav| nav.pop()),
+            (Button::A, Some("confirm")) if self.nav.top().params.as_deref() == Some("load") => Effect::LoadState,
+            (Button::A, Some("confirm")) => Effect::ResetGame,
+            _ => return vec![],
+        };
+        std::iter::once(action).chain(self.resume()).collect()
+    }
+
+    /// The notice saying how the last run ended, from what start-up has said of it so far
+    /// (`last_run`).
+    fn last_run_notice(&self) -> Effect {
+        let (device, game) = &self.last_run;
+        let mut text: Vec<String> = device.iter().map(|d| match d {
+            LastShutdown::BatteryEmpty => "The battery ran out last time, so the device turned itself off. Charge it to keep playing.",
+            LastShutdown::Unexpected => "The device didn't turn off properly last time: its power button was held down, the power was cut, the system crashed, or its SD card was taken out.",
+        }.to_string()).collect();
+        // The notice leaves out the emulator and the details: they are logged
+        // (`LaunchRecord::left_behind`). `why` is a clause ("it stopped responding").
+        let lost = "Progress since its last autosave was lost.";
+        text.extend(game.as_ref().map(|(title, reason)| match (device, reason) {
+            (_, Some(why)) => format!("{title} was closed because {why} last time. {lost}"),
+            (Some(_), None) => format!("{title} was being played: {}", lost.to_lowercase()),
+            (None, None) => format!("{title} closed unexpectedly last time. {lost}"),
+        }));
+        Effect::Notice(text.join(" "))
     }
 
     /// Closes the game menu, and any screen opened over it, resuming the game.
@@ -1086,7 +1216,8 @@ impl App {
     }
 }
 
-/// Home: the systems that have games, and Search when there are any; then settings.
+/// Home: the systems that have games, and Search when there are any; then settings, and what
+/// needs attention while anything does.
 struct Home;
 
 impl Screen for Home {
@@ -1104,13 +1235,14 @@ impl Screen for Home {
                 rows.push(Row::note("note:scanning", "Looking for games…"));
             } else {
                 rows.push(Row::note("note:none", "No games found"));
-                rows.push(Row::note("note:where", "Put them in roms/ on the SD card"));
+                rows.push(Row::note("note:where", where_games_go(&ctx.systems)));
             }
         } else {
             rows.push(action("search", "Search"));
         }
         rows.push(Row::new("header:device", "Device", RowKind::Header));
         rows.push(Row::new("settings", "Settings", RowKind::Action { value: None }));
+        rows.extend(problems::home_row(ctx));
         ScreenView { title: "Library".into(), layout: Layout::List, rows, hints: vec![(Button::A, "Open".into())], entry: None }
     }
 
@@ -1121,11 +1253,22 @@ impl Screen for Home {
             Some(system) => Outcome::Push(ScreenState::new(screens::GAMES, Some(system.to_string()))),
             None if row.id.0 == "search" => type_search(),
             None if row.id.0 == "settings" => Outcome::Push(ScreenState::new(screens::SETTINGS, None)),
+            None if row.id.0 == problems::OPEN => Outcome::Push(ScreenState::new(screens::PROBLEMS, None)),
             None => Outcome::None,
         }
     }
 
     fn entered(&self, _: &mut Ctx, _: &mut ScreenState, _: &str, text: String) -> Result<Outcome, String> { Ok(open_search(&text)) }
+}
+
+/// Where to put games, and the files Specular plays (those of the systems with a core).
+fn where_games_go(systems: &[SystemDecl]) -> String {
+    let mut extensions: Vec<&str> = vec![];
+    for x in systems.iter().filter(|s| !s.cores.is_empty()).flat_map(|s| s.extensions) {
+        if !extensions.contains(x) { extensions.push(x); }
+    }
+    let files: Vec<String> = extensions.iter().map(|x| format!(".{x}")).collect();
+    format!("Put games in roms/ on the SD card, in any folder. The files it plays: {}, or a .zip holding one.", files.join(" "))
 }
 
 /// Whether `view` is a list of rows (whose notes can take the focus to be read).
@@ -1155,13 +1298,16 @@ fn art_by_system(ctx: &Ctx) -> HashMap<&'static str, (ArtKind, (u32, u32))> {
 /// Whether games are shown as a grid of pictures (else as a list beside the focused game's picture).
 fn games_grid(ctx: &Ctx) -> bool { ctx.settings.get(builtin::LIBRARY_VIEW, &Layer::Global).is_some_and(|(v, _)| v == "grid") }
 
-/// A screen of games, as a list or a grid (`games_grid`).
-fn games_view(ctx: &Ctx, title: String, rows: Vec<Row>) -> ScreenView {
+/// A screen of games, as a list or a grid (`games_grid`), with hints for paging and, with a
+/// `letter_index`, for jumping by letter.
+fn games_view(ctx: &Ctx, title: String, rows: Vec<Row>, letter_index: bool) -> ScreenView {
     let grid = games_grid(ctx);
+    let letters = letter_index.then_some([(Button::L2, "Letter"), (Button::R2, "Letter")]).into_iter().flatten();
+    let hints = [(Button::L1, "Page"), (Button::R1, "Page")].into_iter().chain(letters)
+        .chain([(Button::Start, "Game settings"), (Button::Y, if grid { "List" } else { "Grid" }), (Button::X, "Search"), (Button::B, "Back"), (Button::A, "Play")]);
     ScreenView {
         title, layout: if grid { Layout::Grid } else { Layout::ListWithPicture }, rows,
-        hints: vec![(Button::Start, "Settings".into()), (Button::Y, if grid { "List" } else { "Grid" }.into()), (Button::X, "Search".into()),
-                    (Button::B, "Back".into()), (Button::A, "Play".into())],
+        hints: hints.map(|(b, label)| (b, label.into())).collect(),
         entry: None,
     }
 }
@@ -1192,7 +1338,7 @@ impl Screen for Games {
         let system = state.params.as_deref().unwrap_or_default();
         let title = ctx.systems.iter().find(|s| s.id == system).map_or(system, |s| s.name).to_string();
         let art = art_by_system(ctx);
-        games_view(ctx, title, ctx.games.iter().filter(|g| g.system == system).map(|g| game_row(g, None, &art)).collect())
+        games_view(ctx, title, ctx.games.iter().filter(|g| g.system == system).map(|g| game_row(g, None, &art)).collect(), self.letter_index())
     }
 
     fn press(&self, ctx: &mut Ctx, _: &mut ScreenState, focused: Option<&Row>, p: Press) -> Outcome { games_press(ctx, focused, p) }
@@ -1211,9 +1357,10 @@ impl Screen for Search {
     fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
         let query = state.params.as_deref().unwrap_or_default();
         let art = art_by_system(ctx);
-        let rows: Vec<Row> = library::search(&ctx.games, query).into_iter().map(|g| game_row(g, Some(g.system.to_uppercase()), &art)).collect();
+        let system_name = |id: &str| ctx.systems.iter().find(|s| s.id == id).map_or(id, |s| s.name).to_string();
+        let rows: Vec<Row> = library::search(&ctx.games, query).into_iter().map(|g| game_row(g, Some(system_name(g.system)), &art)).collect();
         let title = format!("“{query}”");
-        if !rows.is_empty() { return games_view(ctx, title, rows); }
+        if !rows.is_empty() { return games_view(ctx, title, rows, self.letter_index()); }
         // No matches: a plain list, as a grid or the picture beside the list would be empty.
         ScreenView {
             title, layout: Layout::List, rows: vec![Row::note("note:none", "No games match this search")],
@@ -1243,12 +1390,14 @@ impl Screen for SettingsScreen {
         // Credits, last in the System section.
         let system_end = rows.iter().position(|r| r.id.0 == builtin::DEVELOPER_DETAILS).map_or(rows.len(), |i| i + 1);
         rows.insert(system_end, credits::settings_row());
+        rows.insert(system_end + 1, action("open:cores", "Cores"));
         if ctx.visibility() == Visibility::Developer {
             // Appended to the Developer section, the last settings section.
             rows.extend(ssh::settings_rows(ctx));
-            rows.extend([action("open:cores", "Cores"), action("open:icons", "Icons")]);
+            rows.push(action("open:icons", "Icons"));
         }
         rows.extend(install::settings_rows(ctx));
+        setting_hints(ctx, &mut rows);
         ScreenView::list("Settings", rows)
     }
 
@@ -1267,7 +1416,18 @@ impl Screen for SettingsScreen {
         }
         if let Some(o) = focused.and_then(|row| ssh::settings_press(ctx, row, p)) { return o; }
         if let Some(open) = focused.and_then(|row| install::settings_press(ctx, row, p)) { return open; }
+        if let Some(about) = focused.and_then(|row| about::press(ctx, row, p)) { return about; }
         focused.map_or(Outcome::None, |row| setting_press(ctx, row, p))
+    }
+}
+
+/// Adds the hints of settings' rows: Right "Change" first on numbers (A does nothing on them,
+/// unlike on other settings; Left steps the value down too, but isn't shown), and Y "About" last
+/// on settings with help (`about::press` opens it).
+fn setting_hints(ctx: &Ctx, rows: &mut [Row]) {
+    for r in rows.iter_mut() {
+        if matches!(r.kind, RowKind::Number { .. }) { r.hints.insert(0, (Button::Right, "Change".into())); }
+        if about::has_help(ctx, r) { r.hints.push((Button::Y, "About".into())); }
     }
 }
 
@@ -1279,14 +1439,15 @@ fn setting_press(ctx: &mut Ctx, row: &Row, p: Press) -> Outcome {
 
 /// The keyboard's screen: one row per key, line by line (`Layout::Keys`), its text above them.
 /// Keys' row ids are their line and column, so the focus is the keyboard's own. Masked text has
-/// a hint for Select, which shows or hides it.
+/// a hint for Select, which shows or hides it. B deletes, or with no text leaves the keyboard.
 fn keyboard_view(kb: &Keyboard) -> ScreenView {
     let rows = kb.lines().iter().enumerate().flat_map(|(line, keys)| keys.iter().map(move |k| {
         Row::new(format!("key:{line}:{}", k.column), kb.label(k.key), RowKind::Key { line, column: k.column, span: k.span })
     })).collect();
     let (shown, caret) = kb.shown();
     let reveal = kb.revealed().map(|shown| (Button::Select, if shown { "Hide" } else { "Show" }));
-    let hints = reveal.into_iter().chain([(Button::Y, "Shift"), (Button::X, "Symbols"), (Button::B, "Delete"), (Button::Start, "Done")]);
+    let b = if shown.is_empty() { "Cancel" } else { "Delete" };
+    let hints = reveal.into_iter().chain([(Button::Y, "Shift"), (Button::X, "Symbols"), (Button::B, b), (Button::Start, "Done")]);
     ScreenView {
         title: kb.prompt.clone(), layout: Layout::Keys, rows,
         hints: hints.map(|(b, label)| (b, label.into())).collect(),
@@ -1305,7 +1466,7 @@ impl Screen for PowerMenu {
     fn view(&self, _: &Ctx, _: &ScreenState) -> ScreenView {
         ScreenView {
             title: "Power".into(), layout: Layout::List,
-            rows: vec![action("off", "Power off"), action("restart", "Restart"), action("cancel", "Cancel")],
+            rows: vec![action("off", "Power off"), action("restart", "Restart device"), action("cancel", "Cancel")],
             hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())],
             entry: None,
         }
@@ -1322,11 +1483,44 @@ impl Screen for GameMenu {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows = vec![action("resume", "Resume")];
         rows.extend(disc_row(ctx.discs));
-        rows.extend([action("save", "Save state"), action("load", "Load state"), action("reset", "Restart"),
-                     action("settings", "Game settings"), action("quit", "Quit game")]);
+        // Quitting writes the autosave the game resumes from at its next start (unless the card
+        // can't be written).
+        let quit = if ctx.card_writable() { "Quitting keeps your place: the game goes on from there next time." }
+                   else { "The SD card is read-only: nothing from this session is saved." };
+        let state = match ctx.saved_state {
+            Some(s) => format!("State saved {}. One per game: Save state replaces it, Load state goes back to it.", s.when()),
+            None => "No state saved yet: Save state makes one (one per game).".into(),
+        };
+        rows.extend([action("save", "Save state"), action("load", "Load state"), Row::note("note:state", state),
+                     action("reset", "Restart game"), action("settings", "Game settings"), action("quit", "Quit game"), Row::note("note:quit", quit)]);
         ScreenView {
             title: "Paused".into(), layout: Layout::List, rows,
             hints: vec![(Button::B, "Resume".into()), (Button::A, "Select".into())],
+            entry: None,
+        }
+    }
+
+    fn press(&self, _: &mut Ctx, _: &mut ScreenState, _: Option<&Row>, _: Press) -> Outcome { Outcome::None }
+}
+
+/// Asks before loading the state or restarting the game, as both lose play (the action in the
+/// params: "load" or "reset"). The app handles its presses (`App::game_confirm`).
+struct GameConfirm;
+
+impl Screen for GameConfirm {
+    fn view(&self, ctx: &Ctx, state: &ScreenState) -> ScreenView {
+        let (title, question) = if state.params.as_deref() == Some("load") {
+            let when = ctx.saved_state.map_or_else(String::new, |s| format!(" saved {}", s.when()));
+            ("Load state", format!("Load the state{when}? Progress since then is lost."))
+        } else {
+            // The game restarts as if switched off and on: what it saved itself stays, and so
+            // does the saved state; the autosave is overwritten as play goes on.
+            ("Restart game", "Restart the game from its beginning? Progress since you last saved in the game itself is lost; your saved state is kept.".into())
+        };
+        ScreenView {
+            title: title.into(), layout: Layout::List,
+            rows: vec![Row::note("note:question", question), action("confirm", title), action("cancel", "Cancel")],
+            hints: vec![(Button::B, "Cancel".into()), (Button::A, "Select".into())],
             entry: None,
         }
     }

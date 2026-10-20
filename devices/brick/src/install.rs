@@ -66,8 +66,8 @@ fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Pro
         // brick-install exits normally even if the task it follows was killed, so its exit status
         // says nothing then.)
         if !ended && (said || !may_say_nothing) {
-            let how = match status { Ok(s) if s.success() => String::new(), Ok(s) => format!(" ({s})"), Err(e) => format!(" ({e})") };
-            progress(Progress::Done(Err(TaskError { message: format!("the installer stopped unexpectedly{how}"), hint: "Details are in the log on the SD card (logs/).".into(), log })));
+            match status { Ok(s) if s.success() => {}, Ok(s) => eprintln!("install: {PROGRAM} ended with {s}"), Err(e) => eprintln!("install: waiting for {PROGRAM}: {e}") }
+            progress(Progress::Done(Err(TaskError { message: "The installer stopped unexpectedly.".into(), hint: "Details are in the log on the SD card (logs/).".into(), log })));
         }
     });
 }

@@ -61,9 +61,10 @@ impl BtError {
     pub fn message(&self) -> String {
         match self {
             BtError::NotAvailable { .. } => "Bluetooth isn't available".into(),
-            BtError::PairingFailed { name, .. } => format!("Couldn't pair with {name}"),
-            BtError::ConnectFailed { name, .. } => format!("Couldn't connect to {name}"),
-            BtError::Service { step, .. } => format!("Bluetooth: {step} failed"),
+            BtError::PairingFailed { name, .. } => format!("Couldn't pair with {name}. Put it in pairing mode, then try again."),
+            BtError::ConnectFailed { name, .. } => format!("Couldn't connect to {name}. Check it is on and nearby, then try again."),
+            // (The step and detail are in the trace.)
+            BtError::Service { .. } => "Bluetooth had a problem. Try again, or turn Bluetooth off and on.".into(),
         }
     }
 }

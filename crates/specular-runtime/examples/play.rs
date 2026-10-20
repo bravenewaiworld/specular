@@ -35,7 +35,7 @@ fn main() -> Result<(), String> {
             vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },
             display_hz: if vsync { 60.2 } else { 60.0 },
         },
-    )?;
+    ).map_err(|e| e.to_string())?;
     eprintln!("{:?}", session.info());
     std::thread::sleep(Duration::from_secs_f64(seconds));
     let stats = session.stats();

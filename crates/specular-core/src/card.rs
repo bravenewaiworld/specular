@@ -112,7 +112,7 @@ impl Card {
     pub fn turning_off(&self) -> bool { self.status == CardStatus::Failed && self.reason.as_deref() == Some("system-card-removed") }
 
     /// What to tell the user: the system's message, or, if it gave none, a plain one for the
-    /// status (empty for a mounted card with nothing to say).
+    /// status and the reasons Crystaline OS gives (empty for a mounted card with nothing to say).
     pub fn text(&self) -> String {
         if !self.message.is_empty() { return self.message.clone(); }
         match self.status {
@@ -120,11 +120,15 @@ impl Card {
             CardStatus::Checking => "Checking the SD card…".into(),
             CardStatus::Mounted if self.repaired() => "Errors on the SD card were repaired.".into(),
             CardStatus::Mounted => String::new(),
-            CardStatus::ReadOnly => "The SD card is read-only: games play, but nothing is saved.".into(),
-            CardStatus::Failed => match &self.reason {
-                Some(reason) => format!("The SD card can't be used ({reason})."),
-                None => "The SD card can't be used.".into(),
-            },
+            CardStatus::ReadOnly => "The SD card is read-only: games play, but nothing is saved. If it has a lock switch, slide it to unlock; \
+                                     otherwise the card may be failing: copy your saves to a PC.".into(),
+            CardStatus::Failed => match self.reason.as_deref() {
+                Some("no-partition") => "This SD card has no FAT32 or exFAT partition. Use a card formatted as FAT32 or exFAT.",
+                Some("mount") => "This SD card's files can't be read. Repair it on a PC, or format it as FAT32 or exFAT (this erases it).",
+                Some("partition") => "The SD card couldn't be set up for games. Restart the device to try again.",
+                Some("system-card-removed") => "The SD card holding the system was removed. Insert it and turn the device on again.",
+                _ => "The SD card can't be used. Try another card.",
+            }.into(),
         }
     }
 }
@@ -164,7 +168,8 @@ mod tests {
     #[test]
     fn a_missing_message_gets_a_plain_one() {
         assert_eq!(Card::parse("absent\n").text(), "No SD card. Insert the one with your games.");
-        assert_eq!(Card::parse("failed no-partition\n").text(), "The SD card can't be used (no-partition).");
+        assert_eq!(Card::parse("failed no-partition\n").text(), "This SD card has no FAT32 or exFAT partition. Use a card formatted as FAT32 or exFAT.");
+        assert_eq!(Card::parse("failed melted\n").text(), "The SD card can't be used. Try another card.");
         assert_eq!(Card::mounted().text(), "");
     }
 }

@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
 use specular_core::art::ArtKind;
 use specular_core::card::{Card, CardCmd};
-use specular_core::app::{App, Credit, Credits, Effect, InputTarget, Msg, WifiNeed};
+use specular_core::app::{App, Credit, Credits, Effect, InputTarget, LeftOut, LocalTime, Msg, SavedState, WifiNeed};
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble, SshCmd};
 use specular_core::effects::{self, Effects, Event};
 use specular_core::rumble::RumbleLine;
@@ -73,8 +73,9 @@ fn clock(id: libc::clockid_t) -> Duration {
 /// `fonts/` next to the binary, or the source tree's NotoEmoji.ttf in a development build. A
 /// $SLINT_FONT_PATH already set is used instead of the emoji font (the card's fonts are still
 /// added). Slint reads the fonts once, as it starts, so this must run before that, and before any
-/// other thread starts (it sets an environment variable).
-fn use_fallback_fonts(data: &DataRoot) {
+/// other thread starts (it sets an environment variable). Returns the card's files it doesn't use,
+/// and why.
+fn use_fallback_fonts(data: &DataRoot) -> Vec<user_cores::TurnedAway> {
     let own = match std::env::var_os("SLINT_FONT_PATH") {
         Some(set) => std::env::split_paths(&set).collect(),
         None => {
@@ -82,36 +83,42 @@ fn use_fallback_fonts(data: &DataRoot) {
             vec![installed.unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/NotoEmoji.ttf").into())]
         }
     };
-    let paths: Vec<PathBuf> = own.into_iter().chain(card_fonts(&data.fonts())).collect();
+    let (card, turned_away) = card_fonts(&data.fonts());
+    let paths: Vec<PathBuf> = own.into_iter().chain(card).collect();
     match std::env::join_paths(&paths) {
         // SAFETY: before any other thread exists (see above).
         Ok(list) => unsafe { std::env::set_var("SLINT_FONT_PATH", list) },
         // Only a $SLINT_FONT_PATH already set can hold a ':' (`card_fonts` leaves such paths out).
         Err(e) => eprintln!("fonts: can't list the fallback fonts ({e}): {paths:?}"),
     }
+    turned_away
 }
 
-/// The font files in `dir` (the SD card's `fonts/`), sorted by name. Logs which it uses, and which it
-/// doesn't and why (Slint skips files it can't use without a word).
-fn card_fonts(dir: &Path) -> Vec<PathBuf> {
+/// The font files in `dir` (the SD card's `fonts/`), sorted by name, and the other files there, with
+/// why each can't be used (Slint would skip them without a word); both logged. The folder's guide
+/// (`guides::README`) is left out of both.
+fn card_fonts(dir: &Path) -> (Vec<PathBuf>, Vec<user_cores::TurnedAway>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return vec![],
-        Err(e) => { eprintln!("fonts: can't read {}: {e}", dir.display()); return vec![] }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Default::default(),
+        Err(e) => { eprintln!("fonts: can't read {}: {e}", dir.display()); return Default::default() }
     };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| !p.ends_with(specular_core::guides::README)).collect();
     paths.sort();
-    let mut used = Vec::new();
+    let (mut used, mut turned_away) = (Vec::new(), Vec::new());
     for path in paths {
         match font_size(&path) {
             Ok(size) => used.push((path, size)),
-            Err(why) => eprintln!("fonts: not using {}: {why}", path.display()),
+            Err(why) => {
+                eprintln!("fonts: not using {}: {why}", path.display());
+                turned_away.push(user_cores::TurnedAway { file: path.file_name().unwrap_or_default().to_string_lossy().into_owned(), why });
+            }
         }
     }
     // Slint reads each one whole into memory, so their sizes count towards Specular's.
     let list: Vec<String> = used.iter().map(|(p, size)| format!("{} ({:.1} MB)", p.file_name().unwrap_or_default().to_string_lossy(), *size as f64 / 1e6)).collect();
     if list.is_empty() { eprintln!("fonts: {} has no fonts in it", dir.display()); } else { eprintln!("fonts: from {}: {}", dir.display(), list.join(", ")); }
-    used.into_iter().map(|(p, _)| p).collect()
+    (used.into_iter().map(|(p, _)| p).collect(), turned_away)
 }
 
 /// The size of the font file at `path`, or why Slint can't use it: it reads only TrueType and
@@ -153,7 +160,7 @@ impl DataRoot {
 /// `credits` are what the binary ships (worked out by its build script; see specular-credits).
 /// Must be called before any other thread starts (see `use_fallback_fonts`).
 pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Option<InstallPlatform>, credits: &'static [Credit]) -> Result<(), Error> {
-    use_fallback_fonts(&data);
+    let fonts_turned_away = use_fallback_fonts(&data);
     quit_on_signals();
     let profile = device.profile();
     let keyboard = platform.is_none();
@@ -187,6 +194,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     let rumble = hardware.rumble.take().map(rumble_thread);
     if rumble.is_none() { eprintln!("rumble: this device has none"); }
     let mut app = App::new(systems.clone(), settings::declarations(&systems));
+    app.set_fonts_turned_away(fonts_turned_away);
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
     app.has_file_transfer(hardware.file_transfer.is_some());
@@ -213,6 +221,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         window: window.as_weak(),
         rows: Rc::new(VecModel::default()),
         hints: Rc::new(VecModel::default()),
+        move_hints: Rc::new(VecModel::default()),
         status_icons: Rc::new(VecModel::default()),
         profile,
         hardware,
@@ -268,6 +277,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     runner.show_theme();
     window.set_rows(runner.rows.clone().into());
     window.set_hints(runner.hints.clone().into());
+    window.set_move_hints(runner.move_hints.clone().into());
     window.set_status_icons(runner.status_icons.clone().into());
     window.window().set_rendering_notifier(|state, api| {
         let Some(r) = self::runner() else { return };
@@ -437,6 +447,24 @@ impl Volume {
     }
 }
 
+/// Tells the app how the device's last run ended, if not cleanly (`Power::last_shutdown`),
+/// logging what the system recorded. A word Specular doesn't know is reported as `Unexpected`, as
+/// the system's contract says (a newer system's reason for an end that wasn't clean).
+fn tell_last_shutdown(power: &dyn specular_core::device::Power) {
+    use specular_core::device::LastShutdown;
+    match power.last_shutdown() {
+        Ok(None) => eprintln!("power: no shutdown record: the last run ended cleanly"),
+        Ok(Some(word)) => {
+            let known = LastShutdown::parse(&word);
+            let how = known.unwrap_or(LastShutdown::Unexpected);
+            let unknown = if known.is_none() { ", a word Specular doesn't know" } else { "" };
+            eprintln!("power: the last run didn't end cleanly: {word:?}{unknown}, reported as {how:?}");
+            post(Msg::LastShutdown(how));
+        }
+        Err(e) => eprintln!("power: can't read how the last run ended: {e}"),
+    }
+}
+
 /// How often the battery is read (on some devices each read is a slow bus transfer).
 const BATTERY_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -455,6 +483,7 @@ fn hardware_thread(hw: Hardware, cpu_steps: Arc<OnceLock<Vec<u32>>>) -> (mpsc::S
             Some(Err(e)) => eprintln!("cpu: no minimum speed can be set: {e}"),
             None => eprintln!("cpu: this device's speed can't be set"),
         }
+        tell_last_shutdown(&*hw.power);
         let mut next_battery = Instant::now();
         let mut volume = Volume { levels: HashMap::new(), output: Output::Speaker, muted: false };
         loop {
@@ -616,9 +645,16 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Io>, std::thread::JoinHandle<()>) 
 
 /// Writes the settings files in `saves` (emptying it), if the card's config folder can take them.
 fn store_settings(saves: &mut HashMap<PathBuf, serde_json::Map<String, serde_json::Value>>, writable: bool) {
-    for (path, values) in saves.drain().filter(|_| writable) {
-        if let Err(e) = store::store_layer(&path, &values) { wrote_to_card(&format!("settings: {}", path.display()), &e); }
+    if !writable || saves.is_empty() { saves.clear(); return; }
+    // One report for the batch: a failure isn't hidden by another file written after it.
+    let mut result = Ok(());
+    for (path, values) in saves.drain() {
+        if let Err(e) = store::store_layer(&path, &values) {
+            wrote_to_card(&format!("settings: {}", path.display()), &e);
+            result = result.and(Err(format!("{}: {e}", path.display())));
+        }
     }
+    post(Msg::SettingsSaved(result));
 }
 
 /// Reads the card, as reading number `reading`: brings its config folder up to date (only if
@@ -630,7 +666,7 @@ fn read_card(data: &DataRoot, reading: u32, writable: bool, first: bool) -> (Opt
     // False if the card isn't writable or migrating failed: then nothing is written to the config
     // folder (see `migrate`), and changes stay in memory.
     let migrated = writable && settings::migrate::migrate(&data.0);
-    if writable && !migrated { on_ui(|r| r.toast("Settings can't be saved until the SD card is inserted again. The log says why.")); }
+    if writable && !migrated { on_ui(|r| r.toast("Changes to settings can't be saved on the SD card, so they last only until the device turns off. Restarting it tries again.")); }
     let (config, systems) = (data.config(), playable_systems());
     let decls = settings::declarations(&systems);
     // The global layer, then each system's (any may get a core from the card) and each of
@@ -667,16 +703,18 @@ fn tell_if_read_only(e: &std::io::Error) {
 
 /// The library scan of reading number `reading` of the card, on a thread of its own: looks for
 /// the card's cores, then scans the games and moves the saves of renamed ROMs; again whenever the
-/// files on the card change (`watch`), until it is stopped. Schemas are written, and
+/// files on the card change (`watch`), until it is stopped. Schemas and guides are written, and
 /// `cache/cores/` made, only if the config folder is `writable` (see `read_card`).
 fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch::CardWatch>) {
     let (config, roms, saves, cores_dir, learned) = (data.config(), data.roms(), data.saves(), data.cores(), data.learned_options());
-    // The games whose settings files are loaded, and the files found to be for no game.
-    let (mut loaded, mut orphans) = (HashSet::new(), HashSet::new());
+    // The games whose settings files are loaded, and the files found to match no game (logged).
+    let (mut loaded, mut logged_orphans) = (HashSet::new(), HashSet::new());
     let (mut on_card, mut found, mut cores_loaded) = (user_cores::UserCores::default(), None, HashSet::new());
     let all = library::builtin_systems();
-    // Set at the first look: `found` starts as None, so it always counts as a change.
-    let (mut systems, mut decls) = (Vec::new(), Vec::new());
+    // Set at the first look: `found` starts as None, so it always counts as a change. `every`
+    // has the systems no core plays too, whose games are counted rather than listed.
+    let (mut every, mut decls) = (Vec::new(), Vec::new());
+    let mut no_emulator = Vec::new(); // as last logged
     loop {
         // `cache/cores/` is made beforehand so it can be watched: options learned are written
         // there as a core plays its first game, and become settings at the next look. (Only on
@@ -686,7 +724,8 @@ fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch
         let now = on_card.find(&cores_dir, &learned, &all);
         if found.as_ref() != Some(&now) {
             log_cores(&cores_dir, &now);
-            systems = user_cores::playable(all.clone(), &now.cores);
+            every = user_cores::served(all.clone(), &now.cores);
+            let systems: Vec<SystemDecl> = every.iter().filter(|s| !s.cores.is_empty()).cloned().collect();
             decls = settings::declarations(&systems);
             // Before the app hears of them, so no game can be played with one before its
             // options' file is loaded.
@@ -694,17 +733,26 @@ fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch
                 let layer = Layer::Core(c.id().into());
                 post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
             }
-            if writable { write_schemas(&data, &decls, &systems); }
+            // (A guide written to a watched folder makes one more scan, which writes nothing.)
+            if writable { write_schemas(&data, &decls, &systems); write_guides(&data, &every); }
             post_reading(reading, Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
             found = Some(now);
         }
-        let games = library::scan(&roms, &systems);
+        let scan = library::scan(&roms, &every);
+        let now_no_emulator = scan.no_emulator(&every);
+        if now_no_emulator != no_emulator {
+            for (system, n) in &now_no_emulator { eprintln!("library: {n} {system} games aren't listed: no core plays them"); }
+            no_emulator = now_no_emulator.clone();
+        }
+        let games = scan.games;
         for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
             eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
         }
         // Before the games are listed, so no game can be played or have its settings shown
         // before they are loaded.
-        load_games_layers(reading, &config, &decls, &games, &mut loaded, &mut orphans);
+        let orphans = load_games_layers(reading, &config, &decls, &games, &scan.unplayable, &mut loaded, &mut logged_orphans);
+        let set_aside = store::set_aside(&config);
+        post_reading(reading, Msg::LeftOut(LeftOut { no_emulator: now_no_emulator, set_aside, orphans }));
         post_reading(reading, Msg::Library(games));
         // (Dropping the watch on the way out lets go of the card's folders, so a card pulled can
         // be unmounted.)
@@ -725,13 +773,22 @@ fn log_cores(dir: &Path, found: &user_cores::Found) {
 /// Writes the settings files' schemas (`settings::schema::all`) for `systems`, only the files whose
 /// contents changed.
 fn write_schemas(data: &DataRoot, decls: &[settings::SettingDecl], systems: &[SystemDecl]) {
-    for (file, schema) in settings::schema::all(decls, systems) {
-        let path = data.config().join(file);
-        match store::store_generated(&path, &schema) {
-            Ok(true) => eprintln!("settings: wrote {}", path.display()),
-            Ok(false) => {}
-            Err(e) => wrote_to_card(&format!("settings: can't write {}", path.display()), &e),
-        }
+    for (file, schema) in settings::schema::all(decls, systems) { write_generated("settings", &data.config().join(file), &store::json_text(&schema)); }
+}
+
+/// Writes the card's guide files (`guides::guides`) for `systems` (every system, with the cores
+/// that serve it), only those whose text changed. Writing one makes its folder (`roms/`, `bios/`,
+/// …) if the card has none.
+fn write_guides(data: &DataRoot, systems: &[SystemDecl]) {
+    for (file, text) in specular_core::guides::guides(systems, &settings::migrate::old_folders(&data.0)) { write_generated("guides", &data.0.join(file), &text); }
+}
+
+/// Writes a generated file (`store::store_generated`), logging it under `area` if it changed.
+fn write_generated(area: &str, path: &Path, text: &str) {
+    match store::store_generated(path, text) {
+        Ok(true) => eprintln!("{area}: wrote {}", path.display()),
+        Ok(false) => {}
+        Err(e) => wrote_to_card(&format!("{area}: can't write {}", path.display()), &e),
     }
 }
 
@@ -743,29 +800,30 @@ fn load_layer(config: &Path, decls: &[settings::SettingDecl], layer: &Layer) -> 
     let values = store::load_layer(&path).unwrap_or_else(|e| {
         match e {
             store::LoadError::Io(e) => eprintln!("settings: can't read {}, so its settings are left out: {e}", path.display()),
-            store::LoadError::Corrupt { moved_to } => eprintln!("settings: {} isn't a JSON object, so its settings are left out; it was moved to {}", path.display(), moved_to.display()),
+            store::LoadError::Corrupt { moved_to, reason } => eprintln!("settings: {} isn't a JSON object ({reason}), so its settings are left out; it was moved to {}", path.display(), moved_to.display()),
         }
         Default::default()
     });
     let set: Vec<String> = values.iter().filter(|(k, _)| *k != settings::SCHEMA_KEY).map(|(k, v)| format!("{k} = {v}")).collect();
     if !set.is_empty() { eprintln!("settings: loaded {}: {}", path.display(), set.join(", ")); }
-    for line in settings::ignored(decls, layer, &values) { eprintln!("settings: {}: {line}", path.display()); }
+    for (key, why) in settings::ignored(decls, layer, &values) { eprintln!("settings: {}: {key} is ignored: {why}", path.display()); }
     values
 }
 
-/// Loads the settings file of each of `games` that has one and isn't `loaded` yet. Logs once each
-/// file under `games/` that is for no game in the library (a ROM renamed, say), and so not loaded
-/// (`orphans`); it is loaded if its game appears in a later scan.
-fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl], games: &[Game], loaded: &mut HashSet<String>, orphans: &mut HashSet<String>) {
-    let files = settings::games_with_settings(config);
+/// Loads the settings file of each of `games` that has one and isn't `loaded` yet. Returns every file
+/// under `games/` that matches no game on the card, `games` or `unplayable` (a ROM renamed, say), as
+/// its game's path under `roms/` without the file type; logs each the first time (`logged`). Such
+/// a file is loaded if its game appears in a later scan.
+fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl], games: &[Game], unplayable: &[Game], loaded: &mut HashSet<String>, logged: &mut HashSet<String>) -> Vec<String> {
+    let mut files = settings::games_with_settings(config);
+    for g in unplayable { if let Layer::Game { game, .. } = g.settings_layer() { files.remove(&game); } }
     for g in games {
         let layer = g.settings_layer();
         let Layer::Game { game, .. } = &layer else { continue };
-        if files.contains(game) && loaded.insert(game.clone()) { post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(config, decls, &layer))); }
+        if files.remove(game) && loaded.insert(game.clone()) { post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(config, decls, &layer))); }
     }
-    for f in files.into_iter().filter(|f| !loaded.contains(f)) {
-        if orphans.insert(f.clone()) { eprintln!("settings: games/{f}.json is for no game in the library, so it isn't loaded"); }
-    }
+    for f in files.iter().filter(|f| logged.insert(f.to_string())) { eprintln!("settings: games/{f}.json is for no game in the library, so it isn't loaded"); }
+    files.into_iter().collect()
 }
 
 /// Power-key presses are ignored from the request to sleep until this long after waking. The
@@ -778,6 +836,8 @@ struct Runner {
     window: slint::Weak<AppWindow>,
     rows: Rc<VecModel<RowData>>,
     hints: Rc<VecModel<Hint>>,
+    /// The hints for the buttons that move the focus, on a line above the bar (see `moves_focus`).
+    move_hints: Rc<VecModel<Hint>>,
     status_icons: Rc<VecModel<IconData>>,
     profile: DeviceProfile,
     hardware: mpsc::Sender<HwCmd>,
@@ -977,16 +1037,18 @@ impl Runner {
                 // Play stops for the game menu (also as the device wakes), or for the card-wait
                 // screen, where the card is gone and the autosave can't be written.
                 let save = paused && self.app.borrow().ctx().card_writable();
-                self.with_game(|p| { p.pause(paused); if save { p.session.autosave(); } Ok("") });
+                self.with_game("", |p| { p.pause(paused); if save { p.session.autosave(); } Ok("") });
                 if paused { self.tell_effects(Event::GameStopped); }
+                // (Under the card-wait screen the card is gone: there is no state to look at.)
+                if paused && self.app.borrow().ctx().card_in() { self.tell_saved_state(); }
             }
-            Effect::SaveState => if self.with_game(|p| p.session.save_state(&p.state).map(|()| "State saved")) { self.tell_effects(Event::StateSaved) },
+            Effect::SaveState => if self.with_game("Couldn't save the state", |p| p.session.save_state(&p.state).map(|()| "State saved")) { self.tell_effects(Event::StateSaved) },
             Effect::LoadState => {
-                self.with_game(|p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") });
+                self.with_game("Couldn't load the state", |p| if p.state.exists() { p.session.load_state(&p.state).map(|()| "State loaded") } else { Ok("No saved state yet") });
                 self.tell_discs(); // the state may have been made on another disc
             }
-            Effect::ChangeDisc(disc) => { self.with_game(|p| p.session.change_disc(disc).map(|()| "Disc changed")); self.tell_discs(); }
-            Effect::ResetGame => { self.with_game(|p| { p.session.reset(); Ok("") }); }
+            Effect::ChangeDisc(disc) => { self.with_game("Couldn't change the disc", |p| p.session.change_disc(disc).map(|()| "Disc changed")); self.tell_discs(); }
+            Effect::ResetGame => { self.with_game("", |p| { p.session.reset(); Ok("") }); }
             Effect::Notice(text) => self.toast(&text),
             Effect::Mute(muted) => { let _ = self.hardware.send(HwCmd::Muted(muted)); }
             Effect::ShowVolume { level, muted, output } => {
@@ -1023,7 +1085,7 @@ impl Runner {
                 self.ignore_power_until.set(Duration::MAX); // until `Msg::Woke`
                 // A game's battery save is written first: power can fail while asleep.
                 let save = self.app.borrow().ctx().card_writable();
-                self.with_game(|p| { p.pause(true); if save { p.session.flush().map(|()| "") } else { Ok("") } });
+                self.with_game("Couldn't save the game before sleeping", |p| { p.pause(true); if save { p.session.flush().map(|()| "") } else { Ok("") } });
                 self.tell_effects(Event::GameStopped);
                 let _ = self.hardware.send(HwCmd::Sleep);
             }
@@ -1055,6 +1117,19 @@ impl Runner {
         if let Some(p) = self.playing.borrow().as_ref() { post(Msg::Discs(p.session.discs())); }
     }
 
+    /// Tells the app when the running game's save state was made (its file's time), for its menu.
+    fn tell_saved_state(&self) {
+        let Some(state) = self.playing.borrow().as_ref().map(|p| p.state.clone()) else { return };
+        let made = match std::fs::metadata(&state).and_then(|m| m.modified()) {
+            Ok(t) => Some(local_minute(t)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => { eprintln!("saves: can't see when {} was saved: {e}", state.display()); None }
+        };
+        // A clock that isn't set yet (see `local_time`) can't say what today is.
+        let now = Some(local_minute(std::time::SystemTime::now())).filter(|n| n.year >= CLOCK_SET);
+        post(Msg::SavedState(made.map(|made| SavedState { made, now })));
+    }
+
     /// Keeps the frame on screen as `p` is quit, as its game's picture of where it was left off:
     /// the art worker stores it. If its system's games are shown that way, the game shrinks into
     /// this frame, which the list shows from then on without waiting for the stored one. Nothing
@@ -1072,14 +1147,14 @@ impl Runner {
         let _ = self.art_worker.send(art::ArtCmd::LeftOff(rom, art::Picture { width: frame.width, height: frame.height, rgba: frame.rgba }));
     }
 
-    /// Runs `f` on the game being played, if any, and shows what it says (nothing for "") or
-    /// its error. Returns whether it ran and succeeded.
-    fn with_game(&self, f: impl FnOnce(&game::Playing) -> std::io::Result<&'static str>) -> bool {
+    /// Runs `f` on the game being played, if any, and shows what it says (nothing for "") or,
+    /// if it fails, `failed` (its error is logged). Returns whether it ran and succeeded.
+    fn with_game(&self, failed: &str, f: impl FnOnce(&game::Playing) -> std::io::Result<&'static str>) -> bool {
         let result = match self.playing.borrow().as_ref() { Some(p) => f(p), None => return false };
         match result {
             Ok("") => {}
             Ok(done) => self.toast(done),
-            Err(e) => { eprintln!("game: {e}"); self.toast(&format!("That didn't work: {e}")); return false; }
+            Err(e) => { eprintln!("game: {failed}: {e}"); self.toast(failed); return false; }
         }
         true
     }
@@ -1184,8 +1259,9 @@ impl Runner {
             let (gw, gh) = system.as_ref().map_or((0, 0), |s| s.screen);
             w.set_game_width(gw as i32);
             w.set_game_height(gh as i32);
+            let menu = self.badges([(Button::Menu, "Game menu".to_string())].iter()).pop().unwrap_or_default();
             w.set_splash(self.app.borrow().splash().map(|s| SplashText {
-                core: s.core.into(), copyright: s.copyright.unwrap_or_default().into(), url: s.url.unwrap_or_default().into(),
+                core: s.core.into(), copyright: s.copyright.unwrap_or_default().into(), url: s.url.unwrap_or_default().into(), menu,
             }).unwrap_or_default());
             w.set_game_revealed(false);
         }
@@ -1193,7 +1269,7 @@ impl Runner {
         self.splash_timer.stop(); // an earlier launch's mustn't show this game
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
-        let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("there is no emulator for {} games", system.map_or(game.system, |s| s.name)))) };
+        let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("There's no emulator for {} games.", system.map_or(game.system, |s| s.name)))) };
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
         if let Err(why) = core.check_bios(&self.data.roms().join(&game.path), extensions, &self.data.bios()) { return self.started(launch, Err(why)); }
         let options = self.app.borrow().core_options();
@@ -1225,12 +1301,13 @@ impl Runner {
                 p.session.set_options(self.app.borrow().core_options());
                 *self.playing.borrow_mut() = Some(p);
                 self.tell_discs();
+                self.tell_saved_state();
                 self.route_sound();
                 // (Kept until now: the list shows under the flying cover.)
                 self.art.borrow_mut().clear();
                 self.requested.borrow_mut().clear();
                 // The game may have been paused (its menu opened) while it loaded.
-                if self.app.borrow().input_target() == InputTarget::App { self.with_game(|p| { p.pause(true); Ok("") }); }
+                if self.app.borrow().input_target() == InputTarget::App { self.with_game("", |p| { p.pause(true); Ok("") }); }
             }
             Err(e) => {
                 eprintln!("game: {e}");
@@ -1359,9 +1436,13 @@ impl Runner {
         };
         let (grid, keys) = (view.layout == Layout::Grid, view.layout == Layout::Keys);
         w.set_layout(match view.layout { Layout::List => ScreenLayout::List, Layout::ListWithPicture => ScreenLayout::ListWithPicture, Layout::Grid => ScreenLayout::Grid, Layout::Keys => ScreenLayout::Keys });
-        // Set before the list's size is read below: the game menu narrows the list.
+        // Set before the list's size is read below: the game menu narrows the list, and a line of
+        // hints shortens it.
         w.set_playing(playing);
         w.set_game_menu(menu);
+        let (moves, bar): (Vec<_>, Vec<_>) = view.hints.iter().partition(|(b, _)| moves_focus(*b));
+        let moves = self.badges(moves.into_iter());
+        if self.move_hints.iter().ne(moves.iter().cloned()) { self.move_hints.set_vec(moves); }
         // Grids and the keyboard sit between the gutters; a list's rows reach the edges.
         let (width, height) = (if grid || keys { w.get_grid_width() } else { w.get_list_width() }, w.get_list_height());
         // Where the focus can stop on a note depends on how much of the list shows.
@@ -1396,7 +1477,9 @@ impl Runner {
         };
         self.slots_changed.set(self.slots_changed.get() + changed as u64);
         self.shown_layout.set(Some(view.layout));
-        let hints = self.hints(&view, focus);
+        let row = view.rows.get(focus).map_or(&[][..], |r| &r.hints);
+        // The focused row's hints first, then the screen's.
+        let hints = self.badges(row.iter().chain(bar));
         if self.hints.iter().ne(hints.iter().cloned()) { self.hints.set_vec(hints); }
         w.set_screen_title(view.title.as_str().into());
         if let Some(entry) = &view.entry {
@@ -1535,11 +1618,17 @@ impl Runner {
         }
     }
 
-    /// The view's hints, after the focused row's own, for buttons the device has.
-    fn hints(&self, view: &ScreenView, focus: usize) -> Vec<Hint> {
-        let row = view.rows.get(focus).and_then(|r| r.hint.as_ref());
-        row.into_iter().chain(&view.hints).filter(|(b, _)| self.profile.buttons.contains(b))
-            .map(|(b, label)| Hint { button: button_label(*b).into(), label: label.as_str().into() }).collect()
+    /// Hints as drawn, for the buttons the device has; hints side by side with the same label
+    /// share a badge ("L1/R1").
+    fn badges<'a>(&self, hints: impl Iterator<Item = &'a (Button, String)>) -> Vec<Hint> {
+        let mut out: Vec<Hint> = vec![];
+        for (b, label) in hints.filter(|(b, _)| self.profile.buttons.contains(b)) {
+            match out.last_mut() {
+                Some(h) if h.label == label.as_str() => h.button = format!("{}/{}", h.button, button_label(*b)).into(),
+                _ => out.push(Hint { button: button_label(*b).into(), label: label.as_str().into() }),
+            }
+        }
+        out
     }
 
     /// Shows the time, and wakes again at the start of the next minute (not every second).
@@ -1609,12 +1698,32 @@ fn icon_data(icon: &Icon) -> IconData {
 /// `localtime_r` keeps the zone it loaded first, so `tzset` has it look again (a stat of
 /// /etc/localtime, or a look at $TZ).
 fn local_time() -> Option<(u32, u32, u32)> {
+    let tm = local(unsafe { libc::time(std::ptr::null_mut()) });
+    (tm.tm_year + 1900 >= CLOCK_SET).then_some((tm.tm_hour as u32, tm.tm_min as u32, tm.tm_sec as u32))
+}
+
+/// A clock before this year isn't set yet (see `local_time`).
+const CLOCK_SET: i32 = 2025;
+
+/// `t` (seconds since 1970) in local time, in the zone in effect now (see `local_time`).
+fn local(t: libc::time_t) -> libc::tm {
     unsafe extern "C" { fn tzset(); }
-    let t = unsafe { libc::time(std::ptr::null_mut()) };
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     unsafe { tzset(); libc::localtime_r(&t, &mut tm) };
-    (tm.tm_year + 1900 >= 2025).then_some((tm.tm_hour as u32, tm.tm_min as u32, tm.tm_sec as u32))
+    tm
 }
+
+/// `t` in local time, to the minute.
+fn local_minute(t: std::time::SystemTime) -> LocalTime {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let tm = local(secs as libc::time_t);
+    LocalTime { year: tm.tm_year + 1900, month: tm.tm_mon as u8 + 1, day: tm.tm_mday as u8, hour: tm.tm_hour as u8, minute: tm.tm_min as u8 }
+}
+
+/// Whether a screen's hint for `b` goes on the line above the hint bar: the shoulder buttons,
+/// which move the focus (L1/R1 a page, L2/R2 a letter), as a game list's bar has no room for them.
+/// A focused row's own hints always go in the bar.
+fn moves_focus(b: Button) -> bool { matches!(b, Button::L1 | Button::R1 | Button::L2 | Button::R2) }
 
 fn button_label(b: Button) -> &'static str {
     use Button::*;
@@ -1756,7 +1865,11 @@ mod tests {
         file("tiny.ttf", b"\0");
         file("odd:name.ttc", b"ttcf");
         std::fs::create_dir(dir.path().join("more")).unwrap();
-        assert_eq!(super::card_fonts(dir.path()), [dir.path().join("a.ttf"), dir.path().join("b.otf")]);
-        assert!(super::card_fonts(&dir.path().join("missing")).is_empty());
+        file("README.txt", b"Specular's guide");
+        let (used, turned_away) = super::card_fonts(dir.path());
+        assert_eq!(used, [dir.path().join("a.ttf"), dir.path().join("b.otf")]);
+        let names: Vec<&str> = turned_away.iter().map(|t| t.file.as_str()).collect();
+        assert_eq!(names, ["more", "odd:name.ttc", "readme.txt", "tiny.ttf"]);
+        assert_eq!(super::card_fonts(&dir.path().join("missing")), Default::default());
     }
 }

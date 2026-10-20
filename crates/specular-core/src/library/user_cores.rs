@@ -34,6 +34,9 @@ pub struct UserCore {
     pub notice: String,
     /// The ids of the systems it plays.
     pub systems: Vec<&'static str>,
+    /// The BIOS files its `.info` says it can do without (its `CoreDecl::bios` holds those it
+    /// can't), as the `.info` names them.
+    pub optional_bios: Vec<String>,
     /// Whether its options have been learned (`learn`); until then they have no settings, and it
     /// runs with its own defaults.
     pub learned: bool,
@@ -129,15 +132,24 @@ impl UserCores {
     }
 }
 
-/// `systems`, each with the cores `found` that play it added after its own; the systems left with
-/// no core are dropped.
-pub fn playable(mut systems: Vec<SystemDecl>, found: &[&'static CoreDecl]) -> Vec<SystemDecl> {
+/// `systems`, with each core in `found` added to the cores of every system it plays, after the
+/// system's own.
+pub fn served(mut systems: Vec<SystemDecl>, found: &[&'static CoreDecl]) -> Vec<SystemDecl> {
     for s in &mut systems {
         s.cores.extend(found.iter().filter(|c| c.user.is_some_and(|u| u.systems.contains(&s.id))));
     }
+    systems
+}
+
+/// `served`, less the systems left with no core.
+pub fn playable(systems: Vec<SystemDecl>, found: &[&'static CoreDecl]) -> Vec<SystemDecl> {
+    let mut systems = served(systems, found);
     systems.retain(|s| !s.cores.is_empty());
     systems
 }
+
+/// This device's processor, as a core's library must be built for it: "64-bit ARM (AArch64)".
+pub fn this_processor() -> String { Arch::OURS.to_string() }
 
 impl UserCore {
     /// Whether its options have been learned, for the log and the Cores screen.
@@ -206,7 +218,9 @@ fn decl(id: &str, path: PathBuf, made: &Made, systems: Vec<&'static str>) -> &'s
         .map(|f| leak(if f.contains('/') { f.to_string() } else { f.to_lowercase() }))
         .map(|f| Bios { games, extensions: &[], files: Box::leak(Box::new([f])), fallback: None })
         .collect();
-    let user = UserCore { path, display_name: info.get("display_name").unwrap_or(name).into(), notice, systems,
+    let optional_bios = (0..count).filter(|i| info.get(&format!("firmware{i}_opt")) == Some("true"))
+        .filter_map(|i| info.get(&format!("firmware{i}_path"))).map(str::to_string).collect();
+    let user = UserCore { path, display_name: info.get("display_name").unwrap_or(name).into(), notice, systems, optional_bios,
                           learned: made.learned.is_some(), size: made.size, modified: made.modified };
     Box::leak(Box::new(CoreDecl {
         name: leak(name), library: leak(format!("{id}_libretro")),

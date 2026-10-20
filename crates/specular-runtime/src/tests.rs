@@ -96,8 +96,8 @@ fn a_missing_core_or_rom_is_an_error() {
     let _turn = ONE_GAME.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let spec = |core: PathBuf| LaunchSpec { core, rom: dir.path().join("none.gba"), save: dir.path().join("x.srm"), autosave: None, autosave_when: Autosave::Every10s, system_dir: dir.path().into(), options: vec![], option_list: None, rom_by_path: false, controller: None, states_restore_save: false, record: None };
-    assert!(Session::start(spec(dir.path().join("none.so")), outputs()).is_err());
-    if let Some(core) = mgba() { assert!(Session::start(spec(core), outputs()).err().unwrap().contains("none.gba")); }
+    assert!(matches!(Session::start(spec(dir.path().join("none.so")), outputs()), Err(StartError::Core(_))));
+    if let Some(core) = mgba() { assert!(matches!(Session::start(spec(core), outputs()), Err(StartError::Game(e)) if e.contains("none.gba"))); }
 }
 
 /// A GBA ROM whose code (after the header) is `code`, ARM instructions. mGBA takes a file as a
@@ -220,15 +220,15 @@ fn a_zipped_game_is_unzipped_into_memory_and_its_launch_recorded_while_it_runs()
     assert!(dir.path().join("game.srm").exists());
     assert!(!record_path.exists()); // the game ended cleanly
     let none = write("none.zip", &zip(&[("readme.txt", b"hello")]));
-    assert_eq!(Session::start(spec(none), outputs()).err().unwrap(), "the zip holds no game mGBA plays");
+    assert_eq!(Session::start(spec(none), outputs()).err().unwrap(), StartError::Unzip("the zip holds no game mGBA plays".into()));
     let zipped = std::fs::read(&game).unwrap();
     let cut = write("cut.zip", &zipped[..zipped.len() - 30]); // the directory's end is gone
-    assert_eq!(Session::start(spec(cut), outputs()).err().unwrap(), "the zip can't be read (not a zip)");
+    assert_eq!(Session::start(spec(cut), outputs()).err().unwrap(), StartError::Unzip("the zip can't be read (not a zip)".into()));
     // A byte of the ROM's compressed data, which ends where the directory starts.
     let mut damaged = zipped.clone();
     damaged[zipped.windows(4).position(|w| w == b"PK\x01\x02").unwrap() - 4] ^= 0xff;
     let damaged = write("damaged.zip", &damaged);
-    assert!(Session::start(spec(damaged), outputs()).err().unwrap().starts_with("the zip is damaged"));
+    assert!(Session::start(spec(damaged), outputs()).err().unwrap().to_string().starts_with("the zip is damaged"));
     assert!(!record_path.exists()); // nor is it left by a game that couldn't start
 }
 

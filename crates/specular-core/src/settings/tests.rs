@@ -3,7 +3,7 @@ use serde_json::{Map, json};
 use std::fs;
 use std::path::Path;
 
-use super::store::{LoadError, load_layer, store_generated, store_layer};
+use super::store::{LoadError, json_text, load_layer, store_generated, store_layer};
 use super::*;
 use crate::input::{Button, Press};
 
@@ -175,7 +175,7 @@ fn a_corrupt_file_is_moved_aside() {
     let path = Layer::Global.path(dir);
     std::fs::write(&path, "{ not json").unwrap();
     match load_layer(&path) {
-        Err(LoadError::Corrupt { moved_to }) => assert!(moved_to.exists()),
+        Err(LoadError::Corrupt { moved_to, reason }) => assert!(moved_to.exists() && reason.contains("line 1 column 3"), "{reason}"),
         other => panic!("{other:?}"),
     }
     assert!(!path.exists());
@@ -190,24 +190,36 @@ fn schemas_document_what_each_file_may_hold() {
     let (global, system, game, core) = (&all[0].1, &all[1].1, &all[2].1, &all[3].1);
     assert_eq!(global["$schema"], "https://json-schema.org/draft/2020-12/schema");
     assert!(global["$comment"].as_str().unwrap().contains("read-only"));
+    // each says where else it may be set, and a choice's labels go with its values
     assert_eq!(global["properties"]["display.brightness"],
-        json!({"title": "Display: Brightness", "description": "How bright.", "type": "integer", "minimum": 1, "maximum": 10, "default": 7}));
+        json!({"title": "Display: Brightness", "description": "How bright. Can be set only in specular.json.", "type": "integer", "minimum": 1, "maximum": 10, "default": 7}));
+    assert_eq!(global["properties"]["video.scaling"]["description"], "How big. Can be set in specular.json, systems/<id>.json or a game's file in games/.");
     assert_eq!(global["properties"]["video.scaling"]["enum"], json!(["integer", "fit", "stretch"]));
+    assert_eq!(global["properties"]["video.scaling"]["enumDescriptions"], json!(["Integer", "Fit", "Stretch"]));
     assert_eq!(global["properties"]["dev.frame_stats"]["type"], "boolean");
-    // a system's and its games' files hold only what may be set that specifically, and its core's
-    // options; the core's file only those
+    assert_eq!(core["properties"]["mgba_idle"]["description"], "Skips them. Can be set in cores/mgba.json, systems/<id>.json or a game's file in games/.");
+    // a system's and its games' files hold what may be set that specifically, and its core's
+    // options; the core's file only those. The settings that can't be set there are marked as
+    // never valid, so an editor flags them, saying where they can be.
+    let keys = |s: &Value, valid: bool| s["properties"].as_object().unwrap().iter().filter(|(_, p)| p.get("not").is_none() == valid).map(|(k, _)| k.clone()).collect::<Vec<_>>();
     for s in [system, game] {
-        assert_eq!(s["properties"].as_object().unwrap().keys().collect::<Vec<_>>(), ["video.scaling", "mgba_idle"]);
+        assert_eq!(keys(s, true), ["video.scaling", "mgba_idle"]);
+        assert_eq!(keys(s, false), ["display.brightness", "dev.frame_stats"]);
     }
-    assert_eq!(core["properties"].as_object().unwrap().keys().collect::<Vec<_>>(), ["mgba_idle"]);
-    assert!(global["properties"].get("mgba_idle").is_none());
+    assert_eq!(system["properties"]["display.brightness"], json!({"not": {}, "description": "Can only be set in specular.json, not in this file."}));
+    assert_eq!(keys(core, true), ["mgba_idle"]);
+    assert_eq!(keys(core, false), ["display.brightness", "video.scaling", "dev.frame_stats"]);
+    assert_eq!(keys(global, false), ["mgba_idle"]);
     assert_eq!(game["title"], "Game Boy Advance game settings");
+    assert!(game["description"].as_str().unwrap().contains("roms/gba/RPG/Some Game.gba → games/gba/RPG/Some Game.json"), "{}", game["description"]);
+    assert!(system["description"].as_str().unwrap().contains("This file is systems/gba.json"), "{}", system["description"]);
     assert_eq!(core["title"], "mGBA options");
     // a colour lists the palette, after "same" if it can follow another
     let colour = SettingDecl { key: "c", section: "", label: "", help: "", kind: SettingKind::Colour { same_as: Some("a") },
         default: json!("same"), visibility: Visibility::User, deepest: Scope::Global, core: None, system: None };
     let s = schema::schema(&[colour], &Layer::Global, &[], "", "");
     assert_eq!(s["properties"]["c"]["enum"].as_array().unwrap()[..2], [json!("same"), json!("teal")]);
+    assert_eq!(s["properties"]["c"]["enumDescriptions"][1], "Teal");
 }
 
 #[test]
@@ -253,15 +265,15 @@ fn a_read_only_schema_is_replaced_only_when_it_changes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("games/gba.schema.json");
     let tmp = path.with_extension("json.tmp");
-    assert!(store_generated(&path, &json!({"a": 1})).unwrap());
+    assert!(store_generated(&path, &json_text(&json!({"a": 1}))).unwrap());
     assert!(fs::metadata(&path).unwrap().permissions().readonly());
-    assert!(!store_generated(&path, &json!({"a": 1})).unwrap());
+    assert!(!store_generated(&path, &json_text(&json!({"a": 1}))).unwrap());
     // a read-only .tmp left by a cut-off write is no obstacle either
     fs::write(&tmp, "").unwrap();
     let mut ro = fs::metadata(&tmp).unwrap().permissions();
     ro.set_readonly(true);
     fs::set_permissions(&tmp, ro).unwrap();
-    assert!(store_generated(&path, &json!({"a": 2})).unwrap());
+    assert!(store_generated(&path, &json_text(&json!({"a": 2}))).unwrap());
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\n  \"a\": 2\n}\n");
     assert!(fs::metadata(&path).unwrap().permissions().readonly());
 }
@@ -394,9 +406,10 @@ fn values_a_file_holds_in_vain_are_reported() {
     let values = Map::from_iter([("display.brightness".into(), json!(3)), ("video.scaling".into(), json!("zoom")),
                                  ("plugin.thing".into(), json!(1)), ("mgba_idle".into(), json!("off"))]);
     let decls = [decls(), vec![idle()]].concat();
+    let pair = |k: &str, why: &str| (k.to_string(), why.to_string());
     assert_eq!(ignored(&decls, &golden_sun(), &values), [
-        "display.brightness can't be set in this file, so it is ignored",
-        "video.scaling = \"zoom\" isn't one of its values, so it is ignored",
+        pair("display.brightness", "it can't be set in this file"),
+        pair("video.scaling", "\"zoom\" isn't one of its values"),
     ]);
     assert_eq!(ignored(&decls, &Layer::Global, &values).len(), 2); // brightness is fine there, the core's option isn't
 }
@@ -412,4 +425,12 @@ fn games_with_settings_are_found_from_their_files() {
     }
     assert_eq!(games_with_settings(dir.path()).into_iter().collect::<Vec<_>>(), ["gba/Mother 3", "gba/RPG/Golden Sun", "gba/Tetris"]);
     assert!(games_with_settings(&dir.path().join("none")).is_empty());
+}
+
+#[test]
+fn what_depends_on_the_core_is_said_for_each_core() {
+    let decls = declarations(&crate::library::builtin_systems());
+    let help = |key| decls.iter().find(|d| d.key == key).unwrap().help;
+    assert!(help(builtin::CPU_MIN).ends_with("Automatic starts at 1800 MHz for SwanStation; the speed the system chooses for the others."), "{}", help(builtin::CPU_MIN));
+    assert!(help(builtin::AUTOSAVE).ends_with("Core default is At pauses for SwanStation; Every 10 s for the others."), "{}", help(builtin::AUTOSAVE));
 }

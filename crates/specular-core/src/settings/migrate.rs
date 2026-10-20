@@ -20,8 +20,18 @@ const STEPS: &[Step] = &[
     Step { from: "configs", to: "config/v0", run: copy },
 ];
 
+/// The current format's folder, relative to the data root.
+pub const CONFIG: &str = STEPS[STEPS.len() - 1].to;
+
 /// The current config folder under the data root `root`.
-pub fn config_dir(root: &Path) -> PathBuf { root.join(STEPS.last().unwrap().to) }
+pub fn config_dir(root: &Path) -> PathBuf { root.join(CONFIG) }
+
+/// The older formats' folders under the data root `root` that are still there once the current
+/// one exists (they are kept: see `migrate`), oldest first. Specular no longer reads them.
+pub fn old_folders(root: &Path) -> Vec<&'static str> {
+    if !config_dir(root).is_dir() { return vec![]; }
+    STEPS.iter().map(|s| s.from).filter(|f| root.join(f).is_dir()).collect()
+}
 
 /// Brings the config folder up to date: run at start-up, before settings are read. If it already
 /// exists, older folders are ignored; otherwise the newest older one is migrated, step by step.
@@ -60,9 +70,11 @@ fn run(root: &Path, step: &Step) -> io::Result<()> {
 /// Copies a file, or a folder with everything in it, each flushed to the card. The step from
 /// `configs/` is just this, as `configs/` had v0's layout (less the schemas and `cores/`): a
 /// damaged file is copied too, and reading it then deals with it as with any other. What can't be
-/// read is logged and skipped, and so are symbolic links (following one could loop forever);
-/// failing to write ends the step.
+/// read is logged and skipped, and so are symbolic links (following one could loop forever) and
+/// any `README.txt` (the guide Specular writes into an old folder, which says it is no longer
+/// read: wrong in the new one); failing to write ends the step.
 fn copy(from: &Path, to: &Path) -> io::Result<()> {
+    if from.file_name().is_some_and(|n| n == crate::guides::README) { return Ok(()); }
     let skip = |e: &io::Error| eprintln!("settings: can't read {}, so it is not migrated: {e}", from.display());
     let Ok(kind) = fs::symlink_metadata(from).inspect_err(skip).map(|m| m.file_type()) else { return Ok(()) };
     if kind.is_dir() {

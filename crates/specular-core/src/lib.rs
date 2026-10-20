@@ -8,6 +8,7 @@ pub mod card;
 pub mod cpu;
 pub mod device;
 pub mod effects;
+pub mod guides;
 pub mod input;
 pub mod install;
 pub mod keyboard;
