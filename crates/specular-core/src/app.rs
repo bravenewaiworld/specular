@@ -67,6 +67,11 @@ pub enum Msg {
     /// replacing what the scan before found. Sent before that scan's `Library`; ignored while the
     /// card can't be read.
     LeftOut(LeftOut),
+    /// The answer to `Effect::CheckSetAside`: each `.bad` file in the config folder now, with why
+    /// it was set aside (as `LeftOut::set_aside`). Only drops files from the list, never adds: new
+    /// ones come from a scan, whose `LeftOut` may be newer than this answer. Ignored while the card
+    /// can't be read.
+    SetAside(Vec<(std::path::PathBuf, String)>),
     /// Settings files saved together were all written to the card (Ok), or the error of one that
     /// wasn't (with its path), for `App::problems`. A failure stays a problem until a later save
     /// succeeds, even of another file (whose layer's changes then reach the card; the failed
@@ -197,6 +202,10 @@ pub enum Effect {
     QuitGame,
     /// End the running game without writing its saves: the card they go to is gone or read-only.
     AbandonGame,
+    /// List the config folder's `.bad` files again; answered by `Msg::SetAside`. The folder isn't
+    /// watched, so without this a `.bad` file the user renamed back or deleted on a PC stays
+    /// listed until the next scan.
+    CheckSetAside,
     /// Show this short message for a moment.
     Notice(String),
     /// Show the volume: its level (0 to `builtin::VOLUME_MAX`), whether the sound is muted, and
@@ -480,6 +489,9 @@ pub struct App {
     radios: wireless::Radios,
     /// The connection the time zone was last looked up for (see `App::reconcile_time_zone`).
     zone_looked_up_for: Option<String>,
+    /// `now` when the time zone question last opened: presses within `CONSENT_GUARD` of it are
+    /// ignored (`App::zone_consent`).
+    zone_asked_at: Duration,
     /// When the last `Sound::Move` was sent (see `TICK_GAP`).
     last_tick: Option<Duration>,
     /// True from sending `Effect::Sleep` until `Msg::Woke`.
@@ -539,6 +551,7 @@ impl App {
             settings_loaded: false,
             radios: wireless::Radios::default(),
             zone_looked_up_for: None,
+            zone_asked_at: Duration::ZERO,
             last_tick: None,
             asleep: false,
             rechecking_card: false,
@@ -832,6 +845,14 @@ impl App {
             Msg::LeftOut(left_out) => {
                 if !self.ctx.card_in() || self.ctx.left_out == left_out { return vec![]; }
                 self.ctx.left_out = left_out;
+                self.changed();
+                vec![Effect::Redraw(None)]
+            }
+            Msg::SetAside(now) => {
+                let listed = &self.ctx.left_out.set_aside;
+                let still: Vec<_> = now.into_iter().filter(|(bad, _)| listed.iter().any(|(b, _)| b == bad)).collect();
+                if !self.ctx.card_in() || *listed == still { return vec![]; }
+                self.ctx.left_out.set_aside = still;
                 self.changed();
                 vec![Effect::Redraw(None)]
             }
@@ -1212,7 +1233,9 @@ impl App {
         if !self.nav.contains(&screens::KEYBOARD) { self.keyboard = None; }
         self.repeater.reset();
         self.changed();
-        vec![Effect::Sound(if t == Transition::Push { Sound::Open } else { Sound::Back }), Effect::Redraw(Some(t))]
+        let mut effects = vec![Effect::Sound(if t == Transition::Push { Sound::Open } else { Sound::Back }), Effect::Redraw(Some(t))];
+        effects.extend(problems::recheck_set_aside(&self.ctx, &self.nav.top().id));
+        effects
     }
 }
 

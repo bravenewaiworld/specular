@@ -1,6 +1,6 @@
 # Installer
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-10-20
 
 Installing the system onto a device's internal storage and putting a backup of it back, from Settings → Internal storage; installing system updates and going back to the previous version, from Settings → Updates. An interrupted install can leave the device's internal storage unable to start, so the flow is built around never being interrupted by Specular, and around recognising when it was interrupted anyway.
 
@@ -16,6 +16,7 @@ Installing the system onto a device's internal storage and putting a backup of i
 - **An update or a switch to the previous version takes effect at the next start, so its progress screen ends on Restart** (2026-10-19). The version running before stays installed, to go back to.
 - **On the installed system, Restore prepares the SD card; the card's system asks before restoring** (2026-10-19). The question (Restore, Not now, Cancel the restore) opens once per run, with the focus on Not now, when the first offer that reports the prepared restore arrives while no game or task is open; after Not now it is in Settings. To ask at start-up, the installer is asked for an offer then, not only when Settings opens. Rejected: restoring by itself at start-up (a forgotten note would erase the internal storage unattended); asking each time Settings opens (nagging).
 - **A task's kind is the one Specular started; a task followed from an earlier run takes the installer's name for it** (2026-10-19). `brick-install` names a restore, preparing one and cancelling one all `restore`, so a followed one is shown as a restore, ending on Power off. Power off suits all three: the next power-on starts wherever the task left things; Restart would only be quicker. Rejected: telling them apart from the offer (it isn't known yet while following at start-up).
+- **Offers logged on a device aren't replayed on the desktop** (2026-10-20). The simulated offers have reproduced every case so far, and the log has the offer in full (`install: offer …`) to build one from. Revisit if a problem seen on a device can't be reproduced from them. Rejected for now: a replay mode like the wireless scenarios'.
 
 ## Design
 
@@ -76,7 +77,3 @@ FAIL <message>\t<hint>  failed: what happened, and what the user can do; the las
 ```
 
 A line Specular doesn't understand (a task from a newer `brick-install`, say) is logged and skipped. If the program stops without a `DONE` or `FAIL`, the task crashed or was killed, and Specular reports that, pointing to the log on the SD card (`logs/`). When following, `brick-install` exits normally even if the task it follows was killed, so its exit status isn't used then; and a `follow` that prints nothing means no task is running. The log has every step, every command run with its exit status and output, and timings, flushed at every step, so a failure can be understood (and reproduced against image files) afterwards.
-
-## Open questions
-
-- Should the desktop build replay an offer logged on a device (`install: offer …`), as it replays wireless scenarios? It would show exactly what a user saw in Settings; so far the simulated offers have been enough.

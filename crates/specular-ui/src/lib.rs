@@ -603,6 +603,9 @@ enum Io {
     /// path) is likely still on its card: it is removed when that card can next be written, or
     /// the next start would report the game as stopped unexpectedly.
     Abandoned(PathBuf, LaunchRecord),
+    /// List the `.bad` settings files again (`Effect::CheckSetAside`), tagged with the card's
+    /// reading then, so the answer is dropped if the card is read afresh or forgotten meanwhile.
+    CheckSetAside(u32),
 }
 
 /// The I/O thread: reads the card when asked (`read_card`), and saves settings. It works in the
@@ -621,6 +624,7 @@ fn io_thread(data: DataRoot) -> (mpsc::Sender<Io>, std::thread::JoinHandle<()>) 
                 match cmd {
                     Io::Save(path, values) => { saves.insert(path, values); continue; }
                     Io::Abandoned(path, record) => { abandoned = Some((path, record)); continue; }
+                    Io::CheckSetAside(reading) => { post_reading(reading, Msg::SetAside(store::set_aside(&data.config()))); continue; }
                     _ => {}
                 }
                 store_settings(&mut saves, writable);
@@ -968,6 +972,9 @@ impl Runner {
         match &msg {
             Msg::Button(e) if e.button == Button::Power && e.time < self.ignore_power_until.get() => return,
             Msg::Woke => self.ignore_power_until.set(now() + WAKE_GRACE),
+            // The app's clock moves only with buttons and ticks; a question WiFi opens (the time
+            // zone's) times its guard from it.
+            Msg::Wifi(_) => self.handle(Msg::Tick(now())),
             Msg::Library(games) => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
             Msg::Battery(b) => self.tell_effects(Event::Battery(*b)),
             _ => {}
@@ -1024,6 +1031,7 @@ impl Runner {
             Effect::ReadCard { writable } => {
                 let _ = self.io.send(Io::Read { reading: self.next_reading(), writable });
             }
+            Effect::CheckSetAside => { let _ = self.io.send(Io::CheckSetAside(self.reading.get())); }
             Effect::ForgetCard => {
                 self.next_reading();
                 let _ = self.io.send(Io::Forget);

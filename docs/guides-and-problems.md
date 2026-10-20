@@ -1,6 +1,6 @@
 # Guide files and problems
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-10-20
 
 How the SD card and the device explain themselves, under the rule "No Manuals" (README.md): everything the user sees or must act on is obvious, or explained where it is presented or in a file beside it. On the card, each folder the user fills has a `README.txt` saying what goes in it and how. On the device, what Specular can't use (games no emulator plays, a core or font turned away, a settings file it can't read or values in one it ignores, settings it can't save) is listed on one screen, each with why and what to do, and home says how many there are.
 
@@ -10,6 +10,7 @@ How the SD card and the device explain themselves, under the rule "No Manuals" (
 - **What Specular can't use is a problem, listed with why and what to do** (2026-10-19; the project owner's choice). A `Problem` is what (a row's label), why, and a fix that says what the user can do; one about a turned-away core opens the Cores screen. Home shows "N things need attention" as a plain row under Settings, only while there are any (quiet: no warning colour, as an unusable file is not an emergency); it opens the list. Each problem is still logged in full where it is found. Rejected: a notice per problem (gone before it is read, and many at once at start-up); a warning colour or badge (look-and-motion's quiet look).
 - **Problems are what Specular knows now, not a history** (2026-10-19). They are worked out from the app's state when shown: the latest scan's findings, the settings layers in memory, the cores and fonts turned away, the last settings write. A settings file set aside (`<file>.bad`) is found by looking for `.bad` files at each scan and reading each again for why, so it stays a problem, across restarts, until the user fixes or deletes it. Those of the card's files are shown only while it can be read, and a card read afresh starts with none of the last card's. Rejected: collecting problems as they happen (a restart would forget one still there; one put right would stay listed).
 - **Unknown settings keys are not problems** (2026-10-19): a key no declaration knows may be a plugin's, or a newer version's (see [settings.md](settings.md)). A value of a declared setting that isn't valid, or a setting that can't be set in its file, is.
+- **`.bad` files are looked for again as home or the problems are shown** (2026-10-20; the project owner's choice), while any are listed (`Effect::CheckSetAside`, answered by `Msg::SetAside` from the I/O thread): one renamed back or deleted on a PC leaves the list without waiting for a scan. The answer only drops files from the list: new ones appear only when the card is read, and that scan lists them (its list may be newer than the answer). Rejected: watching `config/v0/` (every settings save would cause a rescan, unless Specular's own writes were told apart); waiting for the next scan or restart (a problem put right would stay listed).
 - **The Cores screen is for everyone** (2026-10-19): Settings → Cores (after Credits) lists every core and the files in `cores/` turned away, with why. Rejected: keeping it behind Developer details (a user who added a core needs to see why it isn't used).
 
 ## Design
@@ -33,7 +34,8 @@ pub fn scan(roms: &Path, systems: &[SystemDecl]) -> Scan;   // a system with a c
 /// crates/specular-core/src/app/problems.rs
 pub struct Problem { pub what: String, pub why: String, pub fix: String, pub opens: Option<ScreenId> }
 pub struct LeftOut { pub no_emulator: Vec<(&'static str, usize)>, pub set_aside: Vec<(PathBuf, String)>, pub orphans: Vec<String> }
-enum Msg { LeftOut(LeftOut), SettingsSaved(Result<(), String>), /* … */ }
+enum Msg { LeftOut(LeftOut), SetAside(Vec<(PathBuf, String)>), SettingsSaved(Result<(), String>), /* … */ }
+enum Effect { CheckSetAside, /* … */ }
 impl App {
     pub fn problems(&self) -> Vec<Problem>;
     pub fn set_fonts_turned_away(&mut self, fonts: Vec<TurnedAway>);
@@ -45,7 +47,7 @@ impl Settings { pub fn ignored(&self) -> Vec<(Layer, String, String)>; }   // la
 |---|---|---|
 | A system's games no emulator plays (a count per system) | the scan (`Scan::no_emulator`) | a core for it is added |
 | A file in `cores/` turned away | the look for cores (`Msg::Cores`) | it is fixed or removed |
-| A settings file set aside as `.bad` | the scan (`store::set_aside`) | the `.bad` file is gone (renamed back or deleted) |
+| A settings file set aside as `.bad` | the scan; looked for again each time home or the problems are shown while any are listed (`store::set_aside`) | the `.bad` file is gone (renamed back or deleted) |
 | A settings value ignored (file, key) | the layers in memory (`Settings::ignored`) | it is set on the device, or fixed in the file and the card read again |
 | A file under `config/v0/games/` for no game | the scan (`load_games_layers`) | its game is back, or it is renamed or deleted |
 | A file in `fonts/` turned away | the fonts read at start-up | the next start without it |
@@ -55,5 +57,4 @@ The scan thread posts `Msg::LeftOut` before each scan's `Msg::Library`, and writ
 
 ## Open questions
 
-- The config folder isn't watched, so a `.bad` file renamed back or deleted stays listed until the next scan (a change to `roms/` or `cores/`, or a restart). Watching `config/v0/` would clear it at once; is the delay noticed?
 - Is "N things need attention" seen where it is, under Settings at the bottom of home, on a long library? Placing it above the systems would be louder; the Brick will show.

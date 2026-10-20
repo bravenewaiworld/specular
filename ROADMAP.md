@@ -27,12 +27,13 @@ Completed:
  - Everything except the display, backlight, the LEDs' brightness cap, volume, sleep and the WiFi driver goes through standard Linux interfaces (evdev, power supply, LED class, ALSA, wpa_supplicant, BlueZ, the framebuffer's vsync), shared by any Linux device
 
 TODO:
- - File transfer: Settings → File transfer runs Crystaline OS's WebDAV server and browser page only while open, and shows the addresses to open (WiFi's, and the USB cable's while a PC is connected) and that anyone on the network can reach the card meanwhile. "No SD card" without one; a failed start says why. No idle sleep while open; sleeping stops it, waking starts it again; stopped whenever Specular starts and quits (built; on the Brick, uploading, downloading and deleting over the USB link work, and leaving the screen stops the server; but Crystaline OS leaves the loopback interface down, so Specular's check that the server is up fails and stops it after 5 s (docs/brick.md, Findings). Once the OS brings `lo` up: the rest of DEVELOPMENT.md's check, WiFi and the browser page by a person)
+ - File transfer: Settings → File transfer runs Crystaline OS's WebDAV server and browser page only while open, and shows the addresses to open (WiFi's, and the USB cable's while a PC is connected) and that anyone on the network can reach the card meanwhile. "No SD card" without one; a failed start says why. No idle sleep while open; sleeping stops it, waking starts it again; stopped whenever Specular starts and quits (built; on the Brick, uploading, downloading and deleting over the USB link work, and leaving the screen stops the server; Crystaline OS brings the loopback interface (`lo`) up at start-up, which Specular's check that the server is up needs (built in the OS; to check on the Brick); then the rest of DEVELOPMENT.md's check, WiFi and the browser page by a person)
  - SSH on release systems: an "SSH" switch and "Import SSH keys from the SD card" in the developer settings (built; to check on the Brick, see DEVELOPMENT.md)
- - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `brick-timezone`; the clock changes at once (built; to check on the Brick, see DEVELOPMENT.md)
+ - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `brick-timezone`; the clock changes at once. The question ignores presses for its first half second, so a press meant for the Wi-Fi screen can't answer it (built; to check on the Brick, see DEVELOPMENT.md)
  - Rumble from games: checked on the Brick without hands (the motor follows a game's sound, the buttons keep working, the game menu stops it); left: that a game's rumble feels right, PS1 games included (they get a DualShock)
  - SD card pulled and inserted, in the library and mid-game; a read-only card; a write refused as read-only runs `mount-card` (built; on the Brick, a card turned read-only and a repaired one checked; pulling and inserting cards needs a person, see DEVELOPMENT.md)
  - Zooming into and out of a game runs at half rate on the Brick (a median of 33 ms between frames, most of them late): find why
+ - A game keeps its 60.2 fps and its latency with a toast or the volume gauge animating over it: to measure on the Brick with the frame statistics (docs/brick.md, Open questions)
  - Separate volume levels for speaker and headphones, each in its own codec control (built; on the Brick, the levels set at start-up and muting checked; switching outputs needs a person, see DEVELOPMENT.md)
 
 ### Core Integration and Support
@@ -111,7 +112,7 @@ Completed:
  - Settings moved from `configs/` to `config/v0/` at start-up, safe against power cuts; the old folder is kept. Each future format change adds a step to a new `vN/` folder
  - Per-system and per-game settings: Start on a game (or "Game settings" in the in-game menu) opens its settings, with "All <system> games…" for its system's; overrides are marked, X resets one, and changes apply to the running game. Every layer is loaded before its games are listed
  - A `README.txt` in each folder of the card the user fills (`roms/`, `bios/`, `cores/`, `fonts/`) and in `cache/` and old config folders, generated from the declarations (file types per system, BIOS files per core, what a core needs), read-only and rewritten only when it changes (see docs/guides-and-problems.md)
- - "N things need attention" on home, opening a list of what Specular can't use, each with why and what to do: games no emulator plays, cores and fonts turned away, settings files set aside or for no game, settings values ignored, and settings that failed to save
+ - "N things need attention" on home, opening a list of what Specular can't use, each with why and what to do: games no emulator plays, cores and fonts turned away, settings files set aside or for no game, settings values ignored, and settings that failed to save. A settings file set aside and since renamed back or deleted leaves the list the next time home or the list is shown
  - Core options as settings (`cores/<core>.json`, overridable per system and per game), with their schemas; shown with Developer details on the game and system screens, and changed mid-game. Specular's own choices (mGBA's idle loop removal, Nestopia's NTSC filter off, SwanStation's software renderer) are those options' defaults
 
 ### Aesthetics and Presentation
@@ -170,6 +171,7 @@ TODO:
 
 TODO:
  - ScreenScraper as an optional art source (needs a project developer ID, each user's account, and quota handling)
+ - Fuzzy name matching that also compares names with spaces removed and accents folded ("Pokemon Fire Red", "Pokémon"), if the log's unidentified games from real cards show it matters and it adds no wrong matches
  - PS1 `.chd` discs identified by serial (today by name only). Needs a CHD decompressor: the libchdr SwanStation already bundles, or the pure-Rust `chd` crate (rejected for now: three decoders to read two sectors)
 
 ### Aesthetics and Presentation

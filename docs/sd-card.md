@@ -1,6 +1,6 @@
 # The SD card
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-10-20
 
 How Specular follows the SD card as it comes and goes: the library, the settings and every save live on it, so a card pulled, inserted, checked, read-only or damaged changes what Specular can show and what it may write. The system mounts the card and says how it stands (Crystaline OS: `docs/storage.md`, "Keeping the card mounted"); Specular shows the user what that means, in the system's own words, and never writes where it can't.
 
@@ -14,6 +14,7 @@ How Specular follows the SD card as it comes and goes: the library, the settings
 - **A game whose card goes waits for that card** (2026-10-19): it is paused under "Card removed", which asks for the card back. When the same card (by its CID) is back and writable, the game is saved and quit, back to the library. Quitting instead loses what wasn't saved, and so does a game its BIOS halts meanwhile. A game ended without saving leaves its launch record on its card; it is removed when that card can next be written (the record compared whole, so another card's is left alone), so the next start doesn't report the game as stopped unexpectedly. Rejected: playing on (disc games stream from the card, and nothing could be saved); saving to another card (its saves belong to that card's games).
 - **A write refused as read-only (EROFS) while the card counts as writable has the system look at the card again** (2026-10-19), one recheck at a time, until the system answers: the kernel turns a damaged FAT card read-only without telling anyone, and `mount-card` then reports `read-only damaged`. The user is told at once. Writes from the settings, the game's saves (including those written in the background), the art cache and the schemas all count.
 - **The library's reading is tagged** (2026-10-19): every message from a reading of the card (settings files, cores, games) is dropped once the card has been read afresh or forgotten, so a scan of the old card can't land after the new one's.
+- **A card inserted later adds its fonts at the next start** (2026-10-20), as fonts added to a card do: Slint reads fallback fonts once ([look-and-motion.md](look-and-motion.md), "The card's fonts are named one by one"). Rejected: restarting Specular when a card with other fonts comes (a game or a screen in use would be cut short, only to fix names shown as empty boxes until the next start).
 
 ## Design
 
@@ -67,4 +68,3 @@ The card service runs on a thread of its own, as the radios do. `specular_linux:
 
 - Is the read-only message "always visible" enough at the top of home? It scrolls with home's list, and isn't on the game lists. A banner outside the list would need a new element in the UI; the Brick will show whether it is missed.
 - Does a paused game survive its card going? mGBA maps the ROM file; a page of it not yet read, touched after the card is gone, would end Specular (SIGBUS). The game is paused at once, so the core shouldn't run; the device check in DEVELOPMENT.md (Checking the SD card on the Brick, step 4) would show it.
-- The card's fallback fonts (`fonts/`) are read once at start, as Slint allows; a card inserted later doesn't add its fonts until Specular restarts.

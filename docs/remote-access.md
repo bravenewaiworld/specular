@@ -1,6 +1,6 @@
 # Remote access
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-10-20
 
 Reaching the device from a PC: file transfer (a browser page and WebDAV, served from the device, that read and write the SD card) and SSH. Both open the device to the network, so Specular decides when they run and says so plainly; both are the system's services (Crystaline OS's `webdav` and `brick-ssh`), which Specular only starts, stops and asks about.
 
@@ -12,6 +12,8 @@ Reaching the device from a PC: file transfer (a browser page and WebDAV, served 
 - **WiFi on Auto counts the open screen as a need**, as the Wi-Fi screen does (2026-10-19). A USB cable works without WiFi.
 - **Started means port 80 takes connections, within 5 s** (2026-10-19). `sv up` returns as soon as the service manager is told, whatever then happens. A start that fails stops the service again (rather than leaving it retrying every second out of sight) and shows the service manager's status and the service's last log lines. Rejected: trusting `sv up`'s exit status.
 - **File transfer is stopped whenever Specular starts and quits** (2026-10-19), so a run that crashed or was stopped with the screen open doesn't leave the card open. Rejected: remembering whether it was on (more state, and the stop is cheap and harmless when it is already down).
+- **A crash loop doesn't leave file transfer on** (2026-10-20): Crystaline OS's `frontend-run` stops it before each start of Specular, and before showing the status screen it falls back to after 3 crashes in a minute. Specular's own stop at start-up can't cover that case, as Specular isn't running.
+- **The start check trusts whatever answers on port 80** (2026-10-20). Nothing else listens there on Crystaline OS; one that did would make the screen show addresses that serve something else, which the user would see at once. Rejected: checking the server's reply (more code for a case that can't happen today).
 - **File transfer and SSH commands run on the hardware thread** (2026-10-19), in order with the other hardware commands, so a stop sent before a sleep is done before it. Starting can block the thread for up to 5 s (only when it fails). Rejected: a thread of their own (sleeping would then need a handshake).
 - **The addresses shown are those Specular already follows** (2026-10-19): WiFi's from its link, and the other interfaces' with a link from the WiFi service (`WifiEvent::Interfaces`), so the USB cable's shows only while a PC is at the other end. Interfaces named `usb…` are called "USB cable".
 - **SSH is in the developer settings, only where the user switches it** (2026-10-19): Crystaline OS release systems, which `brick-ssh` reports as `image=release`. On development systems it is always on and `brick-ssh` refuses to change it, so there is only a note. Its state is the system's, asked for each time Settings opens. Rejected: a Specular setting (a second copy of the state, which could disagree).
@@ -73,8 +75,3 @@ Every command the Brick runs is logged with its exit status and output (`transfe
 
 - (2026-10-19, upstream) runit's `sv up` only tells the service's supervisor, and returns before the service runs; the supervisor restarts a run script that exits every second. `sv -v down` waits (7 s by default) for the service to be down. Source: runit's sv(8); BusyBox `runit/sv.c`.
 - (2026-10-19, inferred) dufs logs each request, through `logger -t webdav` into the system log, so the service's lines there can be many; only the last 3 are read.
-
-## Open questions
-
-- If Specular can't start at all (Crystaline OS falls back to its status screen after 3 crashes in a minute), WebDAV left on by the last crash stays up until a restart. Stopping it in the OS's `frontend-run` before each start would cover that.
-- Another program on port 80 would pass the start check. Nothing else listens there on Crystaline OS today.

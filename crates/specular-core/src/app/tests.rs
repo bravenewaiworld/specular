@@ -1731,6 +1731,7 @@ mod ssh {
 
 mod time_zone {
     use super::*;
+    use crate::app::timezone::CONSENT_GUARD;
     use crate::timezone::{ZoneCmd, ZoneEvent};
     use crate::wireless::wifi::{WifiEvent, WifiLink};
 
@@ -1758,8 +1759,21 @@ mod time_zone {
     fn zone(a: &App) -> Option<String> { a.ctx().time_zone.as_ref().unwrap().zone.clone() }
     fn stored(a: &App, key: &str) -> Option<serde_json::Value> { a.ctx().settings.layer(&Layer::Global).get(key).cloned() }
 
+    /// If the time zone question is open, moves the clock past `CONSENT_GUARD`, so the next press
+    /// counts.
+    fn past_guard(a: &mut App) {
+        if a.nav.top().id == screens::ZONE_CONSENT { let t = a.now + CONSENT_GUARD; a.handle(Msg::Tick(t)); }
+    }
+
+    /// Answers the time zone question with B.
+    fn decline(a: &mut App) -> Vec<Effect> {
+        past_guard(a);
+        tap(a, Button::B, 0)
+    }
+
     /// Moves the focus to the row labelled `label` and presses A.
     fn press(a: &mut App, label: &str) -> Vec<Effect> {
+        past_guard(a);
         for _ in 0..a.view().rows.len() {
             if focused(a) == label { return tap(a, Button::A, 0); }
             tap(a, Button::Down, 0);
@@ -1789,6 +1803,20 @@ mod time_zone {
     }
 
     #[test]
+    fn presses_in_the_questions_first_moment_are_ignored() {
+        let mut a = zone_app(json!({}));
+        tap(&mut a, Button::Down, 1_000); // e.g. Connect, on the Wi-Fi screen
+        a.handle(Msg::Tick(Duration::from_millis(3_000))); // the UI's clock reading as WiFi connects
+        a.handle(connected("Home"));
+        // A press meant for the screen below, just after the question opened.
+        assert_eq!(tap(&mut a, Button::B, 3_100), vec![]);
+        assert_eq!(a.view().title, "Look up the time zone?");
+        assert_eq!(stored(&a, "time.zone_lookup_allowed"), None);
+        tap(&mut a, Button::B, 3_000 + CONSENT_GUARD.as_millis() as u64);
+        assert_eq!(stored(&a, "time.zone"), Some(json!("manual")));
+    }
+
+    #[test]
     fn the_question_waits_until_the_game_ends() {
         let mut a = zone_app(json!({}));
         tap(&mut a, Button::A, 0);
@@ -1803,7 +1831,7 @@ mod time_zone {
     fn declining_keeps_the_zone_and_is_never_asked_again_unprompted() {
         let mut a = zone_app(json!({}));
         a.handle(connected("Home"));
-        let e = tap(&mut a, Button::B, 0);
+        let e = decline(&mut a);
         assert_eq!(zone_cmds(&e), Vec::<&ZoneCmd>::new());
         assert_eq!(a.view().title, "Library");
         assert_eq!(stored(&a, "time.zone"), Some(json!("manual")));
@@ -1822,7 +1850,7 @@ mod time_zone {
         a.handle(Msg::Wifi(WifiEvent::Link(WifiLink::Idle)));
         a.handle(connected("Home"));
         assert_eq!(a.view().title, "Look up the time zone?");
-        tap(&mut a, Button::B, 0);
+        decline(&mut a);
         assert_eq!(a.view().title, "Library"); // not a second one below
     }
 
@@ -1904,7 +1932,7 @@ mod time_zone {
         let mut a = zone_app(json!({}));
         open_time_zone(&mut a);
         assert_eq!(a.view().title, "Look up the time zone?");
-        tap(&mut a, Button::B, 0);
+        decline(&mut a);
         assert_eq!(a.view().title, "Time zone");
         assert!(labels(&a).contains(&"Zone".to_string()));
     }

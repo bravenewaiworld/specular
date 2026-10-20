@@ -114,3 +114,19 @@ fn the_cores_screen_is_in_settings_without_developer_details() {
     press(&mut a, "Cores");
     assert_eq!(a.view().title, "Cores");
 }
+
+#[test]
+fn set_aside_files_are_looked_for_again_as_home_or_the_problems_are_shown_while_any_are_listed() {
+    let mut a = app();
+    let bad = ("systems/gba.json.bad".into(), "it isn't a JSON object (expected value at line 1 column 1)".into());
+    a.handle(Msg::LeftOut(LeftOut { set_aside: vec![bad], ..Default::default() }));
+    assert!(press(&mut a, "1 thing needs attention").contains(&Effect::CheckSetAside));
+    // Renamed back on a PC meanwhile: the answer clears it.
+    a.handle(Msg::SetAside(vec![]));
+    assert_eq!(labels(&a), ["Nothing needs attention."]);
+    // With none listed, going back home looks for none.
+    assert!(!tap(&mut a, Button::B, 0).contains(&Effect::CheckSetAside));
+    // An answer older than the scan that found a new one doesn't add it: only scans do.
+    a.handle(Msg::SetAside(vec![("games/gba/X.json.bad".into(), "it can't be read".into())]));
+    assert!(a.problems().is_empty());
+}

@@ -1,6 +1,6 @@
 # Library and box art
 
-Status: In progress · Updated: 2026-10-18
+Status: In progress · Updated: 2026-10-20
 
 How Specular finds the games on the card, works out their systems, identifies each ROM, and finds its box art (or title screen, screenshot, or the frame you left it on). Art makes the library feel finished, but it must come from somewhere we may use, work offline once fetched, and never cost the UI a frame.
 
@@ -162,7 +162,3 @@ As a game is quit, the UI takes the frame on screen from the runtime (`FrameSlot
 - (2026-10-12, upstream) ScreenScraper has better art and checksum lookups, but needs a developer ID for the project (requested from them), each user's own account, and has daily quotas. Source: ScreenScraper (screenscraper.fr).
 - (2026-10-18, desktop) Searching 3,000 titles takes about 0.5 ms in a release build (the fastest of 100 runs on a busy PC). Source: the ignored benchmark in `crates/specular-core/src/library/search.rs`.
 - (2026-10-18, desktop) Against the real tables, shortened names match by fuzzy name ("Pokemon Emerald", "Zelda Minish Cap", "Castlevania II", "Advance Wars 2"); generic ones are rejected as ambiguous ("Metroid", "Kirby", "Mario Kart" on GBA), and "Super Mario Advance 4" because the title has more numbers. Words split or joined differently aren't matched ("Pokemon Fire Red" for "FireRed", "Megaman 2"). A fuzzy search takes under 1 ms per game in a release build on a PC (PS1, the largest table). Source: a throwaway test over `data/db/`.
-
-## Open questions
-
-- Should fuzzy matching also compare names with spaces removed, or accents folded ("Pokémon")? Only if it adds no wrong matches; the log's unidentified games from real cards would show how often it matters.

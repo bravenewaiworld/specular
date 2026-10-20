@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Ctx, Outcome, Screen, action, cores::sentence, screens};
+use super::{Ctx, Effect, Outcome, Screen, action, cores::sentence, screens};
 use crate::input::{Button, Press};
 use crate::library::user_cores::TurnedAway;
 use crate::model::{Row, RowKind, ScreenId, ScreenView};
@@ -57,6 +57,14 @@ pub(super) fn problems(ctx: &Ctx) -> Vec<Problem> {
     }
     all.extend(ctx.fonts_turned_away.iter().map(font_turned_away));
     all
+}
+
+/// `Effect::CheckSetAside` as `screen` is shown, if it lists problems (home, the problems
+/// screen) and `.bad` files are among them, so one fixed on a PC goes from the list. Not while none
+/// are listed: new ones come from reading the card, whose scan lists them.
+pub(super) fn recheck_set_aside(ctx: &Ctx, screen: &ScreenId) -> Option<Effect> {
+    let lists_problems = [screens::HOME, screens::PROBLEMS].contains(screen);
+    (lists_problems && !ctx.left_out.set_aside.is_empty()).then_some(Effect::CheckSetAside)
 }
 
 /// Home's row for the problems ("3 things need attention"); None while there are none.

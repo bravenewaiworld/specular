@@ -28,6 +28,9 @@ use crate::settings::{Layer, builtin};
 use crate::timezone::{ZoneCmd, ZoneEvent};
 use crate::wireless::wifi::WifiLink;
 
+/// How long the time zone question ignores presses after opening (`App::zone_consent`).
+pub const CONSENT_GUARD: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// What the app knows of the device's time zone.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TimeZoneState {
@@ -120,13 +123,18 @@ impl App {
         let browsing = [screens::HOME, screens::GAMES, screens::SETTINGS, screens::WIFI, screens::BLUETOOTH].contains(top);
         let due = auto && ((wanted.is_some() && browsing) || *top == screens::TIME_ZONE);
         if !due || self.playing.is_some() { return vec![]; }
+        self.zone_asked_at = self.now;
         self.go(|nav| Some(nav.push(ScreenState::new(screens::ZONE_CONSENT, None))))
     }
 
     /// A press on the question: Allow makes the zone automatic and allows lookups; "Choose it
     /// myself" makes it manual and opens the picker; B makes it manual. Declining also sets
-    /// `time.zone_lookup_allowed` to false. Each answer is saved to the global settings.
+    /// `time.zone_lookup_allowed` to false. Each answer is saved to the global settings. Presses
+    /// within `CONSENT_GUARD` of its opening are ignored: it opens by itself as WiFi connects, so a
+    /// press meant for the screen below would answer it unread. (When the user opens it from
+    /// Settings the guard isn't needed, and does no harm.)
     pub(super) fn zone_consent(&mut self, button: Button, row: Option<&str>) -> Vec<Effect> {
+        if self.now < self.zone_asked_at + CONSENT_GUARD { return vec![]; }
         let (allow, pick) = match (button, row) {
             (Button::A, Some("allow")) => (true, false),
             (Button::A, Some("manual")) => (false, true),

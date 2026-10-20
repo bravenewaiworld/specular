@@ -1,6 +1,6 @@
 # Time zone
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-10-20
 
 How the zone the clock is shown in is chosen: by hand from the system's list, or automatically by asking a lookup service, which needs the user's permission because it tells that service the network's public address. The system keeps the zone, and keeps its clocks in UTC (Crystaline OS's `docs/power.md`, "Time zone"); choosing it is Specular's.
 
@@ -9,6 +9,7 @@ How the zone the clock is shown in is chosen: by hand from the system's list, or
 - **Automatic is the default, and asks first** (2026-10-19). [The ethos](../README.md#ethos) wants a setting that works by itself, but a lookup tells a third party the network's address, so it waits for a yes. The question is put once, unprompted, the first time a lookup would happen (WiFi connected) while the user is browsing (home, a game list, Settings, the radios' screens): in practice right after the first network is joined on the Wi-Fi screen (a device without WiFi counts as connected from the start). Never during a game: it waits for the game to end. It is also put when the user opens Settings → Time zone, or chooses Automatic, without having allowed it. Rejected: asking at first start (no network yet, and nothing to explain it by); only when the user opens Time zone (most people never would, and keep UTC).
 - **Declining makes the zone manual, and keeps the zone in effect** (2026-10-19): UTC on a new device, or the one found or picked before. "Choose it myself" also opens the picker. Manual never asks; only choosing Automatic again does. So the permission is one switch (`time.zone_lookup_allowed`) and "declined" needs no value of its own. Rejected: a three-way permission (asked / allowed / refused), which says nothing the mode doesn't.
 - **The question stays until answered** (2026-10-19). Menu doesn't leave it, as on Specular's other questions; B declines.
+- **The question ignores presses for its first half second** (2026-10-20; the project owner's choice; `CONSENT_GUARD`). It opens by itself as WiFi connects, often while the user is still pressing buttons on the Wi-Fi screen, which would answer it unread. The app's clock moves only with buttons and ticks, so the UI gives it a reading as each WiFi event arrives, from which the guard is timed. Rejected: waiting to see whether it happens on the Brick (the guard costs nothing if it doesn't).
 - **ipinfo.io, over plain HTTP** (2026-10-19; the project owner's choice). It answers a bare zone name. Specular's HTTP client has no TLS and the system no certificates (as for box art, [library-and-box-art.md](library-and-box-art.md)). Rejected: ipapi.co (rate-limited, and redirects HTTP to HTTPS), worldtimeapi.org (refused connections), ip-api.com (non-commercial use only); adding rustls with built-in roots (about 1.5 MB, roots to keep current).
 - **One lookup per connection** (2026-10-19): when WiFi connects (to a network other than the one last looked up for, or again after disconnecting), and when Automatic is chosen while connected. A failed lookup isn't retried until the next. Signal readings, which report the link again every 10 s, don't count.
 - **The system keeps the zone; Specular stores only how it is chosen** (2026-10-19). `time.zone` is "auto" or "manual"; the zone itself is `brick-timezone`'s, kept across restarts. Rejected: the zone in `specular.json` too (two copies that could disagree, e.g. after `brick-timezone set` over SSH).
@@ -44,7 +45,3 @@ The Brick's `TimeZone` runs `/usr/sbin/brick-timezone get|set|list`. The desktop
 
 - (2026-10-18, upstream) glibc's `tzset` re-reads the zone only when `$TZ` changes, or, with `$TZ` unset, when `/etc/localtime` changed (device, inode or modification time). With `$TZ` set to a file (`:/path`), changes to the file are not seen. Source: glibc `time/tzset.c`.
 - (2026-10-19, inferred) Changing `$TZ` with `setenv` while other threads may read the environment is safe in practice once `$TZ` exists: glibc then replaces the pointer in its slot and never frees old values. Hence `$TZ` set before any thread starts. Source: glibc `stdlib/setenv.c`.
-
-## Open questions
-
-- Does the question put right after joining a network take a press meant for the Wi-Fi screen? Watching a few people join a network on the Brick answers it; if so, the question could ignore presses for its first half second.
