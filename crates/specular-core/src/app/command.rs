@@ -13,8 +13,7 @@ impl App {
                 let last = self.last_played.clone();
                 starting(self.play(|games| {
                     let last = last.ok_or("no last game")?;
-                    games.iter().find(|g| g.system == last.system && g.path == last.path)
-                        .ok_or_else(|| format!("{} isn't on the card any more", last.path.display()))
+                    games.iter().find(|g| g.path == last).ok_or_else(|| format!("{} isn't on the card any more", last.display()))
                 }))
             }
             Command::Quit => {

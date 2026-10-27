@@ -96,6 +96,8 @@ pub enum Msg {
     GameStopped(String),
     /// At start-up: the game last played didn't end (its launch record was left behind).
     LastGameStopped(crate::launch::LaunchRecord),
+    /// The card's record of the game last started (`launch::last_game`), as the card is read.
+    LastPlayed(Option<std::path::PathBuf>),
     /// At start-up: the device's last run didn't end with an orderly power-off or restart, and
     /// why, as its system recorded it (`device::Power::last_shutdown`).
     LastShutdown(LastShutdown),
@@ -535,8 +537,9 @@ pub struct App {
     /// The game a command last started (`Command::Play`): its autosave's check
     /// (`Msg::AutosaveChecked`) starts it over whatever screen is showing, not only a list of games.
     command_launch: Option<std::path::PathBuf>,
-    /// The game most recently started this run, kept after it ends (`Command::PlayLast`).
-    last_played: Option<Game>,
+    /// The path under roms/ of the game most recently started, kept after it ends: this run's, or
+    /// the card's record of an earlier run's (`Msg::LastPlayed`), for `Command::PlayLast`.
+    last_played: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -930,6 +933,7 @@ impl App {
                 let end = if self.ctx.card_writable() && !waiting { Effect::QuitGame } else { Effect::AbandonGame };
                 vec![end, Effect::Notice(format!("The game stopped. {why}")), Effect::Redraw(None)]
             }
+            Msg::LastPlayed(game) => { self.last_played = game; vec![] }
             Msg::LastGameStopped(r) => {
                 let title = crate::library::display_title(r.game.file_stem().unwrap_or_default().to_str().unwrap_or_default());
                 self.last_run.1 = Some((title, r.reason));
@@ -1082,7 +1086,7 @@ impl App {
     /// Starts `game` (`Effect::Launch`, or `LaunchAfresh` if `afresh`).
     fn launch(&mut self, game: Game, afresh: bool) -> Vec<Effect> {
         self.playing = Some(game.clone());
-        self.last_played = Some(game.clone());
+        self.last_played = Some(game.path.clone());
         self.ctx.discs = Discs::default();
         self.ctx.saved_state = None;
         self.repeater.reset();

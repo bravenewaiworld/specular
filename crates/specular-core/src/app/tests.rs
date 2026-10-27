@@ -2222,8 +2222,11 @@ mod commands {
         let _ = run(&mut a, "quit");
         assert_eq!(run(&mut a, "play-last").0, Ok("starting Golden Sun".into()));
         let _ = run(&mut a, "quit");
+        a.handle(Msg::LastPlayed(Some("snes/Super Metroid.rom".into()))); // a card read afresh
+        assert_eq!(run(&mut a, "play-last").0, Ok("starting Super Metroid".into()));
+        let _ = run(&mut a, "quit");
         a.handle(Msg::Library(vec![game("gba", "Mother 3")]));
-        assert_eq!(run(&mut a, "play-last").0, Err("gba/Golden Sun.rom isn't on the card any more".into()));
+        assert_eq!(run(&mut a, "play-last").0, Err("snes/Super Metroid.rom isn't on the card any more".into()));
     }
 
     #[test]

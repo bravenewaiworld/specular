@@ -10,6 +10,7 @@ Controlling a running Specular from outside it, for development, tests and scrip
 - **Only the user Specular runs as may send commands** (2026-10-27). The socket is made `0600`; on a device that is root, so a command means an SSH login first. Rejected: a dev-mode switch (a root SSH login can already do anything the socket can).
 - **The Specular binary is its own client: `specular cmd <command>`** (2026-10-27). A device has nothing else to rely on (stock BusyBox builds often lack `nc -U` and `socat`). Its exit status says whether the command was done (0), refused (1), or Specular couldn't be reached (2).
 - **Commands go through the app like any other input** (2026-10-27). `App::command` takes one and returns its answer and effects, so a command does what the same action does from the screen, under the same rules (nothing while asleep, no game while the installer works), and is tested without a socket. A button press is the exception: the UI carries it out, as it has to wait for the release, and it goes in exactly as the device's own buttons do (to the game while one plays).
+- **The game last started is recorded on the card, in `cache/last-game.json`** (2026-10-27), so `play-last` works after a restart. It is written as a game starts (with the settings, by the I/O thread, only if the card can be written) and read each time the card is (`Msg::LastPlayed`), so another card has its own. Rejected: remembering it only while Specular runs (a restart is when it is most wanted); the launch record (removed when a game ends); a setting (it isn't one, and would show in the config files).
 - **`play` starts a game over whatever screen is showing** (2026-10-27). Quitting it comes back to that screen. Rejected: going to the game's list first (a script asking for a game wants the game, not the list).
 
 ## Design
@@ -29,7 +30,7 @@ impl App {
 | Command | Does |
 |---|---|
 | `play <path under roms/ \| title>` | Starts the game; a title must name only one game (in any case). Refused while a game plays, while asleep, while the installer works, or without the card |
-| `play-last` | Starts again the game most recently started since Specular started (from a list, by command, or reopened at start-up); refused as `play` is |
+| `play-last` | Starts again the game most recently started (from a list, by command, or reopened at start-up), also in an earlier run; refused as `play` is |
 | `quit` | Quits the running game, writing its saves, and closes its menu if open |
 | `status` | `{"screen": "games", "params": "gba", "playing": "gba/Golden Sun.gba", "asleep": false}` |
 | `press <button> [hold ms]` | Presses a button (by `Button::NAMES`: `a`, `down`, `menu`, `power`, …), released after the hold (default 50 ms, at most 10 s); answered after the release |

@@ -603,7 +603,7 @@ enum Io {
     Read { reading: u32, writable: bool },
     /// Stop reading the card (`Effect::ForgetCard`).
     Forget,
-    /// Write a settings file.
+    /// Write a settings file, or the record of the game last started (`launch::last_game_path`).
     Save(PathBuf, serde_json::Map<String, serde_json::Value>),
     /// A game was ended without saving (`Effect::AbandonGame`), so its launch record (at the
     /// path) is likely still on its card: it is removed when that card can next be written, or
@@ -686,6 +686,7 @@ fn read_card(data: &DataRoot, reading: u32, writable: bool, first: bool) -> (Opt
     for layer in [Layer::Global].into_iter().chain(library::builtin_systems().iter().map(|s| Layer::System(s.id.into()))).chain(cores) {
         post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(&config, &decls, &layer)));
     }
+    post_reading(reading, Msg::LastPlayed(launch::last_game(&data.cache())));
     // Before the scan, so no game can have been launched (writing a new record) yet.
     if first && let Some(r) = LaunchRecord::left_behind(&launch::path(&data.cache())) { post_reading(reading, Msg::LastGameStopped(r)); }
     let watch = watch::CardWatch::new().map_err(|e| eprintln!("library: can't watch for new games or cores: {e}")).ok();
@@ -1336,6 +1337,7 @@ impl Runner {
     /// (`SPLASH_TIME`). Art work stops while it runs, and loaded pictures are dropped once it has
     /// started, to leave it the memory and the CPU. If `afresh`, its autosave is set aside first.
     fn launch(self: &Rc<Self>, game: &Game, afresh: bool) {
+        let _ = self.io.send(Io::Save(launch::last_game_path(&self.data.cache()), launch::last_game_record(game)));
         let _ = self.art_worker.send(art::ArtCmd::Paused(true));
         let system = self.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).cloned();
         if let Some(w) = self.window.upgrade() {

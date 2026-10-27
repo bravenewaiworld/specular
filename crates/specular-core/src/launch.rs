@@ -31,6 +31,25 @@ pub struct LaunchRecord {
 /// Where the record is kept.
 pub fn path(cache: &Path) -> PathBuf { cache.join("launch.json") }
 
+/// Where the game last started is recorded (`last_game`). Unlike the launch record it stays, so
+/// `play-last` works after a restart.
+pub fn last_game_path(cache: &Path) -> PathBuf { cache.join("last-game.json") }
+
+/// What `last_game_path` holds for `game` (stored with `store::store_layer`).
+pub fn last_game_record(game: &Game) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    map.insert("game".into(), game.path.to_string_lossy().into());
+    map
+}
+
+/// The path under roms/ of the game last started, as recorded in `cache` (None if not recorded,
+/// or unreadable: logged).
+pub fn last_game(cache: &Path) -> Option<PathBuf> {
+    let path = last_game_path(cache);
+    let map = store::load_layer(&path).map_err(|e| eprintln!("game: the last game's record {}: {e:?}", path.display())).ok()?;
+    map.get("game")?.as_str().map(PathBuf::from)
+}
+
 impl LaunchRecord {
     /// A record of `game` starting now with the core `core` from `library`.
     pub fn new(core: &str, library: &Path, game: &Game) -> Self {
@@ -70,6 +89,15 @@ impl LaunchRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_last_game_is_recorded_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(last_game(dir.path()), None);
+        let game = Game { system: "gba", path: "gba/Golden Sun.zip".into(), title: "Golden Sun".into(), sort_key: String::new() };
+        store::store_layer(&last_game_path(dir.path()), &last_game_record(&game)).unwrap();
+        assert_eq!(last_game(dir.path()), Some("gba/Golden Sun.zip".into()));
+    }
 
     #[test]
     fn a_record_left_behind_is_read_once() {
