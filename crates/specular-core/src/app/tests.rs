@@ -2174,3 +2174,66 @@ mod card {
 
 mod problems;
 mod explained;
+
+mod commands {
+    use super::*;
+    use crate::command::Command;
+
+    fn run(a: &mut App, line: &str) -> (Result<String, String>, Vec<Effect>) { a.command(&line.parse().unwrap()) }
+
+    #[test]
+    fn play_starts_a_game_by_path_or_title_over_any_screen() {
+        let mut a = app();
+        let (reply, e) = run(&mut a, "play gba/Mother 3.rom");
+        assert_eq!(reply, Ok("starting Mother 3".into()));
+        assert_eq!(e[0], Effect::Launch(game("gba", "Mother 3")));
+        assert_eq!(a.input_target(), InputTarget::Game);
+        assert_eq!(run(&mut a, "play Super Metroid").0, Err("Mother 3 is playing; quit it first".into()));
+        run(&mut a, "quit");
+        assert_eq!(run(&mut a, "play super metroid").0, Ok("starting Super Metroid".into()));
+    }
+
+    #[test]
+    fn play_says_why_it_cant() {
+        let mut a = app();
+        assert_eq!(run(&mut a, "play Earthbound").0, Err("no game at roms/Earthbound or titled \"Earthbound\"".into()));
+        a.handle(Msg::Library(vec![game("gba", "Tetris"), game("snes", "Tetris")]));
+        assert_eq!(run(&mut a, "play tetris").0, Err("2 games are titled \"tetris\"; give one's path: gba/Tetris.rom, snes/Tetris.rom".into()));
+        assert_eq!(run(&mut a, "play snes/Tetris.rom").0, Ok("starting Tetris".into()));
+    }
+
+    #[test]
+    fn a_commanded_game_whose_autosave_is_checked_still_starts() {
+        let mut a = app();
+        let vagrant = game("ps1", "Vagrant Story");
+        a.handle(Msg::Library(vec![vagrant.clone()]));
+        assert_eq!(run(&mut a, "play Vagrant Story").1, vec![Effect::CheckAutosave(vagrant.clone())]);
+        let e = a.handle(Msg::AutosaveChecked { game: vagrant.clone(), bios: None });
+        assert_eq!(e[0], Effect::Launch(vagrant));
+    }
+
+    #[test]
+    fn quit_ends_the_game_and_closes_its_menu() {
+        let mut a = app();
+        assert_eq!(run(&mut a, "quit").0, Err("no game is playing".into()));
+        run(&mut a, "play Golden Sun");
+        assert_eq!(run(&mut a, "quit"), (Ok("quitting Golden Sun".into()), vec![Effect::QuitGame, Effect::Redraw(None)]));
+        assert_eq!(a.playing(), None);
+        run(&mut a, "play Golden Sun");
+        tap(&mut a, Button::Menu, 0);
+        let (_, e) = run(&mut a, "quit");
+        assert_eq!(e[0], Effect::QuitGame);
+        assert!(e.contains(&Effect::Redraw(Some(Transition::Pop))));
+        assert_eq!(a.view().title, "Library");
+    }
+
+    #[test]
+    fn status_says_what_shows_and_plays() {
+        let mut a = app();
+        let status = |a: &mut App| serde_json::from_str::<serde_json::Value>(&a.command(&Command::Status).0.unwrap()).unwrap();
+        assert_eq!(status(&mut a), json!({"screen": "home", "params": null, "playing": null, "asleep": false}));
+        tap(&mut a, Button::A, 0);
+        run(&mut a, "play Golden Sun");
+        assert_eq!(status(&mut a), json!({"screen": "games", "params": "gba", "playing": "gba/Golden Sun.rom", "asleep": false}));
+    }
+}

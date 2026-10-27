@@ -7,6 +7,7 @@
 //! calls on the UI thread.
 
 mod art;
+mod control;
 mod frames;
 mod game;
 mod keys;
@@ -24,6 +25,7 @@ use std::time::{Duration, Instant};
 use slint::{ComponentHandle, Model, SharedPixelBuffer, VecModel};
 use specular_core::art::ArtKind;
 use specular_core::card::{Card, CardCmd};
+use specular_core::command::Command;
 use specular_core::app::{App, BiosChange, Credit, Credits, Effect, InputTarget, LeftOut, LocalTime, Msg, SavedState, WifiNeed};
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble, SshCmd};
 use specular_core::effects::{self, Effects, Event};
@@ -133,6 +135,8 @@ fn font_size(path: &Path) -> Result<u64, String> {
     if !matches!(&magic, b"\0\x01\0\0" | b"OTTO" | b"true" | b"ttcf") { return Err("it isn't a TrueType or OpenType font".into()); }
     file.metadata().map(|m| m.len()).map_err(|e| format!("can't read it: {e}"))
 }
+
+pub use control::send as send_command;
 
 /// Where Specular's data lives: the SD card's folders.
 #[derive(Clone, Debug)]
@@ -289,6 +293,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         }
     }).map_err(|e| format!("this window can't show games: {e:?}"))?;
     RUNNER.with(|r| *r.borrow_mut() = Some(runner.clone()));
+    control::listen(|cmd, reply| on_ui(move |r| r.command(cmd, reply)));
     if keyboard {
         let headphones = Cell::new(false);
         window.on_key(move |text, pressed| match key_button(&text) {
@@ -985,12 +990,36 @@ impl Runner {
         }
         // (A new time zone shows at once.)
         let needs_clock = matches!(msg, Msg::Woke | Msg::GameEnded(_) | Msg::GameStopped(_) | Msg::TimeZone(ZoneEvent::Set { result: Ok(()), .. }));
-        // The window can be resized (on a desktop), changing how many columns a grid has.
-        if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
         // A tick while a button is held makes its repeats. (The flag stays set until the next
         // message, such as the button's release.)
-        self.repeating.set(matches!(msg, Msg::Tick(_)) && self.app.borrow().next_deadline().is_some());
-        let effects = self.app.borrow_mut().handle(msg);
+        let tick = matches!(msg, Msg::Tick(_));
+        self.update(|app| app.handle(msg), tick, needs_clock);
+    }
+
+    /// Carries out a command from the command socket, then answers `reply`. A press is answered
+    /// once the button has been released.
+    fn command(self: &Rc<Self>, cmd: Command, reply: control::Reply) {
+        if let Command::Press(button, hold) = cmd {
+            self.handle(Msg::Button(ButtonEvent { button, pressed: true, time: now() }));
+            slint::Timer::single_shot(hold, move || {
+                post(Msg::Button(ButtonEvent { button, pressed: false, time: now() }));
+                let _ = reply.send(Ok(String::new()));
+            });
+            return;
+        }
+        let mut answer = None;
+        self.update(|app| { let (a, effects) = app.command(&cmd); answer = Some(a); effects }, false, false);
+        if let Some(a) = answer { let _ = reply.send(a); }
+    }
+
+    /// Has the app take something in (`f`, given the app, returns its effects; `tick`: it is a
+    /// `Msg::Tick`), carries out the effects and re-arms the timers for the app's deadlines.
+    /// `needs_clock`: the app's clock has to catch up afterwards.
+    fn update(self: &Rc<Self>, f: impl FnOnce(&mut App) -> Vec<Effect>, tick: bool, needs_clock: bool) {
+        // The window can be resized (on a desktop), changing how many columns a grid has.
+        if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }
+        self.repeating.set(tick && self.app.borrow().next_deadline().is_some());
+        let effects = f(&mut self.app.borrow_mut());
         for e in effects { self.apply(e); }
         // Timers stood still while asleep: catch the clock up, now that the app has handled the
         // wake (the tick this sends must see its idle time reset). After a game ends the idle count
@@ -1792,15 +1821,14 @@ fn button_label(b: Button) -> &'static str {
     }
 }
 
-/// Desktop keys: (the key's text as Slint reports it, the button, its name in SPECULAR_SCRIPT).
-/// Arrows are the d-pad; X/Z/S/A are A/B/X/Y; Q/W are L1/R1; Enter, Tab and Esc are Start,
-/// Select and Menu.
-const KEYS: &[(&str, Button, &str)] = &[
-    ("\u{f700}", Button::Up, "up"), ("\u{f701}", Button::Down, "down"), ("\u{f702}", Button::Left, "left"),
-    ("\u{f703}", Button::Right, "right"), ("x", Button::A, "a"), ("z", Button::B, "b"), ("s", Button::X, "x"),
-    ("a", Button::Y, "y"), ("q", Button::L1, "l1"), ("w", Button::R1, "r1"), ("1", Button::L2, "l2"),
-    ("2", Button::R2, "r2"), ("\n", Button::Start, "start"), ("\t", Button::Select, "select"),
-    ("\u{1b}", Button::Menu, "menu"), ("-", Button::VolDown, "voldown"), ("=", Button::VolUp, "volup"), ("p", Button::Power, "power"),
+/// Desktop keys: (the key's text as Slint reports it, the button). Arrows are the d-pad; X/Z/S/A
+/// are A/B/X/Y; Q/W are L1/R1; Enter, Tab and Esc are Start, Select and Menu.
+const KEYS: &[(&str, Button)] = &[
+    ("\u{f700}", Button::Up), ("\u{f701}", Button::Down), ("\u{f702}", Button::Left),
+    ("\u{f703}", Button::Right), ("x", Button::A), ("z", Button::B), ("s", Button::X),
+    ("a", Button::Y), ("q", Button::L1), ("w", Button::R1), ("1", Button::L2),
+    ("2", Button::R2), ("\n", Button::Start), ("\t", Button::Select),
+    ("\u{1b}", Button::Menu), ("-", Button::VolDown), ("=", Button::VolUp), ("p", Button::Power),
 ];
 
 /// The desktop key that plugs simulated headphones into the jack, or unplugs them (`Msg::Headphones`).
@@ -1808,11 +1836,11 @@ const HEADPHONES_KEY: &str = "h";
 
 fn key_button(text: &str) -> Option<Button> {
     let t = text.to_lowercase();
-    KEYS.iter().find(|(k, _, _)| *k == t).map(|&(_, b, _)| b)
+    KEYS.iter().find(|(k, _)| *k == t).map(|&(_, b)| b)
 }
 
 /// For development and visual checks: `SPECULAR_SCRIPT="down,down,a"` presses those buttons (by
-/// the names in `KEYS`) 400 ms apart (or `SPECULAR_SCRIPT_MS`), the first after two steps, each
+/// their `Button::NAMES`) 400 ms apart (or `SPECULAR_SCRIPT_MS`), the first after two steps, each
 /// held for 50 ms (so a game sees it: games read buttons once a frame), then, one step after the
 /// last, saves the window as raw RGBA to `SPECULAR_SNAPSHOT` (default /tmp/specular.rgba) and
 /// quits. `down:3000` holds the button for 3000 ms instead (it repeats as if held), and the next
@@ -1821,7 +1849,7 @@ fn key_button(text: &str) -> Option<Button> {
 fn script(window: &AppWindow, names: &str) -> slint::Timer {
     let mut steps: Vec<(Button, u64)> = names.split(',').filter_map(|n| {
         let (n, hold) = n.trim().split_once(':').unwrap_or((n.trim(), "50"));
-        Some((KEYS.iter().find(|(_, _, name)| *name == n)?.1, hold.parse().ok()?))
+        Some((Button::named(n)?, hold.parse().ok()?))
     }).collect();
     steps.reverse();
     let weak = window.as_weak();

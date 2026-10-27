@@ -1,6 +1,7 @@
 //! Specular on the TrimUI Brick, with the SD card's data partition as its data folder.
 //!
-//! Usage: specular [data folder (default /mnt/SDCARD)]
+//! Usage: specular [data folder (default /mnt/SDCARD)], or specular cmd <command> to send the
+//! running one a command (see docs/commands.md).
 
 use specular_brick::device::Brick;
 use specular_brick::platform::BrickPlatform;
@@ -11,6 +12,8 @@ use specular_ui::DataRoot;
 const CREDITS: &[specular_core::app::Credit] = include!(concat!(env!("OUT_DIR"), "/credits.rs"));
 
 fn main() -> Result<(), specular_ui::Error> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "cmd") { std::process::exit(specular_ui::send_command(&args[1..])); }
     let data = std::env::args().nth(1).unwrap_or_else(|| "/mnt/SDCARD".into());
     specular_ui::run(Box::new(Brick), DataRoot(data.into()), Some(Box::new(|on_button| {
         let platform = BrickPlatform::new(Brick.open_vsync())?;

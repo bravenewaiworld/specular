@@ -100,6 +100,7 @@ pub trait Screen {
 | Art worker, art loader | finding and storing pictures (and the frame each game was left on); decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
 | Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written |
+| Commands | accepts connections to the command socket, with a thread for each, which hands its commands to the UI thread (see [commands.md](commands.md)) |
 | Vsync | in a display platform that paces animations by the display (the Brick's): after an animation's frame is presented, waits for the vsync that shows it and wakes the UI |
 
 Opening a sound output can block, so a game's opens on short-lived threads, and the interface sounds' output on the Sounds thread.

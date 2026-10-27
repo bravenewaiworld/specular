@@ -5,6 +5,7 @@
 pub mod app;
 pub mod art;
 pub mod card;
+pub mod command;
 pub mod cpu;
 pub mod device;
 pub mod effects;

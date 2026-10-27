@@ -22,11 +22,12 @@ impl App {
     }
 
     /// `Msg::AutosaveChecked`: starts the game, or asks first if its autosave's BIOS differs.
-    /// Ignored unless a list of games is still showing, with no game playing: the player may have
-    /// left it, or pressed A twice, while the autosave was read.
+    /// Ignored unless a list of games is still showing (or a command started it), with no game
+    /// playing: the player may have left it, or pressed A twice, while the autosave was read.
     pub(super) fn autosave_checked(&mut self, game: Game, bios: Option<BiosChange>) -> Vec<Effect> {
         let listing = [screens::GAMES, screens::SEARCH].contains(&self.nav.top().id);
-        if self.playing.is_some() || !listing { return vec![]; }
+        let commanded = self.command_launch.take().is_some_and(|p| p == game.path);
+        if self.playing.is_some() || !(listing || commanded) { return vec![]; }
         let Some(change) = bios else { return self.launch(game, false) };
         self.ctx.resume = Some((game, change));
         self.go(|nav| Some(nav.push(ScreenState::new(screens::RESUME, None))))

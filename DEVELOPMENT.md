@@ -23,10 +23,11 @@
   - −/=: volume. P: power button.
   - H: plugs headphones into the jack, or unplugs them (simulated).
 - **On a device.** Specular can be run once in the foreground, with its output on your terminal. Or it can replace the installed one and be restarted. See the Crystaline OS development guide.
+- **Commands.** `specular cmd <command>` sends the running Specular a command: `play <path under roms/ or title>`, `quit`, `status`, `press <button> [hold ms]`, `help`. On a device, run it in an SSH shell. Its answer is printed; the exit status is 0 when done, 1 when refused, 2 when Specular can't be reached. On the desktop, both must see the same `$XDG_RUNTIME_DIR` (or `$SPECULAR_SOCKET`). See docs/commands.md.
 
 ## Seeing what it does
 
-- **Log.** Messages go to stderr, prefixed by area (`game:`, `sound:`, `transfer:`, `ssh:`, `art:`, `saves:`, `settings:`, `input:`, `install:`, `core:`, `cores:`, `fonts:`, `rumble:`, `effects:`, `ui:`, `power:`, `cpu:`, …). On a device they end up in the system log.
+- **Log.** Messages go to stderr, prefixed by area (`game:`, `commands:`, `sound:`, `transfer:`, `ssh:`, `art:`, `saves:`, `settings:`, `input:`, `install:`, `core:`, `cores:`, `fonts:`, `rumble:`, `effects:`, `ui:`, `power:`, `cpu:`, …). On a device they end up in the system log.
   - `fonts:` says at start-up which of the SD card's fonts are used, and why any aren't.
   - `input:` says at start-up which headphone jack device is followed, or that none was found; then each plug and unplug. `sound:` has each output switch and each level set (`sound: Headphones volume 10`, with `(muted)` while muted). The speaker's and the headphones' levels are set whenever they change or the sound is muted or unmuted, whichever plays, and not when the jack changes (the kernel switches between them); a Bluetooth output's is set as sound moves to it.
   - `rumble:` says at start-up which gamepad rumbles (`rumble: TRIMUI Player1 (/dev/input/event3)`), or that none offers it yet (it is looked for again when something next rumbles), or that the device has none; then a gamepad gone, and errors (each once, until another comes, or `rumble: working again`). `game: the core uses rumble` says the running core asked for it (mGBA asks once its game first rumbles). On the desktop, each change of the motors is printed (`simulated: rumble strong 65535 weak 65535`).

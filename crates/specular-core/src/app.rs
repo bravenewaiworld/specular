@@ -27,6 +27,7 @@ use crate::wireless::wifi::{WifiCmd, WifiEvent};
 
 mod about;
 mod card;
+mod command;
 mod cores;
 mod credits;
 mod icons;
@@ -531,6 +532,9 @@ pub struct App {
     /// why it was closed). Kept together so both go in one notice, as a second would replace the
     /// first.
     last_run: (Option<LastShutdown>, Option<(String, Option<String>)>),
+    /// The game a command last started (`Command::Play`): its autosave's check
+    /// (`Msg::AutosaveChecked`) starts it over whatever screen is showing, not only a list of games.
+    command_launch: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -584,6 +588,7 @@ impl App {
             asleep: false,
             rechecking_card: false,
             last_run: (None, None),
+            command_launch: None,
         }
     }
 

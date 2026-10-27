@@ -15,6 +15,20 @@ impl Button {
         use Button::*;
         matches!(self, Up | Down | Left | Right | L1 | R1 | L2 | R2 | VolUp | VolDown)
     }
+
+    /// Every button, with the name scripts and commands use for it.
+    pub const NAMES: &[(Button, &str)] = &[
+        (Button::Up, "up"), (Button::Down, "down"), (Button::Left, "left"), (Button::Right, "right"),
+        (Button::A, "a"), (Button::B, "b"), (Button::X, "x"), (Button::Y, "y"),
+        (Button::L1, "l1"), (Button::R1, "r1"), (Button::L2, "l2"), (Button::R2, "r2"),
+        (Button::Select, "select"), (Button::Start, "start"), (Button::Menu, "menu"), (Button::F1, "f1"), (Button::F2, "f2"),
+        (Button::VolUp, "volup"), (Button::VolDown, "voldown"), (Button::Power, "power"), (Button::Mute, "mute"),
+    ];
+
+    /// The button with this name (`NAMES`), in any case.
+    pub fn named(name: &str) -> Option<Button> {
+        Self::NAMES.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map(|&(b, _)| b)
+    }
 }
 
 /// A press or release, as a device reports it.

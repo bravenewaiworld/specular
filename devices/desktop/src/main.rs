@@ -2,7 +2,8 @@
 //! hardware, sound through ALSA, and the keyboard as the gamepad (see `specular_ui::run` for the
 //! keys). Games are paced by a timer (a desktop window can't wait for the display's refresh).
 //!
-//! Usage: specular [data folder, with roms/ and config/ (default ./sdcard)]
+//! Usage: specular [data folder, with roms/ and config/ (default ./sdcard)], or specular cmd
+//! <command> to send the running one a command (see docs/commands.md).
 //! Cores are looked for in `cores/` next to the binary, or in $SPECULAR_CORES. The SD card's
 //! state is read from the file $SPECULAR_CARD_STATE names, if set (format:
 //! `specular_core::card::Card::parse`), else from the scenario's `"card"`
@@ -73,6 +74,8 @@ fn simulated_mount_card(state: &Path, data: &Path) -> io::Result<()> {
 const CREDITS: &[specular_core::app::Credit] = include!(concat!(env!("OUT_DIR"), "/credits.rs"));
 
 fn main() -> Result<(), specular_ui::Error> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "cmd") { std::process::exit(specular_ui::send_command(&args[1..])); }
     // One window pixel per panel pixel, whatever the desktop's scaling.
     // SAFETY: before any other thread exists.
     unsafe { std::env::set_var("SLINT_SCALE_FACTOR", "1") };
