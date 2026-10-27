@@ -8,10 +8,15 @@ impl App {
     /// carry out. `Command::Press` is the UI's to carry out, as it takes time; here it is refused.
     pub fn command(&mut self, cmd: &Command) -> (Result<String, String>, Vec<Effect>) {
         match cmd {
-            Command::Play(what) => match self.play(what) {
-                Ok((title, effects)) => (Ok(format!("starting {title}")), effects),
-                Err(why) => (Err(why), vec![]),
-            },
+            Command::Play(what) => starting(self.play(|games| find_game(games, what))),
+            Command::PlayLast => {
+                let last = self.last_played.clone();
+                starting(self.play(|games| {
+                    let last = last.ok_or("no last game")?;
+                    games.iter().find(|g| g.system == last.system && g.path == last.path)
+                        .ok_or_else(|| format!("{} isn't on the card any more", last.path.display()))
+                }))
+            }
             Command::Quit => {
                 if self.asleep { return (Err("the device is asleep".into()), vec![]); }
                 let Some(title) = self.playing.as_ref().map(|g| g.title.clone()) else { return (Err("no game is playing".into()), vec![]) };
@@ -27,15 +32,15 @@ impl App {
         }
     }
 
-    /// Starts the game `what` names (`find_game`) over whatever screen is showing: its title, and
-    /// the effects. Refused while asleep, while a game plays, while the installer works, or
+    /// Starts the game `pick` chooses from the library over whatever screen is showing: its title,
+    /// and the effects. Refused while asleep, while a game plays, while the installer works, or
     /// without the card.
-    fn play(&mut self, what: &str) -> Result<(String, Vec<Effect>), String> {
+    fn play(&mut self, pick: impl FnOnce(&[Game]) -> Result<&Game, String>) -> Result<(String, Vec<Effect>), String> {
         if self.asleep { return Err("the device is asleep".into()); }
         if self.task_running() { return Err(self.task_wait_notice()); }
         if let Some(game) = &self.playing { return Err(format!("{} is playing; quit it first", game.title)); }
         if !self.ctx.card_in() { return Err("the SD card isn't in".into()); }
-        let game = find_game(&self.ctx.games, what)?.clone();
+        let game = pick(&self.ctx.games)?.clone();
         let (title, path) = (game.title.clone(), game.path.clone());
         let effects = self.launch_or_check(game);
         if matches!(effects[..], [Effect::CheckAutosave(_)]) { self.command_launch = Some(path); }
@@ -51,6 +56,14 @@ impl App {
             "playing": self.playing.as_ref().map(|g| g.path.to_string_lossy()),
             "asleep": self.asleep,
         })
+    }
+}
+
+/// `play`'s outcome as a command's answer.
+fn starting(played: Result<(String, Vec<Effect>), String>) -> (Result<String, String>, Vec<Effect>) {
+    match played {
+        Ok((title, effects)) => (Ok(format!("starting {title}")), effects),
+        Err(why) => (Err(why), vec![]),
     }
 }
 

@@ -84,9 +84,9 @@ Completed:
  - "No games" shown when there are none
  - Search: from Home, or X in any game list, across every system, best matches first; case, accents and punctuation ignored
  - A letter index: L2/R2 jump between first letters in game lists and grids, with the letter shown large for a moment
+ - Commands from outside Specular for development and scripts: `specular cmd play|play-last|quit|status|press|help` over a local socket (checked on the desktop and the Miyoo Mini Plus)
 
 TODO:
- - Commands from outside Specular for development and scripts: `specular cmd play|quit|status|press|help` over a local socket (built; checked on the desktop; left: checking on a device, and a command to play the last game)
  - The SD card followed as the system reports it (`/run/card/state`): its message shown in place of the library while it is out, being checked or unusable, above it while read-only, and once after a repair; the library, the settings and the cores read afresh when a card comes; nothing written to a card that can't take it; a game whose card goes paused until that card is back, then saved (built; to check on the Brick, see DEVELOPMENT.md)
 ### Installer
 

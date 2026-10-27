@@ -16,7 +16,7 @@ Controlling a running Specular from outside it, for development, tests and scrip
 
 ```rust
 // specular_core::command
-pub enum Command { Play(String), Quit, Status, Press(Button, Duration), Help }
+pub enum Command { Play(String), PlayLast, Quit, Status, Press(Button, Duration), Help }
 impl FromStr for Command { type Err = String; }   // Err: why the line isn't a command
 
 // specular_core::app
@@ -29,6 +29,7 @@ impl App {
 | Command | Does |
 |---|---|
 | `play <path under roms/ \| title>` | Starts the game; a title must name only one game (in any case). Refused while a game plays, while asleep, while the installer works, or without the card |
+| `play-last` | Starts again the game most recently started since Specular started (from a list, by command, or reopened at start-up); refused as `play` is |
 | `quit` | Quits the running game, writing its saves, and closes its menu if open |
 | `status` | `{"screen": "games", "params": "gba", "playing": "gba/Golden Sun.gba", "asleep": false}` |
 | `press <button> [hold ms]` | Presses a button (by `Button::NAMES`: `a`, `down`, `menu`, `power`, …), released after the hold (default 50 ms, at most 10 s); answered after the release |

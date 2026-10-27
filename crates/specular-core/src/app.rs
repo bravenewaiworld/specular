@@ -535,6 +535,8 @@ pub struct App {
     /// The game a command last started (`Command::Play`): its autosave's check
     /// (`Msg::AutosaveChecked`) starts it over whatever screen is showing, not only a list of games.
     command_launch: Option<std::path::PathBuf>,
+    /// The game most recently started this run, kept after it ends (`Command::PlayLast`).
+    last_played: Option<Game>,
 }
 
 impl App {
@@ -589,6 +591,7 @@ impl App {
             rechecking_card: false,
             last_run: (None, None),
             command_launch: None,
+            last_played: None,
         }
     }
 
@@ -1079,6 +1082,7 @@ impl App {
     /// Starts `game` (`Effect::Launch`, or `LaunchAfresh` if `afresh`).
     fn launch(&mut self, game: Game, afresh: bool) -> Vec<Effect> {
         self.playing = Some(game.clone());
+        self.last_played = Some(game.clone());
         self.ctx.discs = Discs::default();
         self.ctx.saved_state = None;
         self.repeater.reset();

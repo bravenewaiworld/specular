@@ -11,6 +11,8 @@ use crate::input::Button;
 pub enum Command {
     /// Start a game: by its path under roms/, or by its title if only one game has it.
     Play(String),
+    /// Start again the game most recently started this run (by any means, also at start-up).
+    PlayLast,
     /// Quit the running game, writing its saves.
     Quit,
     /// What is showing and playing, as JSON.
@@ -22,7 +24,7 @@ pub enum Command {
 }
 
 /// `help`'s reply: each command and what it does.
-pub const HELP: &str = "commands: play <path under roms/ | title> · quit (the running game, saving it) · \
+pub const HELP: &str = "commands: play <path under roms/ | title> · play-last · quit (the running game, saving it) · \
 status (JSON) · press <button> [hold ms, default 50] · help";
 
 /// The longest hold `press` accepts.
@@ -38,12 +40,13 @@ impl std::str::FromStr for Command {
         match (word, rest) {
             ("play", "") => Err("play what? A path under roms/, or a title".into()),
             ("play", what) => Ok(Command::Play(what.into())),
+            ("play-last", "") => Ok(Command::PlayLast),
             ("quit", "") => Ok(Command::Quit),
             ("status", "") => Ok(Command::Status),
             ("press", args) => press(args),
             ("help", "") => Ok(Command::Help),
             ("", _) => Err("no command; try help".into()),
-            ("quit" | "status" | "help", _) => Err(format!("{word} takes nothing after it")),
+            ("play-last" | "quit" | "status" | "help", _) => Err(format!("{word} takes nothing after it")),
             _ => Err(format!("unknown command {word:?}; try help")),
         }
     }
@@ -75,6 +78,7 @@ mod tests {
     #[test]
     fn lines_parse_into_commands() {
         assert_eq!(parse("  play gba/Golden Sun (USA).gba "), Ok(Command::Play("gba/Golden Sun (USA).gba".into())));
+        assert_eq!(parse("play-last"), Ok(Command::PlayLast));
         assert_eq!(parse("quit"), Ok(Command::Quit));
         assert_eq!(parse("status\n"), Ok(Command::Status));
         assert_eq!(parse("press A"), Ok(Command::Press(Button::A, Duration::from_millis(50))));

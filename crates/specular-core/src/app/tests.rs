@@ -2189,7 +2189,7 @@ mod commands {
         assert_eq!(e[0], Effect::Launch(game("gba", "Mother 3")));
         assert_eq!(a.input_target(), InputTarget::Game);
         assert_eq!(run(&mut a, "play Super Metroid").0, Err("Mother 3 is playing; quit it first".into()));
-        run(&mut a, "quit");
+        let _ = run(&mut a, "quit");
         assert_eq!(run(&mut a, "play super metroid").0, Ok("starting Super Metroid".into()));
     }
 
@@ -2213,13 +2213,27 @@ mod commands {
     }
 
     #[test]
+    fn play_last_starts_the_last_game_started_again() {
+        let mut a = app();
+        assert_eq!(run(&mut a, "play-last").0, Err("no last game".into()));
+        tap(&mut a, Button::A, 0);
+        tap(&mut a, Button::A, 10); // Golden Sun, from its list
+        assert_eq!(run(&mut a, "play-last").0, Err("Golden Sun is playing; quit it first".into()));
+        let _ = run(&mut a, "quit");
+        assert_eq!(run(&mut a, "play-last").0, Ok("starting Golden Sun".into()));
+        let _ = run(&mut a, "quit");
+        a.handle(Msg::Library(vec![game("gba", "Mother 3")]));
+        assert_eq!(run(&mut a, "play-last").0, Err("gba/Golden Sun.rom isn't on the card any more".into()));
+    }
+
+    #[test]
     fn quit_ends_the_game_and_closes_its_menu() {
         let mut a = app();
         assert_eq!(run(&mut a, "quit").0, Err("no game is playing".into()));
-        run(&mut a, "play Golden Sun");
+        let _ = run(&mut a, "play Golden Sun");
         assert_eq!(run(&mut a, "quit"), (Ok("quitting Golden Sun".into()), vec![Effect::QuitGame, Effect::Redraw(None)]));
         assert_eq!(a.playing(), None);
-        run(&mut a, "play Golden Sun");
+        let _ = run(&mut a, "play Golden Sun");
         tap(&mut a, Button::Menu, 0);
         let (_, e) = run(&mut a, "quit");
         assert_eq!(e[0], Effect::QuitGame);
@@ -2233,7 +2247,7 @@ mod commands {
         let status = |a: &mut App| serde_json::from_str::<serde_json::Value>(&a.command(&Command::Status).0.unwrap()).unwrap();
         assert_eq!(status(&mut a), json!({"screen": "home", "params": null, "playing": null, "asleep": false}));
         tap(&mut a, Button::A, 0);
-        run(&mut a, "play Golden Sun");
+        let _ = run(&mut a, "play Golden Sun");
         assert_eq!(status(&mut a), json!({"screen": "games", "params": "gba", "playing": "gba/Golden Sun.rom", "asleep": false}));
     }
 }
