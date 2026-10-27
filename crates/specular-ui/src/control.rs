@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use specular_core::command::{Command, MAX_HOLD};
 
-/// Where a command's answer goes: Ok (with text, or none) or Err (why it failed).
+/// Where a command's answer goes: Ok (its text; empty is answered as a bare `ok`) or Err (why it
+/// failed).
 pub type Reply = mpsc::Sender<Result<String, String>>;
 
 /// How long a command may take to be answered, beyond a press's hold. The UI thread answers at
@@ -36,17 +37,18 @@ pub fn listen(carry_out: impl Fn(Command, Reply) + Send + Sync + Copy + 'static)
         eprintln!("commands: another Specular is taking commands at {}; this one won't", path.display());
         return;
     }
-    // A socket left by an earlier run that ended without removing it.
-    let _ = std::fs::remove_file(&path);
-    let listener = match UnixListener::bind(&path) {
+    // Only the user Specular runs as (root, on a device) may send commands: the socket is made
+    // private under another name, then moved into place (replacing one an earlier run left), so
+    // it is never reachable before it is private.
+    let new = path.with_extension("new");
+    let _ = std::fs::remove_file(&new);
+    let listener = UnixListener::bind(&new)
+        .and_then(|l| std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o600)).map(|()| l))
+        .and_then(|l| std::fs::rename(&new, &path).map(|()| l));
+    let listener = match listener {
         Ok(l) => l,
-        Err(e) => { eprintln!("commands: can't listen at {}: {e}", path.display()); return; }
+        Err(e) => { let _ = std::fs::remove_file(&new); eprintln!("commands: can't listen at {}: {e}", path.display()); return; }
     };
-    // Only the user Specular runs as (root, on a device) may send commands.
-    if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
-        eprintln!("commands: can't make {} private, so not listening: {e}", path.display());
-        return;
-    }
     eprintln!("commands: listening at {}", path.display());
     std::thread::spawn(move || for conn in listener.incoming() {
         match conn {
@@ -84,12 +86,13 @@ fn serve(conn: UnixStream, carry_out: impl Fn(Command, Reply)) {
 }
 
 /// `specular cmd <words>`: sends the words as one command to the running Specular and prints its
-/// answer: on stdout if it was done (exit status 0), else on stderr (1). 2: Specular couldn't be
-/// reached, or didn't answer.
+/// answer. Exit status: 0 done (the answer on stdout), 1 refused (why, on stderr), 2 Specular
+/// couldn't be reached or didn't answer.
 pub fn send(words: &[String]) -> i32 {
     let path = socket_path();
     let answer = UnixStream::connect(&path).and_then(|mut conn| {
-        // A press is answered when its button is released.
+        // Longer than the server waits for the UI (`ANSWER_TIME` and a press's hold), so its own
+        // answer saying it gave up comes first.
         conn.set_read_timeout(Some(ANSWER_TIME * 2 + MAX_HOLD))?;
         writeln!(conn, "{}", words.join(" "))?;
         let mut answer = String::new();

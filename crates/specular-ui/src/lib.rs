@@ -997,7 +997,7 @@ impl Runner {
     }
 
     /// Carries out a command from the command socket, then answers `reply`. A press is answered
-    /// once the button has been released.
+    /// as its release is posted, so a command sent after the answer comes after the release.
     fn command(self: &Rc<Self>, cmd: Command, reply: control::Reply) {
         if let Command::Press(button, hold) = cmd {
             self.handle(Msg::Button(ButtonEvent { button, pressed: true, time: now() }));
@@ -1012,9 +1012,10 @@ impl Runner {
         if let Some(a) = answer { let _ = reply.send(a); }
     }
 
-    /// Has the app take something in (`f`, given the app, returns its effects; `tick`: it is a
-    /// `Msg::Tick`), carries out the effects and re-arms the timers for the app's deadlines.
-    /// `needs_clock`: the app's clock has to catch up afterwards.
+    /// Has the app take something in (`f`, given the app, returns its effects), carries out the
+    /// effects and re-arms the timers for the app's deadlines. `tick`: `f` handles a `Msg::Tick`
+    /// (whose presses, while a button is held, repeat). `needs_clock`: the app's clock has to
+    /// catch up afterwards.
     fn update(self: &Rc<Self>, f: impl FnOnce(&mut App) -> Vec<Effect>, tick: bool, needs_clock: bool) {
         // The window can be resized (on a desktop), changing how many columns a grid has.
         if let Some(w) = self.window.upgrade() { self.app.borrow_mut().set_grid_columns(list::grid_columns(w.get_grid_width())); }

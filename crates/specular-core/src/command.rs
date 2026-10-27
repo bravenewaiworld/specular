@@ -1,6 +1,6 @@
 //! Commands to a running Specular from outside it, for development, tests and scripts: one line of
-//! words in, one line back (see docs/commands.md). The UI carries them out (`App::command`, and
-//! `Press` itself, as it takes time).
+//! words in, one line back (see docs/commands.md). `App::command` carries out all but `Press`,
+//! which the UI does, as it waits for the release.
 
 use std::time::Duration;
 
@@ -15,8 +15,9 @@ pub enum Command {
     Quit,
     /// What is showing and playing, as JSON.
     Status,
-    /// Press a button, releasing it after this long.
+    /// Press a button, releasing it after this long (50 ms if not given, at most `MAX_HOLD`).
     Press(Button, Duration),
+    /// The commands, as `HELP`.
     Help,
 }
 
@@ -24,7 +25,7 @@ pub enum Command {
 pub const HELP: &str = "commands: play <path under roms/ | title> · quit (the running game, saving it) · \
 status (JSON) · press <button> [hold ms, default 50] · help";
 
-/// The longest `press` holds a button.
+/// The longest hold `press` accepts.
 pub const MAX_HOLD: Duration = Duration::from_secs(10);
 
 impl std::str::FromStr for Command {

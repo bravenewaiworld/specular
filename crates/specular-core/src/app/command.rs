@@ -13,6 +13,7 @@ impl App {
                 Err(why) => (Err(why), vec![]),
             },
             Command::Quit => {
+                if self.asleep { return (Err("the device is asleep".into()), vec![]); }
                 let Some(title) = self.playing.as_ref().map(|g| g.title.clone()) else { return (Err("no game is playing".into()), vec![]) };
                 let mut effects: Vec<Effect> = self.end_game().into_iter().collect();
                 // Closing the game menu redraws; with none open, the game's picture still has to go.
@@ -35,8 +36,10 @@ impl App {
         if let Some(game) = &self.playing { return Err(format!("{} is playing; quit it first", game.title)); }
         if !self.ctx.card_in() { return Err("the SD card isn't in".into()); }
         let game = find_game(&self.ctx.games, what)?.clone();
-        self.command_launch = Some(game.path.clone());
-        Ok((game.title.clone(), self.launch_or_check(game)))
+        let (title, path) = (game.title.clone(), game.path.clone());
+        let effects = self.launch_or_check(game);
+        if matches!(effects[..], [Effect::CheckAutosave(_)]) { self.command_launch = Some(path); }
+        Ok((title, effects))
     }
 
     /// The screen showing (its id and params), the game playing (its path under roms/) and
