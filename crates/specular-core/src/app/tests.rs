@@ -2222,7 +2222,12 @@ mod commands {
         let _ = run(&mut a, "quit");
         assert_eq!(run(&mut a, "play-last").0, Ok("starting Golden Sun".into()));
         let _ = run(&mut a, "quit");
-        a.handle(Msg::LastPlayed(Some("snes/Super Metroid.rom".into()))); // a card read afresh
+        // A card read afresh whose record is older (the write failed): this run's game stays.
+        a.handle(Msg::LastPlayed(Some("snes/Super Metroid.rom".into())));
+        assert_eq!(run(&mut a, "play-last").0, Ok("starting Golden Sun".into()));
+        let _ = run(&mut a, "quit");
+        let mut a = app();
+        a.handle(Msg::LastPlayed(Some("snes/Super Metroid.rom".into()))); // at start-up
         assert_eq!(run(&mut a, "play-last").0, Ok("starting Super Metroid".into()));
         let _ = run(&mut a, "quit");
         a.handle(Msg::Library(vec![game("gba", "Mother 3")]));

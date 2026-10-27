@@ -96,7 +96,8 @@ pub enum Msg {
     GameStopped(String),
     /// At start-up: the game last played didn't end (its launch record was left behind).
     LastGameStopped(crate::launch::LaunchRecord),
-    /// The card's record of the game last started (`launch::last_game`), as the card is read.
+    /// The card's record of the game last started (`launch::last_game`), as the card is read. Used
+    /// only until a game starts.
     LastPlayed(Option<std::path::PathBuf>),
     /// At start-up: the device's last run didn't end with an orderly power-off or restart, and
     /// why, as its system recorded it (`device::Power::last_shutdown`).
@@ -933,7 +934,8 @@ impl App {
                 let end = if self.ctx.card_writable() && !waiting { Effect::QuitGame } else { Effect::AbandonGame };
                 vec![end, Effect::Notice(format!("The game stopped. {why}")), Effect::Redraw(None)]
             }
-            Msg::LastPlayed(game) => { self.last_played = game; vec![] }
+            // A game started this run wins: its record may not have reached the card (read-only).
+            Msg::LastPlayed(game) => { if self.last_played.is_none() { self.last_played = game; } vec![] }
             Msg::LastGameStopped(r) => {
                 let title = crate::library::display_title(r.game.file_stem().unwrap_or_default().to_str().unwrap_or_default());
                 self.last_run.1 = Some((title, r.reason));
