@@ -66,6 +66,13 @@ impl Sound {
     /// first fills it with silence, as after an underrun.
     pub fn set_out(&mut self, out: Option<Box<dyn SoundOut>>) { self.out = out; }
 
+    /// Takes samples made at `sample_rate` from now on (a native core says its rate only once
+    /// its sound starts).
+    pub fn set_rate(&mut self, sample_rate: f64) {
+        self.in_rate = sample_rate;
+        self.resampler = Resampler::default();
+    }
+
     /// Queues one frame's samples. Returns how much sound was queued before them (None without
     /// an output).
     pub fn play(&mut self, samples: &[[i16; 2]]) -> Option<std::time::Duration> {

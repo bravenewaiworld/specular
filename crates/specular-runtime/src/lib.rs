@@ -14,6 +14,7 @@ mod core;
 mod cpu;
 mod discs;
 mod frontend;
+pub mod native;
 mod log;
 mod options;
 mod sound;
