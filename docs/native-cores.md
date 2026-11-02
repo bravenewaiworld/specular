@@ -57,7 +57,7 @@ Shared memory (`SpnShared`): the buttons and their change time (a sequence lock)
 
 ### In the UI
 
-`specular_ui::game::GameSession` is a libretro or a native session; the menu, quitting, sleep and the sound outputs work the same for both. A native game starts paused; once the launch splash has had its time it is resumed, unless its menu is open. Resuming sets `specular_core::device::SCREEN_LENT`, which stops the device's platform drawing (the Brick's draws two frames once it is cleared: the first can tear); pausing takes the picture the core hands back and draws the menu over it. While a native core runs, the CPU's minimum is its top step (default when paused). What it doesn't have says so: save states ("Save states aren't supported for these games yet"), disc changes, reset, core options.
+`specular_ui::game::GameSession` is a libretro or a native session; the menu, quitting, sleep and the sound outputs work the same for both. A native game starts paused; once the launch splash has had its time it is resumed, unless its menu is open. Resuming sets `specular_core::device::SCREEN_LENT`, which stops the device's platform drawing (the Brick's draws two frames once it is cleared: the first can tear); pausing takes the picture the core hands back and draws the menu over it. While a native core runs, the CPU's minimum is its top step (default when paused). Its game menu has no states and no restart: a note says states aren't supported yet, and quitting keeps only what the game saved itself. Its paused picture is stretched to the whole screen, as the core draws it while running, whatever the Scaling setting says.
 
 Failures: a package that isn't one, or is for another core, is refused before the core starts; what a core says as it fails (`SPN_ERROR`, before or after starting) is told to the player as said; a core that ends unasked ends the game ("The game stopped. It closed unexpectedly."). The watchdog ends a core that presents nothing for `STUCK_LIMIT` while it has the screen, and the game with it ("It stopped responding."); Specular carries on, unlike with a stuck libretro core, which takes Specular down with it.
 
@@ -74,7 +74,11 @@ Failures: a package that isn't one, or is for another core, is refused before th
 
 - (2026-11-02, device) F-Zero GX as a native core on the Brick, driven by `examples/native_drive.rs` (no UI; `fb0` at 1024x768): 226–425 ms from launch to STARTED; RESUMED within 1.2 ms, the game's first flip 88 ms after the first resume and 4 ms after later ones; 1199 frames in 20 s; PAUSED in 47–50 ms, after which the screen doesn't change until the next resume; the paused picture 640x448 and correct; quit in 142 ms, exit status 0; the memory card and pipeline cache made in the folders Specular gave. Source: the Brick.
 
+- (2026-11-02, device) F-Zero GX, Animal Crossing and Melee, each converted from its .rvz, played through Specular's UI on the Brick with real button input: launch 2.5–3.1 s from A to the game starting the first time (taking the program out of the package included), 0.65 s after; the splash then holds until the game's first picture (~4 s after A for F-Zero GX, ~7 s for Animal Crossing: their own boot). The menu's paused picture shows without tearing; quitting stops the core in ~8 ms; a core killed with SIGKILL is reported within 55–180 ms and Specular carries on. Noting the game as played reads the whole package the first time (a CRC-32 of ~1.5 GB, ~20 s from the card), so it is done after the start. Source: the Brick.
+
 ## Open questions
+
+- Tesseract's programs need a Vulkan loader (`libvulkan.so.1`) and the PowerVR ICD, which the Brick's system doesn't have: a launch without them fails ("libvulkan.so.1: cannot open shared object file"). Either Crystaline OS ships them or each package carries them.
 
 - Save states: Tesseract's runtime has none yet (guest RAM, ARAM, the guest threads, the hardware's and the GPU's state).
 - Launch records: a native game leaves none (Specular survives a stuck or crashed core, so there is nothing to report after a restart).

@@ -1339,6 +1339,7 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("There's no emulator for {} games.", system.map_or(game.system, |s| s.name)))) };
+        if let Some(w) = self.window.upgrade() { w.set_native_game(core.native); }
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
         let (rom, bios_dir) = (self.data.roms().join(&game.path), self.data.bios());
         if let Err(why) = core.check_bios(&rom, extensions, &bios_dir) { return self.started(launch, Err(why)); }

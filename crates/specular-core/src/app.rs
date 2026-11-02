@@ -335,6 +335,9 @@ pub struct Ctx {
     pub fonts_turned_away: Vec<library::user_cores::TurnedAway>,
     /// The running game's discs (`Msg::Discs`); none until its core says.
     pub discs: Discs,
+    /// Whether the game launched last is played by a native core (`CoreDecl::native`): its menu
+    /// has no states and no restart.
+    pub native_game: bool,
     /// The running game's save state (`Msg::SavedState`); None until the UI says.
     pub saved_state: Option<SavedState>,
     /// The game `screens::RESUME` asks about, and how its autosave's BIOS differs.
@@ -562,7 +565,7 @@ impl App {
             ctx: Ctx { systems, games: Vec::new(), scanned: false, card: None, card_note: false, settings: Settings::new(settings), battery: None,
                        wifi: None, bluetooth: None, install: None, transfer: None, ssh: None, credits: Credits::default(), turned_away: Vec::new(),
                        left_out: LeftOut::default(), settings_unsaved: None, fonts_turned_away: Vec::new(),
-                       discs: Discs::default(), saved_state: None, resume: None, time_zone: None },
+                       discs: Discs::default(), native_game: false, saved_state: None, resume: None, time_zone: None },
             screens,
             nav: NavStack::new(ScreenState::new(screens::HOME, None)),
             repeater: Repeater::default(),
@@ -1074,6 +1077,7 @@ impl App {
     /// Starts `game` (`Effect::Launch`, or `LaunchAfresh` if `afresh`).
     fn launch(&mut self, game: Game, afresh: bool) -> Vec<Effect> {
         self.playing = Some(game.clone());
+        self.ctx.native_game = self.playing_core().is_some_and(|c| c.native);
         self.ctx.discs = Discs::default();
         self.ctx.saved_state = None;
         self.repeater.reset();
@@ -1178,6 +1182,10 @@ impl App {
                 let to = current.map_or(if back { count - 1 } else { 0 }, |c| (c + if back { count - 1 } else { 1 }) % count);
                 vec![Effect::ChangeDisc(to), Effect::PauseGame(false)]
             }
+            // Said here, with the menu still up: resuming would give the screen back to the core
+            // at once, and the toast would never be seen.
+            (Button::A, Some("save" | "load")) if self.playing_core().is_some_and(|c| c.native) =>
+                return vec![Effect::Notice(format!("{}.", library::NATIVE_HAS_NO_STATES))],
             (Button::A, Some("save")) if !self.ctx.card_writable() => return vec![Effect::Notice("The SD card is read-only: the state can't be saved".into())],
             (Button::A, Some("save")) => vec![Effect::SaveState, Effect::PauseGame(false)],
             // Both lose play, so they ask first (`game_confirm`); with no state, there is none to load.
@@ -1541,6 +1549,18 @@ struct GameMenu;
 impl Screen for GameMenu {
     fn view(&self, ctx: &Ctx, _: &ScreenState) -> ScreenView {
         let mut rows = vec![action("resume", "Resume")];
+        // A native core's game has only its own saves (its memory card), which it writes itself.
+        if ctx.native_game {
+            let quit = if ctx.card_writable() { "Quitting ends the game: what you saved in the game itself is kept." }
+                       else { "The SD card is read-only: nothing from this session is saved." };
+            rows.extend([Row::note("note:state", format!("{}.", library::NATIVE_HAS_NO_STATES)),
+                         action("settings", "Game settings"), action("quit", "Quit game"), Row::note("note:quit", quit)]);
+            return ScreenView {
+                title: "Paused".into(), layout: Layout::List, rows,
+                hints: vec![(Button::B, "Resume".into()), (Button::A, "Select".into())],
+                entry: None,
+            };
+        }
         rows.extend(disc_row(ctx.discs));
         // Quitting writes the autosave the game resumes from at its next start (unless the card
         // can't be written).

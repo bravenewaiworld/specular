@@ -94,6 +94,9 @@ pub struct CoreDecl {
     pub native: bool,
 }
 
+/// What the player is told when they ask a native core for a save state, which none supports yet.
+pub const NATIVE_HAS_NO_STATES: &str = "Save states aren't supported for these games yet";
+
 /// When a core's games are autosaved during play (`LaunchSpec::autosave_when` in
 /// specular-runtime). Either way it is written when play stops: as the game menu opens
 /// (`Session::autosave`), on sleep (`Session::flush`) and on quitting.

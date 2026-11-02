@@ -51,8 +51,7 @@ pub enum GameSession {
     Native(NativeSession),
 }
 
-/// What the player is told when a native core can't do something it has no support for.
-pub const NATIVE_HAS_NO_STATES: &str = "Save states aren't supported for these games yet";
+pub use specular_core::library::NATIVE_HAS_NO_STATES;
 
 impl GameSession {
     /// Calls `stuck` if the game makes no progress for `limit` while it runs (`Session::watch`,
@@ -283,9 +282,12 @@ impl Playing {
         let (roms, all_saves, played, device, sounds) = (data.roms(), data.saves(), game.clone(), r.device.clone(), r.sounds.clone());
         // The app is told the game stopped, unless another ROM is playing by the time the UI
         // thread has this.
-        let (rom, stuck_seen) = (game.path.clone(), stuck.clone());
+        let (rom, stuck_seen, stop_hardware) = (game.path.clone(), stuck.clone(), hardware.clone());
         let on_stop = Box::new(move |said: Option<String>| {
             SCREEN_LENT.store(false, Relaxed);
+            // A core that ends while running never pauses, which is where the CPU's minimum
+            // otherwise goes back to the system's default.
+            let _ = stop_hardware.send(crate::HwCmd::CpuMin(None));
             let why = if stuck_seen.load(Relaxed) { "It stopped responding.".to_owned() } else { said.map_or("It closed unexpectedly.".into(), |s| sentence(&s)) };
             crate::on_ui(move |r| {
                 r.game_frame(); // Specular has the screen again
@@ -303,7 +305,6 @@ impl Playing {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
-            if let Err(e) = specular_core::library::saves::note_played(&roms, &all_saves, &played) { eprintln!("saves: {e}"); }
             let unpacked = native::package::manifest(&package).and_then(|m| {
                 if m.core != core.library { return Err(format!("{}: a package for {}, not {}", package.display(), m.core, core.library)); }
                 native::package::unpack_program(&package, &m, &cache)
@@ -329,6 +330,9 @@ impl Playing {
                 session: GameSession::Native(n), frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0),
                 native_cpu: Some((top, set)), stuck,
             }));
+            // After the start: the first time, this reads the whole package (a disc image, ~1.5 GB:
+            // about 20 s from the Brick's card), which held the launch up when it came first.
+            if let Err(e) = specular_core::library::saves::note_played(&roms, &all_saves, &played) { eprintln!("saves: {e}"); }
         });
     }
 }

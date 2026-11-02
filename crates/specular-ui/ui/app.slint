@@ -381,6 +381,10 @@ export component AppWindow inherits Window {
     in property <bool> game-menu;
     in property <image> game-frame;
     in property <string> scaling: "integer";
+    // Whether a native core plays the game: it fills the screen itself while it runs, so its
+    // paused picture is stretched to match, whatever `scaling` says.
+    in property <bool> native-game;
+    property <string> scale-mode: root.native-game ? "stretch" : root.scaling;
     // The game's picture size in pixels until its first frame arrives (its system's screen).
     in property <int> game-width;
     in property <int> game-height;
@@ -388,10 +392,10 @@ export component AppWindow inherits Window {
     property <length> frame-width: (root.has-frame ? root.game-frame.width : root.game-width) * 1px;
     property <length> frame-height: (root.has-frame ? root.game-frame.height : root.game-height) * 1px;
     property <float> fit: min(root.width / max(1px, root.frame-width), root.height / max(1px, root.frame-height));
-    property <float> zoom: root.scaling == "integer" ? max(1, floor(root.fit)) : root.fit;
+    property <float> zoom: root.scale-mode == "integer" ? max(1, floor(root.fit)) : root.fit;
     // Where the game's picture is.
-    property <length> game-w: root.scaling == "stretch" ? root.width : root.frame-width * root.zoom;
-    property <length> game-h: root.scaling == "stretch" ? root.height : root.frame-height * root.zoom;
+    property <length> game-w: root.scale-mode == "stretch" ? root.width : root.frame-width * root.zoom;
+    property <length> game-h: root.scale-mode == "stretch" ? root.height : root.frame-height * root.zoom;
     property <length> game-x: (root.width - root.game-w) / 2;
     property <length> game-y: (root.height - root.game-h) / 2;
 
