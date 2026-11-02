@@ -16,14 +16,14 @@ fn every_core_built_has_an_option_list_and_every_list_a_core() {
     listed.sort();
     assert_eq!(built, listed, "each core tools/build-cores.sh builds needs data/cores/<core>.json, which `make cores` writes");
     // and Specular's own cores are the ones built, each with its list
-    let mut ours: Vec<&str> = cores(&builtin_systems()).iter().map(|c| c.id()).collect();
+    let mut ours: Vec<&str> = cores(&builtin_systems()).iter().filter(|c| !c.native).map(|c| c.id()).collect();
     ours.sort();
     assert_eq!(ours, built);
 }
 
 #[test]
 fn specular_defaults_are_values_the_cores_list() {
-    for c in cores(&builtin_systems()) {
+    for c in cores(&builtin_systems()).into_iter().filter(|c| !c.native) {
         assert!(!decls(c).is_empty(), "{}", c.id());
         for (key, value) in c.defaults {
             let o = list(c).option(key).unwrap_or_else(|| panic!("{} has no option {key}", c.name));

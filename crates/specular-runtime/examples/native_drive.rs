@@ -29,7 +29,7 @@ fn main() {
         sound: None, frames: frames.clone(),
         on_save: Box::new(|| eprintln!("drive: the game saved")),
         on_rumble: Box::new(|_| {}),
-        on_stop: Box::new(|why| { eprintln!("drive: the core stopped: {why}"); std::process::exit(1) }),
+        on_stop: Box::new(|why| { eprintln!("drive: the core stopped: {}", why.unwrap_or_default()); std::process::exit(1) }),
     };
     let t = Instant::now();
     let mut s = NativeSession::start(launch, out).unwrap_or_else(|e| { eprintln!("drive: start: {e}"); std::process::exit(1) });

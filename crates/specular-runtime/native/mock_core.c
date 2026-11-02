@@ -6,7 +6,8 @@
 //   - Paused, its frame is width x height pixels of (buttons, frames presented % 256, 0, 255).
 //   - A state is a file holding the frames presented; loading one sets that count.
 //   - On quit, writes "quit" to SAVES/quit.txt and sends SPN_SAVED first.
-//   - With MOCK_FAIL=resume, says SPN_ERROR "the disc can't be read" on the first resume and exits.
+//   - With MOCK_FAIL=resume, says SPN_ERROR "the disc can't be read" on the first resume and exits;
+//     with MOCK_FAIL=start, says it instead of SPN_STARTED.
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdio.h>
@@ -45,6 +46,10 @@ int main(int argc, char **argv) {
   char error[256];
   if (!spn_connect(&g_client, atoi(argv[2]), "Mock", "1.0", error, sizeof error)) {
     fprintf(stderr, "mock: %s\n", error);
+    return 1;
+  }
+  if (getenv("MOCK_FAIL") && !strcmp(getenv("MOCK_FAIL"), "start")) {
+    spn_send(&g_client, SPN_ERROR, 0, 0, "the disc can't be read");
     return 1;
   }
   spn_sound_rate(&g_client, 32000);

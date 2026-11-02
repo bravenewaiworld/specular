@@ -20,7 +20,7 @@ fn mock_core() -> PathBuf {
     }).clone()
 }
 
-struct Harness { dir: tempfile::TempDir, frames: Arc<FrameSlot>, saved: mpsc::Receiver<()>, stopped: mpsc::Receiver<String>, played: Arc<Mutex<Vec<[i16; 2]>>> }
+struct Harness { dir: tempfile::TempDir, frames: Arc<FrameSlot>, saved: mpsc::Receiver<()>, stopped: mpsc::Receiver<Option<String>>, played: Arc<Mutex<Vec<[i16; 2]>>> }
 
 struct Out(Arc<Mutex<Vec<[i16; 2]>>>);
 impl SoundOut for Out {
@@ -77,7 +77,7 @@ fn the_layout_matches_the_header() {
 
 #[test]
 fn a_game_starts_paused_runs_pauses_and_quits() {
-    let (mut s, h) = start(None);
+    let (s, h) = start(None);
     assert_eq!(s.info(), &NativeInfo { name: "Mock".into(), version: "1.0".into(), width: 320, height: 240, fps: 60.0 });
     assert_eq!(s.frames(), 0, "nothing is presented before resume");
     s.set_buttons(button_bit(Button::A).unwrap() | button_bit(Button::Start).unwrap());
@@ -103,7 +103,7 @@ fn a_game_starts_paused_runs_pauses_and_quits() {
 
 #[test]
 fn states_save_and_load_while_paused() {
-    let (mut s, h) = start(None);
+    let (s, h) = start(None);
     s.resume().unwrap();
     std::thread::sleep(Duration::from_millis(100));
     let state = h.dir.path().join("a.state");
@@ -119,9 +119,9 @@ fn states_save_and_load_while_paused() {
 
 #[test]
 fn a_core_that_fails_says_why() {
-    let (mut s, h) = start(Some(("MOCK_FAIL", "resume")));
+    let (s, h) = start(Some(("MOCK_FAIL", "resume")));
     assert!(s.resume().is_err());
-    assert_eq!(h.stopped.recv_timeout(Duration::from_secs(5)).unwrap(), "the disc can't be read");
+    assert_eq!(h.stopped.recv_timeout(Duration::from_secs(5)).unwrap().as_deref(), Some("the disc can't be read"));
     drop(s); // doesn't hang on a core that has gone
 }
 
@@ -130,5 +130,18 @@ fn a_program_that_isnt_a_core_is_turned_away() {
     let dir = tempfile::tempdir().unwrap();
     let launch = NativeLaunch { program: "/bin/true".into(), args: vec![], package: dir.path().join("p"), saves: dir.path().join("s"), cache: dir.path().join("c"), clock: 0, options: vec![] };
     let out = NativeOutputs { sound: None, frames: Arc::new(FrameSlot::default()), on_save: Box::new(|| {}), on_rumble: Box::new(|_| {}), on_stop: Box::new(|_| {}) };
-    assert_eq!(NativeSession::start(launch, out).err().unwrap(), "the core has stopped");
+    assert_eq!(NativeSession::start(launch, out).err().unwrap(), StartFailure::Other("the core has stopped".into()));
+}
+
+#[test]
+fn a_core_that_cant_start_the_game_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = NativeLaunch {
+        program: "/usr/bin/env".into(), args: vec!["MOCK_FAIL=start".into(), mock_core().into()],
+        package: dir.path().join("p"), saves: dir.path().join("s"), cache: dir.path().join("c"), clock: 0, options: vec![],
+    };
+    let out = NativeOutputs { sound: None, frames: Arc::new(FrameSlot::default()), on_save: Box::new(|| {}), on_rumble: Box::new(|_| {}), on_stop: Box::new(|_| {}) };
+    let t = Instant::now();
+    assert_eq!(NativeSession::start(launch, out).err().unwrap(), StartFailure::Said("the disc can't be read".into()));
+    assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
 }

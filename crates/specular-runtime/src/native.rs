@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use specular_core::device::SoundOut;
 use specular_core::input::Button;
 
+pub mod package;
+
 use crate::sound::Sound;
 use crate::FrameSlot;
 
@@ -112,9 +114,9 @@ pub struct NativeOutputs {
     pub on_save: Box<dyn Fn() + Send>,
     /// The game's rumble strength changed (0 to 65535).
     pub on_rumble: Box<dyn Fn(u16) + Send>,
-    /// The core stopped without being asked to: why, for the player. Called once, on the reader's
-    /// thread; the core no longer has the screen.
-    pub on_stop: Box<dyn FnOnce(String) + Send>,
+    /// The core stopped without being asked to: what it said (its `SPN_ERROR`, for the player),
+    /// if anything. Called once, on the reader's thread; the core no longer has the screen.
+    pub on_stop: Box<dyn FnOnce(Option<String>) + Send>,
 }
 
 /// What the core said as the game started.
@@ -123,9 +125,24 @@ pub struct NativeInfo { pub name: String, pub version: String, pub width: u32, p
 
 enum Event { Message(Header, String), Closed }
 
+/// Why a core couldn't start a game.
+#[derive(Debug, PartialEq)]
+pub enum StartFailure {
+    /// The core's own words, for the player (its `SPN_ERROR`).
+    Said(String),
+    /// What went wrong, for the log.
+    Other(String),
+}
+
+impl std::fmt::Display for StartFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self { StartFailure::Said(why) => write!(f, "the core: {why}"), StartFailure::Other(why) => f.write_str(why) }
+    }
+}
+
 /// A game played by a native core. Dropping it quits the game.
 pub struct NativeSession {
-    child: Child,
+    child: Mutex<Child>,
     socket: Arc<OwnedFd>,
     shared: Arc<Mapping>,
     events: Mutex<mpsc::Receiver<Event>>,
@@ -135,13 +152,24 @@ pub struct NativeSession {
     reader: Option<std::thread::JoinHandle<()>>,
     frames: Arc<FrameSlot>,
     info: NativeInfo,
-    paused: bool,
+    /// Whether the core is paused; held across each request, so requests come one at a time.
+    paused: Mutex<bool>,
+    /// `paused`'s opposite, for the watchdog's thread.
+    running_flag: Arc<AtomicBool>,
 }
 
 impl NativeSession {
     /// Starts the core, gives it the game, and waits for it to say it has started. The game is
     /// then paused: Specular still has the screen until `resume`.
-    pub fn start(launch: NativeLaunch, out: NativeOutputs) -> Result<NativeSession, String> {
+    pub fn start(launch: NativeLaunch, out: NativeOutputs) -> Result<NativeSession, StartFailure> {
+        let said = Arc::new(Mutex::new(None));
+        let session = Self::start_with(launch, out, said.clone()).map_err(StartFailure::Other)?;
+        session.map_err(|e| match said.lock().unwrap().take() { Some(why) => StartFailure::Said(why), None => StartFailure::Other(e) })
+    }
+
+    /// `start`: Err only before the core runs; Ok(Err) once it has (the session is dropped, which
+    /// ends it, and its reader has put what the core said, if anything, in `said`).
+    fn start_with(launch: NativeLaunch, out: NativeOutputs, said: Arc<Mutex<Option<String>>>) -> Result<Result<NativeSession, String>, String> {
         for dir in [&launch.saves, &launch.cache] {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
@@ -167,13 +195,20 @@ impl NativeSession {
 
         let (tx, events) = mpsc::channel();
         let stopping = Arc::new(AtomicBool::new(false));
-        let reader = spawn_reader(socket.clone(), tx, out.on_save, out.on_rumble, out.on_stop, stopping.clone());
+        let reader = spawn_reader(socket.clone(), tx, out.on_save, out.on_rumble, out.on_stop, stopping.clone(), said);
         let mut session = NativeSession {
-            child, socket, shared, events: Mutex::new(events), stopping,
+            child: Mutex::new(child), socket, shared, events: Mutex::new(events), stopping,
             sound: Arc::new(Mutex::new(Sound::new(out.sound, 48_000.0, 1.0))), sound_thread: None,
             reader: Some(reader), frames: out.frames, info: NativeInfo { name: String::new(), version: String::new(), width: 0, height: 0, fps: 0.0 },
-            paused: true,
+            paused: Mutex::new(true), running_flag: Arc::new(AtomicBool::new(false)),
         };
+        let result = session.handshake(&launch);
+        // (A core that failed is ended as the session drops.)
+        Ok(result.map(|()| session))
+    }
+
+    fn handshake(&mut self, launch: &NativeLaunch) -> Result<(), String> {
+        let session = self;
         let (hello, text) = session.wait_for(msg::HELLO, ANSWER_TIMEOUT)?;
         if hello.a != PROTOCOL as u64 { return Err(format!("the core speaks protocol {}, not {PROTOCOL}", hello.a)); }
         let (name, version) = text.split_once('\t').unwrap_or((&text, ""));
@@ -188,8 +223,11 @@ impl NativeSession {
         (session.info.width, session.info.height) = (started.a as u32, started.b as u32);
         session.info.fps = fps.trim().parse().unwrap_or(60.0);
         session.sound_thread = Some(spawn_sound(session.shared.clone(), session.sound.clone(), session.stopping.clone()));
-        Ok(session)
+        Ok(())
     }
+
+    /// The core's process ID (for ending one that has stopped responding).
+    pub fn pid(&self) -> u32 { self.child.lock().unwrap().id() }
 
     pub fn info(&self) -> &NativeInfo { &self.info }
 
@@ -208,19 +246,28 @@ impl NativeSession {
     pub fn frames(&self) -> u64 { self.shared.get().frames.load(Relaxed) }
 
     /// Hands the screen to the core: Specular must have stopped drawing.
-    pub fn resume(&mut self) -> Result<(), String> {
-        if !self.paused { return Ok(()); }
+    pub fn resume(&self) -> Result<(), String> {
+        let mut paused = self.paused.lock().unwrap();
+        if !*paused { return Ok(()); }
         self.request(msg::RESUME, "", msg::RESUMED, ANSWER_TIMEOUT)?;
-        self.paused = false;
+        *paused = false;
+        self.running_flag.store(true, Relaxed);
         Ok(())
     }
 
+    /// Whether the core has the screen (between `resume` and `pause`).
+    pub fn running(&self) -> bool { !*self.paused.lock().unwrap() }
+
     /// Stops the game and takes the screen back: once this returns, the core draws nothing, and
     /// the frame it showed is in `NativeOutputs::frames`.
-    pub fn pause(&mut self) -> Result<(), String> {
-        if self.paused { return Ok(()); }
+    pub fn pause(&self) -> Result<(), String> {
+        let mut paused = self.paused.lock().unwrap();
+        if *paused { return Ok(()); }
+        // Paused even if the core doesn't answer: it may still draw, but Specular takes the
+        // screen back regardless (and the watchdog ends a core that hangs).
+        *paused = true;
+        self.running_flag.store(false, Relaxed);
         self.request(msg::PAUSE, "", msg::PAUSED, ANSWER_TIMEOUT)?;
-        self.paused = true;
         let s = self.shared.get();
         let (w, h) = (s.frame_width, s.frame_height);
         if w > 0 && h > 0 && (w as usize) * (h as usize) <= FRAME_PIXELS {
@@ -235,9 +282,9 @@ impl NativeSession {
     }
 
     /// Saves the game's state to `path`. Pauses first if needed.
-    pub fn save_state(&mut self, path: &Path) -> io::Result<()> { self.state(msg::SAVE_STATE, path) }
+    pub fn save_state(&self, path: &Path) -> io::Result<()> { self.state(msg::SAVE_STATE, path) }
     /// Loads the game's state from `path`. Pauses first if needed.
-    pub fn load_state(&mut self, path: &Path) -> io::Result<()> { self.state(msg::LOAD_STATE, path) }
+    pub fn load_state(&self, path: &Path) -> io::Result<()> { self.state(msg::LOAD_STATE, path) }
 
     /// Plays the game's sound on `out` from now on (None: silence). Open it beforehand: opening
     /// can block.
@@ -245,6 +292,32 @@ impl NativeSession {
 
     /// Asks the core to write its saves and exit; kills it if it hasn't within the answer's time.
     pub fn quit(mut self) -> Result<(), String> { self.stop() }
+
+    /// Ends the core at once, without asking it to save (the storage its saves go to is gone).
+    pub fn abandon(self) {
+        self.stopping.store(true, SeqCst);
+        let mut child = self.child.lock().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    /// Calls `stuck` (once, on a thread of its own) if the core presents no frame for `limit`
+    /// while it has the screen. Ends with the session.
+    pub fn watch(&self, limit: Duration, stuck: impl FnOnce() + Send + 'static) {
+        let (shared, stopping) = (Arc::downgrade(&self.shared), self.stopping.clone());
+        let running = self.running_flag.clone();
+        std::thread::spawn(move || {
+            let (mut last, mut since) = (u64::MAX, Instant::now());
+            while let Some(shared) = shared.upgrade() {
+                if stopping.load(Relaxed) { return; }
+                let frames = shared.get().frames.load(Relaxed);
+                if frames != last || !running.load(Relaxed) { (last, since) = (frames, Instant::now()); }
+                else if since.elapsed() >= limit { return stuck(); }
+                drop(shared);
+                std::thread::sleep(limit / 8);
+            }
+        });
+    }
 
     fn stop(&mut self) -> Result<(), String> {
         if self.stopping.swap(true, SeqCst) { return Ok(()); }
@@ -254,13 +327,14 @@ impl NativeSession {
         }
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
-            match self.child.try_wait() {
+            let mut child = self.child.lock().unwrap();
+            match child.try_wait() {
                 Ok(Some(status)) if status.success() => break,
                 Ok(Some(status)) => { result = result.and(Err(format!("the core ended with {status}"))); break }
-                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                Ok(None) if Instant::now() < deadline => { drop(child); std::thread::sleep(Duration::from_millis(10)) }
                 _ => {
-                    let _ = self.child.kill();
-                    let _ = self.child.wait();
+                    let _ = child.kill();
+                    let _ = child.wait();
                     result = result.and(Err("the core didn't quit in time; it was ended".into()));
                     break;
                 }
@@ -272,7 +346,7 @@ impl NativeSession {
         result
     }
 
-    fn state(&mut self, kind: u32, path: &Path) -> io::Result<()> {
+    fn state(&self, kind: u32, path: &Path) -> io::Result<()> {
         self.pause().map_err(io::Error::other)?;
         let (h, text) = self.request(kind, &path.to_string_lossy(), msg::STATE_DONE, STATE_TIMEOUT).map_err(io::Error::other)?;
         if h.a == 0 { Ok(()) } else { Err(io::Error::new(io::Error::from_raw_os_error(h.a as i32).kind(), text)) }
@@ -306,7 +380,7 @@ impl Drop for NativeSession {
 }
 
 fn spawn_reader(socket: Arc<OwnedFd>, tx: mpsc::Sender<Event>, on_save: Box<dyn Fn() + Send>, on_rumble: Box<dyn Fn(u16) + Send>,
-                on_stop: Box<dyn FnOnce(String) + Send>, stopping: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+                on_stop: Box<dyn FnOnce(Option<String>) + Send>, stopping: Arc<AtomicBool>, said: Arc<Mutex<Option<String>>>) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new().name("native core".into()).spawn(move || {
         let mut error = None;
         loop {
@@ -321,9 +395,11 @@ fn spawn_reader(socket: Arc<OwnedFd>, tx: mpsc::Sender<Event>, on_save: Box<dyn 
                 Err(e) => { eprintln!("native: reading the core's messages: {e}"); break }
             }
         }
+        // (Before Closed, so that `start` finds it.)
+        if let Some(why) = &error { *said.lock().unwrap() = Some(why.clone()); }
         let _ = tx.send(Event::Closed);
         if !stopping.load(SeqCst) {
-            on_stop(error.unwrap_or_else(|| "the game stopped unexpectedly".into()));
+            on_stop(error);
         }
     }).expect("thread")
 }

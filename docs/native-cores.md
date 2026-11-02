@@ -15,7 +15,7 @@ Specular's own core protocol, beside libretro: how a core that is a program of i
 
 ### Packages
 
-A package is a ROM like any other: a file in `roms/<system>/` that Specular scans, identifies and shows. Which native core plays it is decided by its system; the package's format belongs to the core that makes and reads it (Tesseract's converter). For now Tesseract's package is its disc image.
+A package is a ROM like any other: a file in `roms/<system>/` that Specular scans, identifies and shows. Which native core plays it is decided by its system (`CoreDecl::native`): the GameCube's (`roms/gc/*.tesseract`) is Tesseract. A package is an uncompressed tar (ustar) whose first entry, `manifest.json`, names its `core`, its `system` and its `program` (`specular_runtime::native::package`); the rest belongs to the core (Tesseract's: the disc image and the IPL fonts, read in place; its converter/README.md). Specular takes the program out into `cache/native/<the ROM's path>/program` (again only when the package changes) and runs it there; that folder is also the core's cache. The game's saves go in `saves/<the ROM's path without its extension>/`. Specular doesn't ship a native core: each package brings its program, and its licences.
 
 ### The protocol
 
@@ -36,22 +36,30 @@ core      → Specular  SAVED (the game saved), RUMBLE (a: strength), ERROR (why
 
 ```rust
 impl NativeSession {
-    pub fn start(launch: NativeLaunch, out: NativeOutputs) -> Result<NativeSession, String>; // waits for STARTED
+    pub fn start(launch: NativeLaunch, out: NativeOutputs) -> Result<NativeSession, StartFailure>; // waits for STARTED
     pub fn info(&self) -> &NativeInfo;
     pub fn set_buttons(&self, bits: u32);   // native::button_bit; doesn't wait
     pub fn frames(&self) -> u64;            // presented so far: the watchdog, the CPU minimum
-    pub fn resume(&mut self) -> Result<(), String>;
-    pub fn pause(&mut self) -> Result<(), String>;    // the picture goes to NativeOutputs::frames
-    pub fn save_state(&mut self, path: &Path) -> io::Result<()>;
-    pub fn load_state(&mut self, path: &Path) -> io::Result<()>;
+    pub fn resume(&self) -> Result<(), String>;
+    pub fn pause(&self) -> Result<(), String>;    // the picture goes to NativeOutputs::frames
+    pub fn save_state(&self, path: &Path) -> io::Result<()>;
+    pub fn load_state(&self, path: &Path) -> io::Result<()>;
     pub fn set_sound(&self, out: Option<Box<dyn SoundOut>>);
     pub fn quit(self) -> Result<(), String>;          // kills a core that doesn't exit in 5 s; dropping quits too
+    pub fn abandon(self);                             // kills it: the card can't be written
+    pub fn watch(&self, limit: Duration, stuck: impl FnOnce() + Send + 'static); // no frame for `limit` while running
 }
 ```
 
-A core that exits or closes its socket unasked has stopped: `NativeOutputs::on_stop` gets its `ERROR` text (or "the game stopped unexpectedly"), and Specular takes the screen back.
+A core that exits or closes its socket unasked has stopped: `NativeOutputs::on_stop` gets its `ERROR` text, if it sent one, and Specular takes the screen back. One that fails before `STARTED` makes `start` fail with `StartFailure::Said` and its text.
 
 Shared memory (`SpnShared`): the buttons and their change time (a sequence lock), the sound ring (stereo 16-bit, 8192 frames, at the rate the core sets), the frames presented and the last frame's time, and the picture (RGBA, up to 1024x1024) written before `PAUSED`.
+
+### In the UI
+
+`specular_ui::game::GameSession` is a libretro or a native session; the menu, quitting, sleep and the sound outputs work the same for both. A native game starts paused; once the launch splash has had its time it is resumed, unless its menu is open. Resuming sets `specular_core::device::SCREEN_LENT`, which stops the device's platform drawing (the Brick's draws two frames once it is cleared: the first can tear); pausing takes the picture the core hands back and draws the menu over it. While a native core runs, the CPU's minimum is its top step (default when paused). What it doesn't have says so: save states ("Save states aren't supported for these games yet"), disc changes, reset, core options.
+
+Failures: a package that isn't one, or is for another core, is refused before the core starts; what a core says as it fails (`SPN_ERROR`, before or after starting) is told to the player as said; a core that ends unasked ends the game ("The game stopped. It closed unexpectedly."). The watchdog ends a core that presents nothing for `STUCK_LIMIT` while it has the screen, and the game with it ("It stopped responding."); Specular carries on, unlike with a stuck libretro core, which takes Specular down with it.
 
 ### Tesseract's side
 
@@ -69,4 +77,5 @@ Shared memory (`SpnShared`): the buttons and their change time (a sequence lock)
 ## Open questions
 
 - Save states: Tesseract's runtime has none yet (guest RAM, ARAM, the guest threads, the hardware's and the GPU's state).
+- Launch records: a native game leaves none (Specular survives a stuck or crashed core, so there is nothing to report after a restart).
 - Toasts over a running game: Specular can't draw while the core has the screen. The core could draw an image Specular hands it (Tesseract already draws an overlay).

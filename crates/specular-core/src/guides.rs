@@ -78,7 +78,7 @@ fn bios(systems: &[SystemDecl]) -> String {
 }
 
 fn cores(systems: &[SystemDecl]) -> String {
-    let own: Vec<String> = library::cores(systems).iter().filter(|c| c.user.is_none()).map(|c| format!("{}.so", c.library)).collect();
+    let own: Vec<String> = library::cores(systems).iter().filter(|c| c.user.is_none() && !c.native).map(|c| format!("{}.so", c.library)).collect();
     let mut t = Text::new();
     t.para("Emulators you add (\"cores\"), beside Specular's own. Specular runs libretro cores, as RetroArch does. For each one, put two files directly in this folder:");
     t.item(&format!("<name>_libretro.so, the core itself, built for Linux on this device's processor: {}. A core built for another processor (a PC's, say) isn't used.", user_cores::this_processor()));
