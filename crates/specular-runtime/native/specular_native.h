@@ -24,7 +24,7 @@
 enum SpnType {
   // core -> Specular
   SPN_HELLO = 1,       // a = SPN_PROTOCOL; text = "NAME\tVERSION"
-  SPN_STARTED = 2,     // a = the picture's width, b = its height (pixels, as the game makes it); text = frames per second
+  SPN_STARTED = 2,     // a = the largest picture's width, b = its height (pixels); text = frames per second
   SPN_PAUSED = 3,      // stopped, screen let go; the frame on screen is in SpnShared.frame
   SPN_RESUMED = 4,     // running, drawing to the screen
   SPN_STATE_DONE = 5,  // a SPN_SAVE_STATE or SPN_LOAD_STATE is done: a = 0, or an errno; text = why it failed, for the player

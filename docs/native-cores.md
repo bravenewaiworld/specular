@@ -26,7 +26,7 @@ Specular runs the core's program as `PROGRAM --specular FD`, FD one end of a `SO
 ```
 core      → Specular  HELLO (a: protocol 1; "NAME\tVERSION")
 Specular  → core      START (SCM_RIGHTS: the shared memory; "package=…\nsaves=…\ncache=…\nclock=…\n")
-core      → Specular  STARTED (a, b: the picture's size; frames per second). It boots, presenting nothing.
+core      → Specular  STARTED (a, b: the largest picture's size; frames per second). It boots, presenting nothing.
 Specular  → core      RESUME   once Specular has stopped drawing     → RESUMED; the core draws
 Specular  → core      PAUSE                                          → PAUSED; picture in shared memory; the core draws nothing
 Specular  → core      SAVE_STATE / LOAD_STATE (path), while paused   → STATE_DONE (a: 0 or errno; why)
@@ -63,6 +63,8 @@ Shared memory (`SpnShared`): the buttons and their change time (a sequence lock)
 - (2026-11-02, device) Changing `fb0`'s size under a live EGL surface garbles or drops frames; a swap hung 2.9 s and a surface's destruction 16.5 s, with a PowerVR stalled-context warning. `eglTerminate`, `fbset`, `eglInitialize` works (17–31 ms plus 18–22 ms) but loses every GL object. Source: as above.
 - (2026-11-02, device) F-Zero GX's race, paced and on screen: `fb0` at 640x480 gives p95 54.7 fps, 909 MB/s of GPU memory traffic; at 1024x768 53.6 fps, 1052 MB/s (and the display engine's 70 vs 179 MB/s). Mean 59.0 both. Source: as above, 3 alternating runs each.
 - (2026-11-02, device) F-Zero GX as a shared library loaded by a small host, unpaced: 116.7 s for the race input vs 99.8 s as a program (mean 67.7 vs 76.5 fps); `-Bsymbolic` didn't help. Source: as above.
+
+- (2026-11-02, device) F-Zero GX as a native core on the Brick, driven by `examples/native_drive.rs` (no UI; `fb0` at 1024x768): 226–425 ms from launch to STARTED; RESUMED within 1.2 ms, the game's first flip 88 ms after the first resume and 4 ms after later ones; 1199 frames in 20 s; PAUSED in 47–50 ms, after which the screen doesn't change until the next resume; the paused picture 640x448 and correct; quit in 142 ms, exit status 0; the memory card and pipeline cache made in the folders Specular gave. Source: the Brick.
 
 ## Open questions
 
