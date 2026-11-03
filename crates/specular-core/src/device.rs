@@ -282,6 +282,12 @@ pub struct Hardware {
     pub cpu: Option<Box<dyn Cpu>>,
 }
 
+/// Whether a native core has the screen (docs/native-cores.md): set by the UI just before it hands
+/// the screen over and cleared once the core has let go. Meanwhile the device's platform draws
+/// nothing; once it is given back, the platform draws two frames at once (the first after a
+/// handback can tear on the Brick).
+pub static SCREEN_LENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// A device: what it is, and its hardware.
 pub trait Device {
     fn profile(&self) -> DeviceProfile;

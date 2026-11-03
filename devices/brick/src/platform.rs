@@ -22,7 +22,7 @@ use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
 use slint::{PhysicalSize, Window};
 
 use crate::egl::EglDisplay;
-use specular_core::device::Vsync;
+use specular_core::device::{SCREEN_LENT, Vsync};
 use specular_linux::input::{ButtonEvent, Input, clock};
 use specular_linux::vsync::FramePacer;
 
@@ -73,6 +73,10 @@ pub struct BrickPlatform {
     input: RefCell<Input>,
     on_button: RefCell<Option<Box<dyn FnMut(ButtonEvent)>>>,
     on_present: RefCell<Option<Box<dyn FnMut(Duration)>>>,
+    /// Whether the screen was lent to a native core at the last draw (`SCREEN_LENT`), and whether
+    /// a frame is still owed after it came back.
+    lent: Cell<bool>,
+    owed: Cell<bool>,
 }
 
 impl BrickPlatform {
@@ -92,6 +96,8 @@ impl BrickPlatform {
             input: RefCell::new(Input::new(INPUT_DEVICES)),
             on_button: RefCell::default(),
             on_present: RefCell::default(),
+            lent: Cell::new(false),
+            owed: Cell::new(false),
         })
     }
 
@@ -113,12 +119,18 @@ impl BrickPlatform {
     /// Any other frame is drawn at once: a game's thread paces its frames, and if a one-off
     /// redraw between a vsync and the game's frame held that frame back to the next vsync,
     /// every later game frame would be held back too, a refresh late.
+    ///
+    /// While a native core has the screen (`SCREEN_LENT`) nothing is drawn; once it is given
+    /// back, two frames are drawn at once, since EGL's first after a handback can tear.
     fn draw(&self) -> Result<bool, PlatformError> {
         let Some(w) = self.window.get() else { return Ok(false) };
+        if SCREEN_LENT.load(Relaxed) { self.lent.set(true); return Ok(false); }
+        if self.lent.replace(false) { w.needs_redraw.set(true); self.owed.set(true); }
         if !w.needs_redraw.get() || !self.pacer.ready() { return Ok(false); }
         w.needs_redraw.set(false);
         w.renderer.render()?;
         if let Some(f) = self.on_present.borrow_mut().as_mut() { f(clock(libc::CLOCK_MONOTONIC)); }
+        if self.owed.replace(false) { w.needs_redraw.set(true); return Ok(true); }
         // Slint knows an animation runs only while drawing it: once its clock moves on, it
         // reports none until the next render. So ask now, and keep `needs_redraw` set until the
         // pacer lets the next frame be drawn.

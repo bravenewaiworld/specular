@@ -1562,10 +1562,10 @@ mod user_cores {
             RowKind::Text { detail } => detail.clone(), _ => None,
         })).collect();
         let row = |l: &str, d: Option<&str>| (l.to_string(), d.map(str::to_string));
-        assert_eq!(rows[..8], [row("Built in", None), row("mGBA", Some("GB, GBC, GBA")), row("Nestopia", Some("NES")), row("SwanStation", Some("PS1")),
-                               row("On the SD card", None), row("Gambatte", Some("GB, GBC")), rows[6].clone(), row("Snes9x", Some("SNES"))]);
-        assert_eq!(rows[6].0, "gambatte_libretro.so; its options are learned when it next plays a game");
-        assert_eq!(rows[9..], [row("Turned away", None), row("bare_libretro.so", None), row("No .info", None)]);
+        assert_eq!(rows[..9], [row("Built in", None), row("mGBA", Some("GB, GBC, GBA")), row("Nestopia", Some("NES")), row("SwanStation", Some("PS1")),
+                               row("Tesseract", Some("GC")), row("On the SD card", None), row("Gambatte", Some("GB, GBC")), rows[7].clone(), row("Snes9x", Some("SNES"))]);
+        assert_eq!(rows[7].0, "gambatte_libretro.so; its options are learned when it next plays a game");
+        assert_eq!(rows[10..], [row("Turned away", None), row("bare_libretro.so", None), row("No .info", None)]);
     }
 }
 
@@ -2174,3 +2174,16 @@ mod card {
 
 mod problems;
 mod explained;
+
+#[test]
+fn a_native_cores_game_menu_has_no_states_or_restart() {
+    let mut a = App::new(builtin_systems(), quiet());
+    a.handle(Msg::Card(Card::mounted()));
+    a.handle(Msg::Library(vec![Game { system: "gc", path: "gc/F-Zero GX.tesseract".into(), title: "F-Zero GX".into(), sort_key: "f-zero gx".into() }]));
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10);
+    assert_eq!(a.playing().map(|g| g.title.as_str()), Some("F-Zero GX"));
+    tap(&mut a, Button::Menu, 30);
+    assert_eq!(labels(&a), ["Resume", "Save states aren't supported for these games yet.", "Game settings", "Quit game",
+                            "Quitting ends the game: what you saved in the game itself is kept."]);
+}

@@ -329,7 +329,19 @@ fn playable_systems() -> Vec<SystemDecl> { user_cores::playable(library::builtin
 /// save is as the game last wrote it, at most about 10 s old. The launch record, left behind,
 /// says why, for the notice after the restart. The rumble stops at once, rather than run on until
 /// Specular has ended.
+///
+/// A native core is a process of its own: one that presents nothing for as long is ended, and the
+/// game with it (`Playing::stuck` says why), and Specular carries on.
 fn watch_game(p: &game::Playing, rumble: Option<RumbleLine>) {
+    if let game::GameSession::Native(n) = &p.session {
+        let (pid, stuck) = (n.pid(), p.stuck.clone());
+        return n.watch(STUCK_LIMIT, move || {
+            eprintln!("game: the core has presented nothing for {} s; it has stopped responding, ending it", STUCK_LIMIT.as_secs());
+            stuck.store(true, std::sync::atomic::Ordering::Relaxed);
+            // (Its process can't have been reaped yet: the session waits for it only as it ends.)
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        });
+    }
     let (path, mut record) = p.record.clone();
     p.session.watch(STUCK_LIMIT, move || {
         eprintln!("game: the core has spent {} s on one frame; it has stopped responding, restarting", STUCK_LIMIT.as_secs());
@@ -1209,6 +1221,8 @@ impl Runner {
         match result {
             Ok("") => {}
             Ok(done) => self.toast(done),
+            // (What a native core can't do at all is said as it is.)
+            Err(e) if e.to_string() == game::NATIVE_HAS_NO_STATES => { self.toast(&format!("{e}.")); return false; }
             Err(e) => { eprintln!("game: {failed}: {e}"); self.toast(failed); return false; }
         }
         true
@@ -1325,6 +1339,7 @@ impl Runner {
         let launch = self.launches.get() + 1;
         self.launches.set(launch);
         let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("There's no emulator for {} games.", system.map_or(game.system, |s| s.name)))) };
+        if let Some(w) = self.window.upgrade() { w.set_native_game(core.native); }
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
         let (rom, bios_dir) = (self.data.roms().join(&game.path), self.data.bios());
         if let Err(why) = core.check_bios(&rom, extensions, &bios_dir) { return self.started(launch, Err(why)); }
@@ -1366,6 +1381,16 @@ impl Runner {
                 self.requested.borrow_mut().clear();
                 // The game may have been paused (its menu opened) while it loaded.
                 if self.app.borrow().input_target() == InputTarget::App { self.with_game("", |p| { p.pause(true); Ok("") }); }
+                // A native core starts paused, with no frame for the splash to wait for: it gets
+                // the screen once the splash has had its time (unless its menu is open by then).
+                if self.playing.borrow().as_ref().is_some_and(|p| p.is_native()) && let Some(launched) = self.launched.take() {
+                    let wait = SPLASH_TIME.saturating_sub(now() - launched);
+                    after(&self.splash_timer, wait, move |r| {
+                        if launch != r.launches.get() { return; }
+                        if let Some(w) = r.window.upgrade() { w.set_game_revealed(true); }
+                        if r.app.borrow().input_target() == InputTarget::Game { r.with_game("", |p| { p.pause(false); Ok("") }); }
+                    });
+                }
             }
             Err(e) => {
                 eprintln!("game: {e}");

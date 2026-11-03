@@ -5,18 +5,21 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
+use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::time::Duration;
 
 use glow::HasContext;
-use specular_core::device::{Device, Output, SoundOut};
-use specular_core::app::Msg;
+use specular_core::device::{Device, Output, SCREEN_LENT, SoundOut};
+use specular_core::app::{Discs, Msg};
 use specular_core::cpu::CpuMin;
 use specular_core::effects::Event;
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
 use specular_core::library::{Autosave, CoreDecl, Game, user_cores};
-use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session, StartError};
+use specular_runtime::native::{self, NativeLaunch, NativeOutputs, NativeSession, StartFailure};
+use specular_runtime::{FrameSlot, LaunchSpec, Outputs, Session, StartError, Stats};
 
 use crate::{AppWindow, Runner};
 
@@ -41,9 +44,68 @@ fn cores_dir() -> PathBuf {
     exe.parent().unwrap_or(Path::new(".")).join("cores")
 }
 
+/// A game's session: a libretro core's, or a native core's (`specular_runtime::native`), which is
+/// a program of its own that draws straight to the screen while the game runs.
+pub enum GameSession {
+    Libretro(Session),
+    Native(NativeSession),
+}
+
+pub use specular_core::library::NATIVE_HAS_NO_STATES;
+
+impl GameSession {
+    /// Calls `stuck` if the game makes no progress for `limit` while it runs (`Session::watch`,
+    /// `NativeSession::watch`).
+    pub fn watch(&self, limit: Duration, stuck: impl FnOnce() + Send + 'static) {
+        match self { Self::Libretro(s) => s.watch(limit, stuck), Self::Native(n) => n.watch(limit, stuck) }
+    }
+    pub fn set_options(&self, options: Vec<(String, String)>) { if let Self::Libretro(s) = self { s.set_options(options) } }
+    /// Writes the autosave (a state: a native core has none; its saves are the game's own).
+    pub fn autosave(&self) { if let Self::Libretro(s) = self { s.autosave() } }
+    pub fn save_state(&self, path: &Path) -> io::Result<()> {
+        match self { Self::Libretro(s) => s.save_state(path), Self::Native(n) => n.save_state(path).map_err(native_state_error) }
+    }
+    pub fn load_state(&self, path: &Path) -> io::Result<()> {
+        match self { Self::Libretro(s) => s.load_state(path), Self::Native(n) => n.load_state(path).map_err(native_state_error) }
+    }
+    pub fn change_disc(&self, index: usize) -> io::Result<()> {
+        match self { Self::Libretro(s) => s.change_disc(index), Self::Native(_) => Err(io::ErrorKind::Unsupported.into()) }
+    }
+    pub fn reset(&self) { if let Self::Libretro(s) = self { s.reset() } }
+    /// Writes the game's saves now: a native core's are written as the game makes them.
+    pub fn flush(&self) -> io::Result<()> { match self { Self::Libretro(s) => s.flush(), Self::Native(_) => Ok(()) } }
+    pub fn discs(&self) -> Discs { match self { Self::Libretro(s) => s.discs(), Self::Native(_) => Discs::default() } }
+    pub fn bios(&self) -> Option<String> { match self { Self::Libretro(s) => s.bios(), Self::Native(_) => None } }
+    pub fn set_sound(&self, out: Option<Box<dyn SoundOut>>) { match self { Self::Libretro(s) => s.set_sound(out), Self::Native(n) => n.set_sound(out) } }
+    /// The frame statistics: a native core's are only its frames (they can't be shown over it).
+    pub fn stats(&self) -> Stats {
+        match self {
+            Self::Libretro(s) => s.stats(),
+            Self::Native(n) => Stats { frames: n.frames(), median: Duration::ZERO, p95: Duration::ZERO, worst: Duration::ZERO, sound_queued: None, cpu_min: None },
+        }
+    }
+    pub fn take_sound_peak(&self) -> u16 { match self { Self::Libretro(s) => s.take_sound_peak(), Self::Native(_) => 0 } }
+    /// Ends the game, writing its saves. A native core gives the screen back first.
+    pub fn quit(self) -> io::Result<()> {
+        match self {
+            Self::Libretro(s) => s.quit(),
+            Self::Native(n) => { let r = n.quit(); SCREEN_LENT.store(false, Relaxed); r.map_err(io::Error::other) }
+        }
+    }
+    /// Ends the game without saving (the card can't be written).
+    pub fn abandon(self) {
+        match self { Self::Libretro(s) => s.abandon(), Self::Native(n) => { n.abandon(); SCREEN_LENT.store(false, Relaxed); } }
+    }
+}
+
+/// A native core's answer to a state request: one it doesn't support is said plainly.
+fn native_state_error(e: io::Error) -> io::Error {
+    if e.kind() == io::ErrorKind::Unsupported { io::Error::new(e.kind(), NATIVE_HAS_NO_STATES) } else { e }
+}
+
 /// A game being played.
 pub struct Playing {
-    pub session: Session,
+    pub session: GameSession,
     pub frames: Arc<FrameSlot>,
     /// The file of the save state the menu saves and loads (one slot for now).
     pub state: PathBuf,
@@ -54,8 +116,13 @@ pub struct Playing {
     pub output: RefCell<Output>,
     /// Whether `output` couldn't be opened at launch, so the game started silent.
     pub sound_failed: bool,
-    /// The buttons held, as libretro joypad bits.
-    held: Cell<u16>,
+    /// The buttons held, as libretro joypad bits (a native core's: `native::button_bit`s).
+    held: Cell<u32>,
+    /// A native core's: the CPU's minimum while it runs (the top step: its games need all of
+    /// it), and what sets it (the hardware thread).
+    native_cpu: Option<(Option<u32>, Box<dyn Fn(Option<u32>) + Send>)>,
+    /// Whether the watchdog ended a native core that had stopped responding (`watch_game`).
+    pub stuck: Arc<AtomicBool>,
 }
 
 /// A device the UI can use from other threads too (to open sound outputs, which can block).
@@ -73,6 +140,7 @@ impl Playing {
     /// started (`user_cores::learn`).
     pub fn start(r: &Runner, game: &Game, core: &'static CoreDecl, bios: Option<&str>, options: Vec<(String, String)>, cpu_min: CpuMin, autosave: Autosave,
                  started: impl FnOnce(Result<Self, String>) + Send + 'static) {
+        if core.native { return Self::start_native(r, game, core, started); }
         let (data, output, rumble) = (&r.data, r.output.borrow().clone(), r.rumble.clone());
         let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
@@ -131,7 +199,10 @@ impl Playing {
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             let session = Session::start(spec, out).map_err(|e| { eprintln!("game: {e}"); start_failure(core, system, &e) });
             let declared = session.as_ref().ok().map(|s| s.info().options.clone());
-            started(session.map(|session| Self { session, frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0) }));
+            started(session.map(|session| Self {
+                session: GameSession::Libretro(session), frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0),
+                native_cpu: None, stuck: Arc::default(),
+            }));
             let Some(d) = declared else { return };
             match user_cores::learn(core, &learned, &d) {
                 Ok(true) => eprintln!("cores: learned {}'s options ({}), kept in {}", core.name, d.options.len(), learned.display()),
@@ -143,17 +214,141 @@ impl Playing {
 
     /// A button for the game.
     pub fn button(&self, e: &ButtonEvent) {
-        let Some(bit) = specular_runtime::joypad_bit(e.button) else { return };
+        let bit = match &self.session {
+            GameSession::Libretro(_) => specular_runtime::joypad_bit(e.button).map(u32::from),
+            GameSession::Native(_) => native::button_bit(e.button),
+        };
+        let Some(bit) = bit else { return };
         let held = if e.pressed { self.held.get() | bit } else { self.held.get() & !bit };
-        self.held.set(held);
-        self.session.set_buttons(held);
+        self.set_buttons(held);
     }
 
-    /// Pauses or resumes the game. Pausing releases every button, so none stays held in the game.
-    pub fn pause(&self, paused: bool) {
-        if paused { self.held.set(0); self.session.set_buttons(0); }
-        self.session.pause(paused);
+    fn set_buttons(&self, held: u32) {
+        self.held.set(held);
+        match &self.session { GameSession::Libretro(s) => s.set_buttons(held as u16), GameSession::Native(n) => n.set_buttons(held) }
     }
+
+    /// Whether a native core plays it.
+    pub fn is_native(&self) -> bool { matches!(self.session, GameSession::Native(_)) }
+
+    /// Pauses or resumes the game. Pausing releases every button, so none stays held in the game.
+    ///
+    /// A native core gets the screen as it resumes (Specular draws nothing meanwhile:
+    /// `SCREEN_LENT`) and gives it back as it pauses, with its picture in `frames`, which is
+    /// then drawn under the menu. Pausing it waits for the core (about 50 ms).
+    pub fn pause(&self, paused: bool) {
+        if paused { self.set_buttons(0); }
+        let GameSession::Native(n) = &self.session else {
+            if let GameSession::Libretro(s) = &self.session { s.pause(paused); }
+            return;
+        };
+        let set_cpu = |mhz| if let Some((_, set)) = &self.native_cpu { set(mhz) };
+        if paused {
+            if !n.running() { return; }
+            if let Err(e) = n.pause() { eprintln!("game: pausing: {e}"); }
+            SCREEN_LENT.store(false, Relaxed);
+            set_cpu(None);
+            crate::on_ui(|r| r.game_frame());
+        } else {
+            if n.running() { return; }
+            set_cpu(self.native_cpu.as_ref().and_then(|(top, _)| *top));
+            SCREEN_LENT.store(true, Relaxed);
+            if let Err(e) = n.resume() {
+                eprintln!("game: resuming: {e}");
+                SCREEN_LENT.store(false, Relaxed);
+                set_cpu(None);
+                crate::on_ui(|r| r.game_frame());
+            }
+        }
+    }
+
+    /// `start` for a native core (`CoreDecl::native`): its program comes out of the game's
+    /// package into the cache (`cache/native/<the ROM's path>/`, also the core's own cache), and
+    /// the game's saves go in `saves/<the ROM's path without its extension>/`. The game starts
+    /// paused: `pause(false)` hands it the screen.
+    fn start_native(r: &Runner, game: &Game, core: &'static CoreDecl, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
+        let data = &r.data;
+        let package = data.roms().join(&game.path);
+        let saves = data.saves().join(game.path.with_extension(""));
+        let cache = data.cache().join("native").join(&game.path);
+        let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &cache.join("program"), game));
+        let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
+        let frames = Arc::new(FrameSlot::default());
+        let state = game.state_path(&data.roms(), "state1");
+        let stuck = Arc::new(AtomicBool::new(false));
+        let top = r.cpu_steps.get().and_then(|s| s.last().copied());
+        let hardware = r.hardware.clone();
+        let output = r.output.borrow().clone();
+        let (roms, all_saves, played, device, sounds) = (data.roms(), data.saves(), game.clone(), r.device.clone(), r.sounds.clone());
+        // The app is told the game stopped, unless another ROM is playing by the time the UI
+        // thread has this.
+        let (rom, stuck_seen, stop_hardware) = (game.path.clone(), stuck.clone(), hardware.clone());
+        let on_stop = Box::new(move |said: Option<String>| {
+            SCREEN_LENT.store(false, Relaxed);
+            // A core that ends while running never pauses, which is where the CPU's minimum
+            // otherwise goes back to the system's default.
+            let _ = stop_hardware.send(crate::HwCmd::CpuMin(None));
+            let why = if stuck_seen.load(Relaxed) { "It stopped responding.".to_owned() } else { said.map_or("It closed unexpectedly.".into(), |s| sentence(&s)) };
+            crate::on_ui(move |r| {
+                r.game_frame(); // Specular has the screen again
+                if r.playing.borrow().as_ref().is_some_and(|p| p.record.1.game == rom) {
+                    eprintln!("game: stopped: {why}");
+                    crate::post(Msg::GameStopped(why));
+                }
+            });
+        });
+        let on_save = Box::new(|| crate::on_ui(|r| r.tell_effects(Event::GameSaved)));
+        let rumble = r.rumble.clone();
+        let on_rumble = Box::new(move |level: u16| if let Some(l) = &rumble { l.set_game(specular_core::device::Motors { strong: level, weak: level }) });
+        let clock = native_clock();
+        std::thread::spawn(move || {
+            sounds.close();
+            let sound = open_sound(device.as_ref(), &output);
+            let sound_failed = sound.is_none();
+            let unpacked = native::package::manifest(&package).and_then(|m| {
+                if m.core != core.library { return Err(format!("{}: a package for {}, not {}", package.display(), m.core, core.library)); }
+                native::package::unpack_program(&package, &m, &cache)
+            });
+            let program = match unpacked {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("game: {e}");
+                    return started(Err(format!("This isn't a {system} game {} can play. Convert the disc again with Tesseract's converter.", core.name)));
+                }
+            };
+            let launch = NativeLaunch { program, args: vec![], package, saves, cache, clock, options: vec![] };
+            let out = NativeOutputs { sound, frames: frames.clone(), on_save, on_rumble, on_stop };
+            let session = NativeSession::start(launch, out).map_err(|e| {
+                eprintln!("game: {e}");
+                match e {
+                    StartFailure::Said(why) => sentence(&why),
+                    StartFailure::Other(_) => format!("{} couldn't start this game. Restart the device and try again.", core.name),
+                }
+            });
+            let set: Box<dyn Fn(Option<u32>) + Send> = Box::new(move |mhz| { let _ = hardware.send(crate::HwCmd::CpuMin(mhz)); });
+            started(session.map(|n| Self {
+                session: GameSession::Native(n), frames, state, record, output: RefCell::new(output), sound_failed, held: Cell::new(0),
+                native_cpu: Some((top, set)), stuck,
+            }));
+            // After the start: the first time, this reads the whole package (a disc image, ~1.5 GB:
+            // about 20 s from the Brick's card), which held the launch up when it came first.
+            if let Err(e) = specular_core::library::saves::note_played(&roms, &all_saves, &played) { eprintln!("saves: {e}"); }
+        });
+    }
+}
+
+/// `s` as a sentence: a capital first letter and a full stop.
+fn sentence(s: &str) -> String {
+    let s = s.trim().trim_end_matches('.');
+    let mut c = s.chars();
+    c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect::<String>() + ".")
+}
+
+/// The local time now, in seconds since 2000-01-01 00:00 (a native core's clock).
+fn native_clock() -> u64 {
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    let tm = crate::local(now);
+    (now as i64 + tm.tm_gmtoff as i64 - 946_684_800).max(0) as u64
 }
 
 /// Opens `output` for a game's sound; None (having said why) if it can't be. May block: a

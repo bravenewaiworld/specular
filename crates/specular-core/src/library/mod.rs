@@ -89,7 +89,13 @@ pub struct CoreDecl {
     /// For a core the user added, what its `.info` says and where it is; None for one Specular
     /// builds, which is in Specular's own cores folder.
     pub user: Option<&'static user_cores::UserCore>,
+    /// A native core (docs/native-cores.md): a program of its own that comes in each game's
+    /// package, not a libretro library; `library` is then only its id.
+    pub native: bool,
 }
+
+/// What the player is told when they ask a native core for a save state, which none supports yet.
+pub const NATIVE_HAS_NO_STATES: &str = "Save states aren't supported for these games yet";
 
 /// When a core's games are autosaved during play (`LaunchSpec::autosave_when` in
 /// specular-runtime). Either way it is written when play stops: as the game menu opens
@@ -198,7 +204,7 @@ impl CoreDecl {
 const MGBA: &CoreDecl = &CoreDecl {
     name: "mGBA", library: "mgba_libretro", options: mgba::LIST,
     defaults: &[(mgba::IDLE_OPTIMIZATION, mgba::idle_optimization::REMOVE_KNOWN)], rom_by_path: true,
-    controller: None, states_restore_save: false, cpu_start: None, autosave: Autosave::Every10s, bios: &[], user: None,
+    controller: None, states_restore_save: false, cpu_start: None, autosave: Autosave::Every10s, bios: &[], user: None, native: false,
 };
 
 /// Nestopia, for the NES and the Famicom Disk System. Its NTSC filter is off: it widens the
@@ -208,7 +214,7 @@ const NESTOPIA: &CoreDecl = &CoreDecl {
     name: "Nestopia", library: "nestopia_libretro", options: nestopia::LIST,
     defaults: &[(nestopia::BLARGG_NTSC_FILTER, nestopia::blargg_ntsc_filter::DISABLED)], rom_by_path: false,
     controller: None, states_restore_save: true, cpu_start: None, autosave: Autosave::Every10s,
-    bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }], user: None,
+    bios: &[Bios { games: "Famicom Disk System games", extensions: &["fds"], files: &["disksys.rom"], fallback: None }], user: None, native: false,
 };
 
 /// SwanStation, for the PS1, with its software renderer (the hardware ones need a GL context
@@ -227,7 +233,15 @@ const SWANSTATION: &CoreDecl = &CoreDecl {
     defaults: &[(swanstation::GPU_RENDERER, swanstation::gpu_renderer::SOFTWARE)], rom_by_path: false,
     controller: Some(PS_DUALSHOCK), states_restore_save: true, cpu_start: Some(1800), autosave: Autosave::AtPauses,
     bios: &[Bios { games: "PlayStation games", extensions: &[],
-        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("OpenBIOS") }], user: None,
+        files: &["scph5500.bin", "scph5501.bin", "scph5502.bin", "psxonpsp660.bin", "ps1_rom.bin"], fallback: Some("OpenBIOS") }], user: None, native: false,
+};
+
+/// Tesseract, for the GameCube: each game is recompiled on a PC into a package (`.tesseract`) that
+/// holds its program, which plays it as a native core (docs/native-cores.md). It has no options yet,
+/// and no save states; the game's own memory card is its save.
+const TESSERACT: &CoreDecl = &CoreDecl {
+    name: "Tesseract", library: "tesseract", options: r#"{"options":[]}"#, defaults: &[], rom_by_path: true,
+    controller: None, states_restore_save: false, cpu_start: None, autosave: Autosave::AtPauses, bios: &[], user: None, native: true,
 };
 
 /// SwanStation's device ID for a DualShock: libretro's `RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_ANALOG, 0)`.
@@ -241,8 +255,10 @@ pub fn cores(systems: &[SystemDecl]) -> Vec<&'static CoreDecl> {
 }
 
 /// The systems Specular knows out of the box. Disc images for PS1 are listed by their .cue sheet,
-/// .chd, .pbp or .m3u; a .bin is only a track of a .cue. Their colours differ, and none is teal,
-/// the default accent, so the change to a system's colour shows (see docs/look-and-motion.md).
+/// .chd, .pbp or .m3u; a .bin is only a track of a .cue; GameCube games by their package (see
+/// `TESSERACT`). None is teal, the default accent, so the change to a system's colour shows (see
+/// docs/look-and-motion.md); with eight systems and seven other colours, the GameCube shares the
+/// Super Nintendo's.
 pub fn builtin_systems() -> Vec<SystemDecl> {
     vec![
         SystemDecl { id: "gb", name: "Game Boy", tint: "lime", extensions: &["gb"], libretro_id: "game_boy", libretro_name: "Nintendo - Game Boy",
@@ -260,6 +276,8 @@ pub fn builtin_systems() -> Vec<SystemDecl> {
         SystemDecl { id: "ps1", name: "PlayStation", tint: "amber", extensions: &["cue", "chd", "pbp", "m3u"], libretro_id: "playstation", libretro_name: "Sony - PlayStation",
             screen: (320, 240), game_db: include_str!("../../../../data/db/ps1.tsv"), cores: vec![SWANSTATION], header_code: None,
             disc_serial: Some(crate::art::ps1_serial), dump_header: 0 },
+        SystemDecl { id: "gc", name: "GameCube", tint: "violet", extensions: &["tesseract"], libretro_id: "gamecube", libretro_name: "Nintendo - GameCube",
+            screen: (640, 480), game_db: "", cores: vec![TESSERACT], header_code: None, disc_serial: None, dump_header: 0 },
     ]
 }
 
