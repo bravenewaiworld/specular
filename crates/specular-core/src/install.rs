@@ -1,6 +1,6 @@
 //! Installing the system onto a device's internal storage, putting back a backup of it, and
 //! updating the system or going back to the previous version. The device's installer does the
-//! work (the Brick's is brick-install); Specular offers it in Settings, asks first and shows its
+//! work (the Brick's is crystaline-install); Specular offers it in Settings, asks first and shows its
 //! progress (see app::install).
 
 /// What the installer can do now. Fields an older installer doesn't report are empty.
@@ -164,7 +164,7 @@ impl Task {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     /// Which task this is; comes first. An installer may report a restore, preparing one and
-    /// cancelling one all as `Restore` (brick-install does).
+    /// cancelling one all as `Restore` (crystaline-install does).
     Task(TaskKind),
     /// Step `index` (from 1) of `of` started.
     Step { index: usize, of: usize, label: String },
@@ -202,7 +202,7 @@ pub fn size(bytes: u64) -> String { format!("{:.1} GB", bytes as f64 / 1e9) }
 /// A pretend installer, for the desktop build, so every installer screen can be seen. It runs
 /// from the SD card, where installing is possible with room for a backup; there is one backup, a
 /// previous version, and three update files: a newer one, an older one and one that can't be
-/// installed. Each task takes a few seconds and succeeds, with brick-install's steps and closing
+/// installed. Each task takes a few seconds and succeeds, with crystaline-install's steps and closing
 /// message. Environment variables change that:
 /// - `SPECULAR_INSTALL_INSTALLED`: it runs from the internal storage, where Restore prepares the
 ///   SD card instead of restoring.
@@ -262,7 +262,7 @@ impl Installer for Simulated {
     }
 }
 
-/// A pretend task, on a thread of its own, with brick-install's steps and closing message.
+/// A pretend task, on a thread of its own, with crystaline-install's steps and closing message.
 fn simulate(task: Task, mut progress: Box<dyn FnMut(Progress) + Send>) {
     let (steps, done): (&[&str], String) = match &task {
         Task::Install { .. } => (&["Checking", "Writing the start-up files", "Writing the system", "Checking the internal storage", "Finishing"],
