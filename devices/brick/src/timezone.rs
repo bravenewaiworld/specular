@@ -1,4 +1,4 @@
-//! The Brick's time zone: the system's brick-timezone program (Crystaline OS's
+//! The Brick's time zone: the system's crystaline-timezone program (Crystaline OS's
 //! docs/power.md, "Time zone"): `get` prints the zone, `set <zone>` sets it (exit 1 for a zone
 //! it has no file for), `list` prints UTC then tzdata's `zone.tab` zones by name. It keeps the
 //! zone across restarts, and logs its own errors to the system log too.
@@ -7,9 +7,9 @@ use std::process::Command;
 
 use specular_core::timezone::TimeZone;
 
-const PROGRAM: &str = "/usr/sbin/brick-timezone";
+const PROGRAM: &str = "/usr/sbin/crystaline-timezone";
 
-/// The Brick's `TimeZone`, through `/usr/sbin/brick-timezone`.
+/// The Brick's `TimeZone`, through `/usr/sbin/crystaline-timezone`.
 pub struct BrickTimeZone;
 
 impl TimeZone for BrickTimeZone {
@@ -19,7 +19,7 @@ impl TimeZone for BrickTimeZone {
     fn list(&mut self) -> Result<Vec<String>, String> { Ok(run(&["list"])?.lines().map(String::from).collect()) }
 }
 
-/// What brick-timezone prints, or what went wrong (its exit status and error message).
+/// What crystaline-timezone prints, or what went wrong (its exit status and error message).
 fn run(args: &[&str]) -> Result<String, String> {
     let out = Command::new(PROGRAM).args(args).output().map_err(|e| format!("{PROGRAM}: {e}"))?;
     if !out.status.success() {

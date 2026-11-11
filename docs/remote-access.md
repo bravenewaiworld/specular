@@ -2,7 +2,7 @@
 
 Status: Implemented · Updated: 2026-10-20
 
-Reaching the device from a PC: file transfer (a browser page and WebDAV, served from the device, that read and write the SD card) and SSH. Both open the device to the network, so Specular decides when they run and says so plainly; both are the system's services (Crystaline OS's `webdav` and `brick-ssh`), which Specular only starts, stops and asks about.
+Reaching the device from a PC: file transfer (a browser page and WebDAV, served from the device, that read and write the SD card) and SSH. Both open the device to the network, so Specular decides when they run and says so plainly; both are the system's services (Crystaline OS's `webdav` and `crystaline-ssh`), which Specular only starts, stops and asks about.
 
 ## Decisions
 
@@ -16,7 +16,7 @@ Reaching the device from a PC: file transfer (a browser page and WebDAV, served 
 - **The start check trusts whatever answers on port 80** (2026-10-20). Nothing else listens there on Crystaline OS; one that did would make the screen show addresses that serve something else, which the user would see at once. Rejected: checking the server's reply (more code for a case that can't happen today).
 - **File transfer and SSH commands run on the hardware thread** (2026-10-19), in order with the other hardware commands, so a stop sent before a sleep is done before it. Starting can block the thread for up to 5 s (only when it fails). Rejected: a thread of their own (sleeping would then need a handshake).
 - **The addresses shown are those Specular already follows** (2026-10-19): WiFi's from its link, and the other interfaces' with a link from the WiFi service (`WifiEvent::Interfaces`), so the USB cable's shows only while a PC is at the other end. Interfaces named `usb…` are called "USB cable".
-- **SSH is in the developer settings, only where the user switches it** (2026-10-19): Crystaline OS release systems, which `brick-ssh` reports as `image=release`. On development systems it is always on and `brick-ssh` refuses to change it, so there is only a note. Its state is the system's, asked for each time Settings opens. Rejected: a Specular setting (a second copy of the state, which could disagree).
+- **SSH is in the developer settings, only where the user switches it** (2026-10-19): Crystaline OS release systems, which `crystaline-ssh` reports as `image=release`. On development systems it is always on and `crystaline-ssh` refuses to change it, so there is only a note. Its state is the system's, asked for each time Settings opens. Rejected: a Specular setting (a second copy of the state, which could disagree).
 
 ## Design
 
@@ -49,7 +49,7 @@ On the Brick (`devices/brick/src/transfer.rs`, `ssh.rs`):
 |---|---|
 | Start | `sv up webdav`, then connect to 127.0.0.1:80 until it answers (5 s). If it doesn't: `sv status webdav`, the last 3 `webdav:` lines of `logread`, then a stop |
 | Stop | `sv -v down webdav` (waits until it is down) |
-| SSH | `brick-ssh [on\|off\|import]`, then `brick-ssh` for the state (`image=`, `ssh=`, `keys=` lines). Its errors are its stderr, without the `brick-ssh: ` prefix |
+| SSH | `crystaline-ssh [on\|off\|import]`, then `crystaline-ssh` for the state (`image=`, `ssh=`, `keys=` lines). Its errors are its stderr, without the `crystaline-ssh: ` prefix |
 
 ### The app
 
