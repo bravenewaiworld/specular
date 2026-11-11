@@ -31,8 +31,11 @@ CROSS_ARGS := $(if $(TARGET),--target $(TARGET) --config 'target.$(TARGET).linke
 .PHONY: build cores install test
 
 # Specular, the device's hardware checks (devices/<DEVICE>/examples) and the runtime's headless
-# player (play). Always run: cargo decides what is out of date.
+# player (play). Always run: cargo decides what is out of date. cargo fetch first: the credits
+# build script reads `cargo metadata --offline`, which needs every crate of the workspace (for
+# every platform) downloaded, while a build downloads only those of its target.
 build:
+	cargo fetch --locked
 	$(CROSS_ENV) CARGO_TARGET_DIR=$(OUT) cargo build --release $(CROSS_ARGS) \
 		-p specular-$(DEVICE) -p specular-runtime --bins --examples
 
