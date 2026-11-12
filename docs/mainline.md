@@ -15,6 +15,10 @@ The port to boards running mainline Linux under Crystaline OS's mainline family 
 - **A game gets the panel mode nearest its own rate, where the board allows it** (2026-11-12). As a game starts, the runtime asks the device for the game's rate (`Device::match_refresh`); the mainline device switches to the panel mode within 0.5 % of it (GBA 59.73 Hz, PAL 50 Hz), through a full mode set at the UI's next present, and back to the usual mode as the game ends. Further off, the usual mode stays and the sound is resampled as before. 90 and 120 Hz are never picked for a game. Rejected: one rate for every game (the Brick's way: games run slightly fast or stutter).
 - **Sticks reach games as libretro analog input, and the left stick moves through the menus** (2026-11-12). A game's thread reads the sticks once a frame (`Device::open_sticks`, at the core's input poll); the UI's input turns the left stick into d-pad presses marked `ButtonEvent::stick`, which a game doesn't get. A 10 % dead zone. Rejected: sticks only in games (a way to move that does nothing in the menus).
 - **Rumble drives the motor's own device on boards without a gamepad program** (2026-11-12): the board table names it (`pwm-vibrator`); the Brick keeps padbridge's gamepad.
+- **A TV plugged in takes the picture, and the panel goes off** (2026-11-12). On HDMI hotplug the picture moves to the TV (its preferred mode, at most 1920×1080) and the panel's CRTC and backlight go off; unplugging brings it back. A TV connected at start-up takes it at the first frame. Rejected: mirroring (two CRTCs paced by one present, and a panel lit in the hand while the TV is watched); 4K modes (the GPU would scale every frame to 8 million pixels for no sharper menus).
+- **The UI keeps the panel's size and the GPU scales it onto the TV, 4:3 with black bars** (2026-11-12). Slint draws into the panel-sized surface as always; each frame is then copied onto the TV's surface with a linear-filtered `glBlitFramebuffer` into the largest centred 4:3 rectangle (`kms::fit`: 1440×1080 at 240,0 on a 1080p TV). Layout, sizes and a game's scaling setting are as on the panel: Integer, Fit and Stretch apply within the 4:3 picture, so Integer is no longer whole TV pixels. Still legacy KMS: a move is a `drmModeSetCrtc` off and one on. Rejected: drawing the UI at the TV's size (a layout per TV, and none for 16:9); the display controller's scaler on a plane (legacy KMS can't scale the primary plane; atomic KMS for one feature); a game filling the 16:9 screen (its picture is part of the UI's).
+- **Sound follows the picture** (2026-11-12): to `Output::Hdmi` (the board's `hdmi_sound`), unless a Bluetooth device takes it, and back to the speaker as the TV goes. HDMI has no mixer control, so its volume is in software (`SoftVolume`), with a setting of its own ("TV volume", full by default: the TV has its own). Rejected: the speaker's level (a TV wants nothing like a handheld speaker's).
+- **A game is paused as the picture moves, and fitted to the new display as it resumes** (2026-11-12). The game menu opens (`Msg::Hdmi`); the runtime asks for the display's rate again at every resume (`Device::match_refresh`), which picks among the TV's modes of the same size within 0.5 % of the game's (59.94 for GBA, 60 for NES, 50 for PAL) and otherwise its usual one, measured. Vsync waits follow the picture to the new CRTC (`kms::ActiveCrtc`). Rejected: playing on through the move (frames paced by a CRTC being turned off, sound reopened mid-play).
 - **The RGB20 Pro's LEDs stay with the system** (2026-11-11). The green and red LEDs show status and charging; `leds` is empty, so Specular's accent lights don't drive them.
 
 ## Design
@@ -27,15 +31,37 @@ The port to boards running mainline Linux under Crystaline OS's mainline family 
 
 Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBLANK` on a file of its own (no DRM master needed), one per waiting thread, plugged into `FramePacer` and the game thread's `Vsync` as `FbVsync` is on the Brick.
 
+### TV (HDMI)
+
+```
+hotplug thread           UI thread (KmsSurface::present)                     Mainline::on_switch
+uevent HOTPLUG=1 ──flag──▶ read connectors (Kms::find_tv)
+for card0                 another TV, or none? ─no──▶ present as before
+                            │yes
+                            ▼
+                          old output off (SetCrtc 0), TV's GBM + EGL surface
+                          draw at panel size → blit into 4:3 → flip on TV ──▶ backlight off/on
+                                                                              shown output, modes
+                                                                              Msg::Hdmi → app: sound to
+                                                                                HDMI, game menu open
+                                                                              thread: measure refresh,
+                                                                                one `display:` line
+```
+
+`Kms` keeps the main output (the panel) and, while one is connected, a TV, each with its own GBM surface. `find_tv` reads the connectors again (logging each, with its modes); `show_on` turns the output showing the picture off and readies the other, whose mode is set at the next present. The UI's EGL surface stays on the panel's GBM surface and is never swapped while the TV shows: `EglDisplay::copy_to` makes the TV's EGL surface current for drawing with the panel's for reading, blits, and swaps the TV's. A failure to move, or to present on the TV, puts the picture back on the panel (a `display:` line says why); the next hotplug event tries again.
+
+The `display:` line after each move gives the output, its mode, the measured refresh, where the UI is on it, the sound device and how long the move took, from the hotplug event noticed to the first frame shown. A desktop build simulates a TV with the T key (sound and game pause only).
+
 ### Board table and hardware
 
 | Service | How |
 |---|---|
 | Buttons | evdev, the board's input devices by name (`specular-linux`). The RGB20 Pro: `gpio-keys-control` (d-pad as `BTN_DPAD_*`, triggers as `BTN_TL2`/`BTN_TR2` keys), `gpio-keys-vol`, `rk805 pwrkey`; Menu is Select + Start |
 | Battery | power-supply class (`rk817-battery`) |
-| Backlight, panel off | backlight class (`specular-linux/src/backlight.rs`): levels 1–10 from 1/16 of `max_brightness` up on a curve; panel off is `bl_power` (the backlight only) |
+| Backlight, panel off | backlight class (`specular-linux/src/backlight.rs`): levels 1–10 from 1/16 of `max_brightness` up on a curve; panel off is `bl_power` (the backlight only), kept off while a TV shows the picture |
 | Volume | one mixer control for every output, through amixer: `rk817ext`'s "Master Playback Volume" (0–255, −95 to 0 dB). Levels 2 dB apart, the top at 0 dB |
-| Sound | ALSA `default:CARD=rk817ext` (card 0 is HDMI) |
+| Sound | ALSA `default:CARD=rk817ext`; on a TV, `default:CARD=HDMI` at a software volume |
+| TV | HDMI hotplug from the kernel's uevents (`specular-linux/src/hotplug.rs`); the picture as above |
 | Headphones | none: the jack cuts the speaker in hardware and reports nothing |
 | SSH, file transfer, time zone, SD card, power off, restart | Crystaline OS (`specular-crystaline`) |
 | Sleep, WiFi, CPU speed | Crystaline OS (`sleepnow`, the `wpa_supplicant` service with the board's driver, `crystaline-power`), through `specular-crystaline` |
@@ -58,3 +84,7 @@ Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBL
 - (2026-11-12, device) By eye with modetest's pattern: the RGB20 Pro's panel needs longer D-PHY timings than the PHY's table gives above a lane rate of about 400 Mbps. With the 600 Mbps row's timings, 60 Hz (378 Mbps) and 75.47 Hz (486 Mbps) are clean; with the table's own row 75.47 Hz faded and 54.6 MHz shifted colours. 90 and 120 Hz stayed blank with the 600, 700 and 800 Mbps rows and with Rockchip's lower lane rate, and ROCKNIX's 120 Hz never worked either, so Crystaline OS leaves both out: the panel offers 10 modes. Source: the kernel's DSI test switches (Crystaline OS's tools/mainline/dsi-try.sh).
 - (2026-11-12, device) Mesa can't keep its shader cache on the RGB20 Pro: `/root/.cache` is on the read-only root filesystem, so every start compiles its shaders again. Source: Specular's log.
 - (2026-11-11, device) Specular starts on the RGB20 Pro and draws its first screen; the battery, buttons, time zone and SD card services start without errors. Source: Specular's log, a `SPECULAR_SNAPSHOT`.
+
+## Open questions
+
+- Does the TV work as designed? Not yet tried with one: whether Panfrost blits from one GBM window surface to another (EGL with different draw and read surfaces), whether the panel comes back clean after its CRTC was off, how long a TV takes to show the picture (and to change mode as a game starts), and whether the HDMI sound card opens as the picture arrives. A TV and the `display:`, `hotplug:` and `kms:` lines answer it.

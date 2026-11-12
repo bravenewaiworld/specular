@@ -97,6 +97,7 @@ pub trait Screen {
 | Hardware | the device's hardware services, file transfer, SSH and the CPU's minimum speed (which the game's thread asks for); reads the battery every 10 s |
 | One per radio, and the card | WiFi and Bluetooth commands, which can block for seconds; following the SD card's state (see [sd-card.md](sd-card.md)) |
 | Headphone jack | waits for plugging and unplugging |
+| HDMI | waits for the picture moving to a TV and back (`Hardware::hdmi`); on mainline boards a hotplug thread reads the kernel's display events for it |
 | Sounds | plays the interface sounds; opens their output at the first, closes it when idle |
 | Rumble | runs the motors, at the latest state asked for (`rumble::RumbleLine`) |
 | Installer | the device's installer |
@@ -142,6 +143,7 @@ pub struct Hardware {
     pub time_zone: Option<Box<dyn TimeZone>>,     // see time-zone.md
     pub card: Option<Box<CardService>>,           // see sd-card.md; None: always mounted
     pub headphones: Option<Box<dyn HeadphoneJack>>,
+    pub hdmi: Option<Box<dyn Hdmi>>,
     pub rumble: Option<Box<dyn Rumble>>,
     pub file_transfer: Option<Box<dyn FileTransfer>>,   // see remote-access.md
     pub ssh: Option<Box<dyn Ssh>>,
@@ -158,15 +160,20 @@ pub trait Rumble: Send {
 
 /// Where sound plays. Each has its own volume setting (all Bluetooth devices share one). The
 /// speaker and the jack are one sound stream, which the kernel's driver routes.
-pub enum Output { Speaker, Headphones, Bluetooth(BtAddress) }
+pub enum Output { Speaker, Headphones, Bluetooth(BtAddress), Hdmi }
 
 pub trait HeadphoneJack: Send {
     /// Blocks on a thread of its own: the state at the start, then each change.
     fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>);
 }
+
+/// The device moves the picture to a TV and back itself; this tells the app.
+pub trait Hdmi: Send {
+    fn watch(self: Box<Self>, on_tv: Box<dyn FnMut(bool) + Send>);
+}
 ```
 
-Sound goes to the first connected Bluetooth device taking sound, else to headphones in the jack, else to the speaker; the volume keys and the gauge act on that output's level.
+Sound goes to the first connected Bluetooth device taking sound, else to the TV the picture is on, else to headphones in the jack, else to the speaker; the volume keys and the gauge act on that output's level. As the picture moves to a TV or back, a game is paused (see [mainline.md](mainline.md)).
 
 The display platform is passed to `run` separately, since it is Slint-specific. It installs a Slint platform (how pixels reach the screen) and delivers button events on the UI thread; without one, Slint's default window is used with the keyboard as buttons. A device without a window system uses `specular_ui::platform::GlPlatform` and supplies only its `GlSurface`: how the UI's GL context is made current and how a frame is shown (the Brick's driver display, or `KmsSurface` for DRM/KMS).
 
