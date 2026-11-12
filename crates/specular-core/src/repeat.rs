@@ -78,7 +78,7 @@ mod tests {
     use super::*;
 
     fn ms(n: u64) -> Duration { Duration::from_millis(n) }
-    fn ev(button: Button, pressed: bool, t: u64) -> ButtonEvent { ButtonEvent { button, pressed, time: ms(t) } }
+    fn ev(button: Button, pressed: bool, t: u64) -> ButtonEvent { ButtonEvent { button, pressed, time: ms(t), stick: false } }
 
     /// Polls every millisecond from `from` to `to`; returns the times repeats came.
     fn repeats(r: &mut Repeater, from: u64, to: u64) -> Vec<u64> {

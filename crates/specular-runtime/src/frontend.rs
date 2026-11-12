@@ -8,7 +8,7 @@ use std::ffi::{CStr, CString, c_char, c_uint, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering::Relaxed};
 
-use specular_core::device::Motors;
+use specular_core::device::{Motors, Sticks};
 use specular_core::rumble::RumbleLine;
 
 use crate::FrameSlot;
@@ -43,6 +43,9 @@ pub struct Frontend {
     /// The core's disk control interface, if it gave one. Called outside `with`, through a copy
     /// (`disks()` in lib.rs): the core may make environment calls from it.
     pub disks: Option<DiskControl>,
+    /// The device's analog sticks, and their positions as read at the frame's input poll.
+    pub sticks: Option<Box<dyn Sticks>>,
+    pub stick_positions: [i16; 4],
 }
 
 impl Frontend {
@@ -59,7 +62,7 @@ impl Default for Frontend {
             buttons: Arc::default(), frames: Arc::default(), on_frame: Box::new(|| {}),
             pixel_format: PIXEL_0RGB1555, // libretro's default
             samples: Vec::new(), options: Options::default(), system_dir: CString::default(), save_dir: CString::default(),
-            save_ram_written: false, bios_halted: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false, disks: None,
+            save_ram_written: false, bios_halted: false, refused: HashSet::new(), rumble: None, motors: Motors::STILL, paused: false, disks: None, sticks: None, stick_positions: [0; 4],
         }
     }
 }
@@ -233,11 +236,20 @@ unsafe extern "C" fn set_rumble_state(port: c_uint, effect: c_uint, strength: u1
     }).unwrap_or(false)
 }
 
-/// Buttons are read when the core asks (`input_state`), so as late as possible.
-unsafe extern "C" fn input_poll() {}
+/// Buttons are read when the core asks (`input_state`), so as late as possible; the sticks once a
+/// frame, here.
+unsafe extern "C" fn input_poll() {
+    with(|f| if let Some(s) = f.sticks.as_mut() { f.stick_positions = s.read(); });
+}
 
-unsafe extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, id: c_uint) -> i16 {
-    if port != 0 || device != DEVICE_JOYPAD { return 0; }
+unsafe extern "C" fn input_state(port: c_uint, device: c_uint, index: c_uint, id: c_uint) -> i16 {
+    if port != 0 { return 0; }
+    if device == DEVICE_ANALOG {
+        // index 0 the left stick, 1 the right; id 0 X, 1 Y.
+        if index > 1 || id > 1 { return 0; }
+        return with(|f| f.stick_positions[(index * 2 + id) as usize]).unwrap_or(0);
+    }
+    if device != DEVICE_JOYPAD { return 0; }
     let bits = with(|f| f.buttons.load(Relaxed)).unwrap_or(0);
     match id {
         DEVICE_ID_JOYPAD_MASK => bits as i16,

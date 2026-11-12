@@ -127,7 +127,8 @@ impl Playing {
             let sound_failed = sound.is_none();
             // The runtime logs failed save writes; this only tells the app of one refused as read-only.
             let write_failed = Box::new(crate::tell_if_read_only);
-            let out = Outputs { sound, vsync, match_display, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt, write_failed, cpu_min, set_cpu_min };
+            let sticks = device.open_sticks();
+            let out = Outputs { sound, vsync, match_display, sticks, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt, write_failed, cpu_min, set_cpu_min };
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }

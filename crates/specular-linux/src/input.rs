@@ -52,7 +52,16 @@ fn key(code: u16) -> Option<Button> {
 struct InputDevice { name: &'static str, file: Option<File>, held: Vec<Button>, hat: [i32; 2], dropping: bool }
 
 /// The input devices Specular reads, by name.
-pub struct Input { devices: Vec<InputDevice>, next_retry: Instant, positional: bool, menu_chord: Option<Chord> }
+pub struct Input { devices: Vec<InputDevice>, next_retry: Instant, positional: bool, menu_chord: Option<Chord>, menu_stick: Option<MenuStick> }
+
+/// The left stick as a d-pad for the menus (`Input::menu_stick`), and the direction it holds on each
+/// axis (X, Y).
+struct MenuStick { sticks: crate::sticks::EvdevSticks, held: [Option<Button>; 2] }
+
+/// How far the left stick must go to press a direction in the menus, and how far back to release
+/// it: apart, so a stick held near the edge doesn't flicker.
+const STICK_PRESS: f64 = 0.5;
+const STICK_RELEASE: f64 = 0.3;
 
 /// Whether Select and Start are held (on any device), and so Menu is (`Input::menu_chord`).
 #[derive(Default)]
@@ -162,12 +171,19 @@ impl Input {
     /// until `retry` is called.
     pub fn new(names: &[&'static str]) -> Self {
         let devices = names.iter().map(|&name| InputDevice { name, file: None, held: Vec::new(), hat: [0; 2], dropping: false }).collect();
-        Self { devices, next_retry: Instant::now(), positional: false, menu_chord: None }
+        Self { devices, next_retry: Instant::now(), positional: false, menu_chord: None, menu_stick: None }
     }
 
     /// Reads 0x133 as the top button (`BTN_NORTH`) and 0x134 as the left one (`BTN_WEST`), as
     /// kernel drivers send them (Documentation/input/gamepad.rst), rather than as Xbox style pads do.
     pub fn positional(mut self) -> Self { self.positional = true; self }
+
+    /// Also reports the left stick of the joystick device `name` as the d-pad (`ButtonEvent::stick`),
+    /// so it moves through the menus.
+    pub fn menu_stick(mut self, name: &'static str) -> Self {
+        self.menu_stick = Some(MenuStick { sticks: crate::sticks::EvdevSticks::new(name), held: [None; 2] });
+        self
+    }
 
     /// Also reports Menu while Select and Start are both held, for a device without a Menu button.
     /// Select and Start are still reported themselves, so a game sees both pressed briefly.
@@ -184,7 +200,7 @@ impl Input {
             let both = c.select && c.start;
             if both != c.menu {
                 c.menu = both;
-                out.push(ButtonEvent { button: Button::Menu, pressed: both, time: e.time });
+                out.push(ButtonEvent { button: Button::Menu, pressed: both, time: e.time, stick: false });
             }
         }
     }
@@ -192,6 +208,12 @@ impl Input {
     /// Tries to open missing devices, at most once a second. A mute switch found already on
     /// is reported in `out` as a press. Returns how long until the next try, or None if all are open.
     pub fn retry(&mut self, out: &mut Vec<ButtonEvent>) -> Option<Duration> {
+        let stick = self.menu_stick.as_mut().and_then(|m| m.sticks.retry());
+        let buttons = self.retry_buttons(out);
+        [stick, buttons].into_iter().flatten().min()
+    }
+
+    fn retry_buttons(&mut self, out: &mut Vec<ButtonEvent>) -> Option<Duration> {
         if self.devices.iter().all(|d| d.file.is_some()) { return None; }
         let now = Instant::now();
         if now >= self.next_retry {
@@ -205,7 +227,9 @@ impl Input {
     }
 
     /// File descriptors of the open devices, for poll().
-    pub fn fds(&self) -> impl Iterator<Item = RawFd> + '_ { self.devices.iter().filter_map(|d| d.file.as_ref().map(|f| f.as_raw_fd())) }
+    pub fn fds(&self) -> impl Iterator<Item = RawFd> + '_ {
+        self.devices.iter().filter_map(|d| d.file.as_ref().map(|f| f.as_raw_fd())).chain(self.menu_stick.as_ref().and_then(|m| m.sticks.fd()))
+    }
 
     /// Reads everything pending. A device that fails is closed, with its buttons released, and
     /// `retry` brings it back. (`Mute` isn't released: the switch is still where it was, and
@@ -224,6 +248,9 @@ impl Input {
                 d.event(kind, code, value, time, out);
             }
         }
+        if let Some(m) = self.menu_stick.as_mut() && m.sticks.drain() {
+            m.press(clock(libc::CLOCK_MONOTONIC), out);
+        }
         if self.positional {
             for e in &mut out[from..] {
                 e.button = match e.button { Button::X => Button::Y, Button::Y => Button::X, b => b };
@@ -233,11 +260,29 @@ impl Input {
     }
 }
 
+impl MenuStick {
+    /// Presses or releases the d-pad direction of each axis the left stick has crossed a threshold
+    /// on since the last time.
+    fn press(&mut self, time: Duration, out: &mut Vec<ButtonEvent>) {
+        let (x, y) = self.sticks.left();
+        for (axis, (v, [neg, pos])) in [(x, [Button::Left, Button::Right]), (y, [Button::Up, Button::Down])].into_iter().enumerate() {
+            let held = self.held[axis];
+            let now = if v.abs() >= STICK_PRESS { Some(if v < 0.0 { neg } else { pos }) }
+                else if v.abs() <= STICK_RELEASE { None }
+                else { held };
+            if now == held { continue; }
+            if let Some(b) = held { out.push(ButtonEvent { button: b, pressed: false, time, stick: true }); }
+            if let Some(b) = now { out.push(ButtonEvent { button: b, pressed: true, time, stick: true }); }
+            self.held[axis] = now;
+        }
+    }
+}
+
 impl InputDevice {
     fn set(&mut self, button: Button, pressed: bool, time: Duration, out: &mut Vec<ButtonEvent>) {
         if self.held.contains(&button) == pressed { return; }
         if pressed { self.held.push(button) } else { self.held.retain(|&b| b != button) }
-        out.push(ButtonEvent { button, pressed, time });
+        out.push(ButtonEvent { button, pressed, time, stick: false });
     }
 
     /// Releases every button held, but not the mute switch: that is a position, not a held key,
@@ -245,7 +290,7 @@ impl InputDevice {
     fn release_all(&mut self, out: &mut Vec<ButtonEvent>, time: Duration) {
         let (switch, buttons) = std::mem::take(&mut self.held).into_iter().partition(|&b| b == Button::Mute);
         self.held = switch;
-        for b in buttons { out.push(ButtonEvent { button: b, pressed: false, time }); }
+        for b in buttons { out.push(ButtonEvent { button: b, pressed: false, time, stick: false }); }
         self.hat = [0; 2];
     }
 
@@ -291,7 +336,7 @@ mod tests {
     #[test]
     fn select_and_start_together_are_menu() {
         let mut input = Input::new(&[]).menu_chord();
-        let e = |button, pressed| ButtonEvent { button, pressed, time: Duration::ZERO };
+        let e = |button, pressed| ButtonEvent { button, pressed, time: Duration::ZERO, stick: false };
         let mut out = vec![e(Button::Select, true), e(Button::Start, true), e(Button::Select, false), e(Button::Start, false)];
         input.add_menu_chord(&mut out, 0);
         assert_eq!(out, [e(Button::Select, true), e(Button::Start, true), e(Button::Menu, true), e(Button::Select, false),

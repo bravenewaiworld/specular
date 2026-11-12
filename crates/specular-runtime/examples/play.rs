@@ -34,6 +34,7 @@ fn main() -> Result<(), String> {
             write_failed: Box::new(|_| {}), cpu_min: Default::default(), set_cpu_min: Box::new(|_| {}),
             vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },
             match_display: Box::new(move |_| if vsync { 60.2 } else { 60.0 }),
+            sticks: None,
         },
     ).map_err(|e| e.to_string())?;
     eprintln!("{:?}", session.info());

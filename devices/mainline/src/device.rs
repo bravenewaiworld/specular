@@ -6,12 +6,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use specular_core::input::Button;
-use specular_core::device::{Audio, Battery, Device, DeviceProfile, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
+use specular_core::device::{Sticks, Audio, Battery, Device, DeviceProfile, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_crystaline::system;
 use specular_core::wireless::trace::Traced;
 use specular_linux::backlight::SysfsBacklight;
 use specular_linux::bluez::Bluez;
 use specular_linux::rumble::EvdevRumble;
+use specular_linux::sticks::EvdevSticks;
 use specular_linux::kms::{DrmVsync, Kms, Mode, ModeRequest};
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
@@ -98,6 +99,10 @@ impl Device for Mainline {
             Output::Speaker | Output::Headphones => Alsa::open(self.board.sound)?,
             Output::Bluetooth(address) => Alsa::bluetooth(address)?,
         }))
+    }
+
+    fn open_sticks(&self) -> Option<Box<dyn Sticks>> {
+        Some(Box::new(EvdevSticks::new(self.board.sticks?)))
     }
 
     /// The panel mode nearest `hz`, if one is within `MATCH` of it (else the usual mode), switched

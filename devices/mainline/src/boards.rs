@@ -18,6 +18,8 @@ pub struct Board {
     pub buttons: &'static [Button],
     /// The input devices its buttons come from, by evdev name.
     pub inputs: &'static [&'static str],
+    /// Its analog sticks' joystick device, by evdev name (None: no sticks).
+    pub sticks: Option<&'static str>,
     /// Select and Start held together are Menu (a board without a Menu button).
     pub menu_chord: bool,
     /// Its rumble motor's own input device, by evdev name (None: no motor).
@@ -53,6 +55,7 @@ pub const BOARDS: &[Board] = &[
             &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, VolUp, VolDown, Power]
         },
         inputs: &["gpio-keys-control", "gpio-keys-vol", "rk805 pwrkey"],
+        sticks: Some("adc-joystick"),
         menu_chord: true,
         rumble: Some("pwm-vibrator"),
         backlight: "backlight",
@@ -67,7 +70,8 @@ impl Board {
     /// Its buttons' input. Mainline boards' buttons come from kernel drivers, which send the face
     /// buttons' codes by position.
     pub fn input(&self) -> Input {
-        let input = Input::new(self.inputs).positional();
+        let mut input = Input::new(self.inputs).positional();
+        if let Some(s) = self.sticks { input = input.menu_stick(s); }
         if self.menu_chord { input.menu_chord() } else { input }
     }
 }

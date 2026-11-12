@@ -25,7 +25,7 @@ impl SoundOut for Count {
 /// Outputs that discard everything: no sound or rumble, a 60 Hz display without vsync, and
 /// callbacks that do nothing. A test sets the fields it checks over these (`..outputs()`).
 fn outputs() -> Outputs {
-    Outputs { sound: None, vsync: None, match_display: Box::new(|_| 60.0), frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}),
+    Outputs { sound: None, vsync: None, match_display: Box::new(|_| 60.0), sticks: None, frames: Arc::default(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}),
               write_failed: Box::new(|_| {}), cpu_min: CpuMin::default(), set_cpu_min: Box::new(|_| {}) }
 }
 

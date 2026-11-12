@@ -44,7 +44,7 @@ fn tap(app: &mut App, button: Button, t: u64) -> Vec<Effect> {
 
 /// A press (`pressed`) or release of `button` at time `t` (ms).
 fn event(app: &mut App, button: Button, pressed: bool, t: u64) -> Vec<Effect> {
-    app.handle(Msg::Button(ButtonEvent { button, pressed, time: Duration::from_millis(t) }))
+    app.handle(Msg::Button(ButtonEvent { button, pressed, time: Duration::from_millis(t), stick: false }))
 }
 
 fn focused(app: &App) -> String { app.view().rows[app.focus()].label.clone() }
@@ -133,12 +133,12 @@ fn a_game_that_stops_for_good_is_quit_and_says_why() {
 #[test]
 fn holding_down_repeats_and_stops_at_the_end() {
     let mut a = app();
-    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: true, time: Duration::ZERO }));
+    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: true, time: Duration::ZERO, stick: false }));
     assert_eq!(focused(&a), "Super Nintendo");
     for t in (0..2000).step_by(10) { a.handle(Msg::Tick(Duration::from_millis(t))); }
     assert_eq!(focused(&a), "Settings"); // held: no wrap back to the top
     assert!(a.next_deadline().is_some());
-    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: false, time: Duration::from_millis(2000) }));
+    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: false, time: Duration::from_millis(2000), stick: false }));
     assert_eq!(a.next_deadline(), None);
     tap(&mut a, Button::Down, 2100); // a fresh press wraps
     assert_eq!(focused(&a), "Game Boy Advance");
@@ -467,7 +467,7 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
 #[test]
 fn the_mute_switch_mutes_without_touching_the_volume() {
     let mut a = app();
-    let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t) }));
+    let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t), stick: false }));
     assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true, output: Output::Speaker }]);
     assert_eq!(switch(&mut a, true, 10), vec![]); // already on
     // The volume keys still work, and say the sound is muted.

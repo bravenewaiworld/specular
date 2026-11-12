@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use specular_core::app::Discs;
 use specular_core::cpu::CpuMin;
-use specular_core::device::{SoundOut, Vsync};
+use specular_core::device::{SoundOut, Sticks, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
 use specular_core::library::Autosave;
@@ -126,6 +126,8 @@ pub struct Outputs {
     /// default): as the game starts, as `cpu_min` changes it, on pausing and resuming, and as the
     /// game ends. It mustn't block: the device sets it on another thread.
     pub set_cpu_min: Box<dyn Fn(Option<u32>) + Send>,
+    /// The device's analog sticks, read once a frame (None: the core gets none).
+    pub sticks: Option<Box<dyn Sticks>>,
 }
 
 /// About the running game.
@@ -202,12 +204,13 @@ impl FrameSlot {
 }
 
 /// The libretro joypad button for one of the device's buttons. L2/R2 are the shoulder buttons'
-/// second row; Menu, the volume keys and Power never reach the game.
+/// second row; F1/F2 are L3/R3 (the Brick's F1/F2 and the RGB20 Pro's stick clicks report the same
+/// codes); Menu, the volume keys and Power never reach the game.
 pub fn joypad_bit(b: Button) -> Option<u16> {
     use Button::*;
     let id = match b {
         B => 0, Y => 1, Select => 2, Start => 3, Up => 4, Down => 5, Left => 6, Right => 7,
-        A => 8, X => 9, L1 => 10, R1 => 11, L2 => 12, R2 => 13,
+        A => 8, X => 9, L1 => 10, R1 => 11, L2 => 12, R2 => 13, F1 => 14, F2 => 15, // F1, F2: the stick clicks (L3, R3)
         _ => return None,
     };
     Some(1 << id)
@@ -465,7 +468,7 @@ impl Drop for Restore {
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
 fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
         started: mpsc::Sender<Result<GameInfo, StartError>>) {
-    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble, out.write_failed) {
+    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble, out.sticks, out.write_failed) {
         Ok(g) => g,
         Err(e) => { let _ = started.send(Err(e)); return; }
     };
@@ -590,7 +593,7 @@ struct Game {
 
 impl Game {
     fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>, rumble: Option<RumbleLine>,
-            write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, StartError> {
+            sticks: Option<Box<dyn Sticks>>, write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, StartError> {
         let core = Core::load(&spec.core).map_err(StartError::Core)?;
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
@@ -608,7 +611,7 @@ impl Game {
         };
         let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());
         frontend::install(Some(Frontend {
-            buttons, frames, on_frame, options: options::Options::new(spec.options.clone()), system_dir, save_dir, rumble, ..Frontend::default()
+            buttons, frames, on_frame, options: options::Options::new(spec.options.clone()), system_dir, save_dir, rumble, sticks, ..Frontend::default()
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };

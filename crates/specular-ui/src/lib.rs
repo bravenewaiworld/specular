@@ -293,7 +293,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     if keyboard {
         let headphones = Cell::new(false);
         window.on_key(move |text, pressed| match key_button(&text) {
-            Some(button) => { post(Msg::Button(ButtonEvent { button, pressed, time: now() })); true }
+            Some(button) => { post(Msg::Button(ButtonEvent { button, pressed, time: now(), stick: false })); true }
             None if text.to_lowercase() == HEADPHONES_KEY => {
                 if pressed {
                     headphones.set(!headphones.get());
@@ -971,7 +971,7 @@ impl Runner {
     fn handle(self: &Rc<Self>, msg: Msg) {
         // While a game is played, its buttons go straight to it.
         if let Msg::Button(e) = &msg && game::for_game(e.button) && self.app.borrow().input_target() == InputTarget::Game {
-            if let Some(p) = self.playing.borrow().as_ref() { p.button(e); }
+            if let Some(p) = self.playing.borrow().as_ref() && !e.stick { p.button(e); }
             return;
         }
         match &msg {
@@ -1836,8 +1836,8 @@ fn script(window: &AppWindow, names: &str) -> slint::Timer {
         if !started { started = true; return; } // let the scan and the first frames finish
         if holding > 0 { holding -= 1; return; }
         if let Some((button, hold)) = steps.pop() {
-            post(Msg::Button(ButtonEvent { button, pressed: true, time: now() }));
-            slint::Timer::single_shot(Duration::from_millis(hold), move || post(Msg::Button(ButtonEvent { button, pressed: false, time: now() })));
+            post(Msg::Button(ButtonEvent { button, pressed: true, time: now(), stick: false }));
+            slint::Timer::single_shot(Duration::from_millis(hold), move || post(Msg::Button(ButtonEvent { button, pressed: false, time: now(), stick: false })));
             holding = hold / step;
             return;
         }

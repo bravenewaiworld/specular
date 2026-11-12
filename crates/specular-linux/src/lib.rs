@@ -17,5 +17,6 @@ pub mod leds;
 pub mod power_supply;
 pub mod rumble;
 pub mod sound;
+pub mod sticks;
 pub mod vsync;
 pub mod wpa;

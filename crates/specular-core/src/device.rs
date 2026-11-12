@@ -195,6 +195,13 @@ pub trait Rumble: Send {
     fn set(&mut self, motors: Motors) -> io::Result<()>;
 }
 
+/// A device's analog sticks, read by a game's thread once a frame.
+pub trait Sticks: Send {
+    /// Both sticks' positions now, -32768 to 32767 per axis (left X, left Y, right X, right Y;
+    /// right and down positive), centred within a dead zone. Never blocks.
+    fn read(&mut self) -> [i16; 4];
+}
+
 /// The display's refresh, for pacing a game's frames, and the UI's where the device's Slint
 /// platform uses it.
 pub trait Vsync: Send {
@@ -299,6 +306,8 @@ pub trait Device {
     /// timer at their own frame rate. Each call opens a separate one: give each waiting thread its
     /// own.
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
+    /// The analog sticks, for a game (None: the device has none). Each call opens a separate one.
+    fn open_sticks(&self) -> Option<Box<dyn Sticks>> { None }
     /// Asks the display to refresh as close to `hz` as it can (a game's own rate; None: back to its
     /// usual rate, as a game ends), and returns the rate it will refresh at. The change may take
     /// effect at the next frame shown. A display with one rate keeps it.
