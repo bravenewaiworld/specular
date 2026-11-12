@@ -108,6 +108,7 @@ impl Device for Mainline {
     /// The panel mode nearest `hz`, if one is within `MATCH` of it (else the usual mode), switched
     /// to at the display's next frame. The usual mode's rate is the one measured at start-up.
     fn match_refresh(&self, hz: Option<f64>) -> f64 {
+        let hz = hz.filter(|_| self.board.game_rates);
         let near = |m: &&Mode| hz.is_some_and(|hz| (m.refresh_hz() / hz - 1.0).abs() <= MATCH);
         let best = hz.and_then(|hz| self.modes.iter().filter(near).min_by(|a, b| (a.refresh_hz() - hz).abs().total_cmp(&(b.refresh_hz() - hz).abs())));
         let mode = best.copied().unwrap_or(self.usual);
