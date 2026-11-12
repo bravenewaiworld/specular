@@ -33,7 +33,7 @@ fn main() -> Result<(), String> {
             sound: None, frames: frames.clone(), on_frame: Box::new(|| {}), rumble: None, on_save: Box::new(|| {}), on_bios_halt: Box::new(|| {}),
             write_failed: Box::new(|_| {}), cpu_min: Default::default(), set_cpu_min: Box::new(|_| {}),
             vsync: if vsync { Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0")).map_err(|e| e.to_string())?)) } else { None },
-            display_hz: if vsync { 60.2 } else { 60.0 },
+            match_display: Box::new(move |_| if vsync { 60.2 } else { 60.0 }),
         },
     ).map_err(|e| e.to_string())?;
     eprintln!("{:?}", session.info());

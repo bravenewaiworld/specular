@@ -3,6 +3,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use specular_core::input::Button;
 use specular_core::device::{Audio, Battery, Device, DeviceProfile, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
@@ -11,7 +12,7 @@ use specular_core::wireless::trace::Traced;
 use specular_linux::backlight::SysfsBacklight;
 use specular_linux::bluez::Bluez;
 use specular_linux::rumble::EvdevRumble;
-use specular_linux::kms::{DrmVsync, Kms};
+use specular_linux::kms::{DrmVsync, Kms, Mode, ModeRequest};
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
 
@@ -28,19 +29,29 @@ pub struct Mainline {
     refresh_hz: f64,
     card: PathBuf,
     crtc_index: u32,
+    /// The display's modes, its usual one, and the one asked for last (`match_refresh`).
+    modes: Vec<Mode>,
+    usual: Mode,
+    current: Mutex<Mode>,
+    request: ModeRequest,
 }
+
+/// How far a game's rate may be from a panel mode's for that mode to be used for it (0.5 %); the
+/// sound is resampled for the rest.
+const MATCH: f64 = 0.005;
 
 impl Mainline {
     /// The device on `board`, showing on `kms` (opened from `card`). Measures the panel's refresh
     /// rate, which can differ from what its mode says (the display clock may not reach the mode's
     /// own); falls back to the mode's if vblanks can't be waited for.
-    pub fn new(board: &'static Board, kms: &Kms, card: &Path) -> Self {
+    pub fn new(board: &'static Board, kms: &Kms, card: &Path, request: ModeRequest) -> Self {
         let mode = kms.mode();
         let refresh_hz = match kms.vsync(card).and_then(|mut v| v.measure(MEASURE_VBLANKS)) {
             Ok(hz) => { eprintln!("kms: refresh measured {hz:.3} Hz over {MEASURE_VBLANKS} vblanks (mode says {:.3} Hz)", mode.refresh_hz()); hz }
             Err(e) => { eprintln!("kms: can't measure the refresh ({e}); taking the mode's {:.3} Hz", mode.refresh_hz()); mode.refresh_hz() }
         };
-        Self { board, width: mode.width(), height: mode.height(), refresh_hz, card: card.into(), crtc_index: kms.crtc_index() }
+        Self { board, width: mode.width(), height: mode.height(), refresh_hz, card: card.into(), crtc_index: kms.crtc_index(),
+            modes: kms.modes().to_vec(), usual: mode, current: Mutex::new(mode), request }
     }
 }
 
@@ -87,6 +98,21 @@ impl Device for Mainline {
             Output::Speaker | Output::Headphones => Alsa::open(self.board.sound)?,
             Output::Bluetooth(address) => Alsa::bluetooth(address)?,
         }))
+    }
+
+    /// The panel mode nearest `hz`, if one is within `MATCH` of it (else the usual mode), switched
+    /// to at the display's next frame. The usual mode's rate is the one measured at start-up.
+    fn match_refresh(&self, hz: Option<f64>) -> f64 {
+        let near = |m: &&Mode| hz.is_some_and(|hz| (m.refresh_hz() / hz - 1.0).abs() <= MATCH);
+        let best = hz.and_then(|hz| self.modes.iter().filter(near).min_by(|a, b| (a.refresh_hz() - hz).abs().total_cmp(&(b.refresh_hz() - hz).abs())));
+        let mode = best.copied().unwrap_or(self.usual);
+        let mut current = self.current.lock().unwrap();
+        if *current != mode {
+            eprintln!("display: {} → {mode}", hz.map_or("the menus".into(), |hz| format!("a game at {hz:.3} Hz")));
+            *current = mode;
+            *self.request.lock().unwrap() = Some(mode);
+        }
+        if mode == self.usual { self.refresh_hz } else { mode.refresh_hz() }
     }
 
     /// The panel's vblanks, on a file of its own.

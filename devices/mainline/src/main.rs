@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use specular_core::device::Device;
-use specular_linux::kms::Kms;
+use specular_linux::kms::{Kms, ModeRequest};
 use specular_mainline::boards;
 use specular_mainline::device::Mainline;
 use specular_ui::DataRoot;
@@ -23,11 +23,12 @@ fn main() -> Result<(), specular_ui::Error> {
     eprintln!("board: {}", board.name);
     let card = Path::new(CARD);
     let kms = Kms::open(card)?;
-    let device = Mainline::new(board, &kms, card);
+    let request = ModeRequest::default();
+    let device = Mainline::new(board, &kms, card, request.clone());
     let vsync = device.open_vsync();
     let size = slint::PhysicalSize::new(kms.mode().width(), kms.mode().height());
     specular_ui::run(Box::new(device), DataRoot(data.into()), Some(Box::new(move |on_button| {
-        let platform = GlPlatform::new(KmsSurface::new(kms)?, size, board.input(), vsync)?;
+        let platform = GlPlatform::new(KmsSurface::new(kms, request)?, size, board.input(), vsync)?;
         platform.on_button(on_button);
         slint::platform::set_platform(Box::new(platform)).map_err(|e| format!("{e:?}"))?;
         Ok(())

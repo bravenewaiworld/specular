@@ -299,6 +299,10 @@ pub trait Device {
     /// timer at their own frame rate. Each call opens a separate one: give each waiting thread its
     /// own.
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
+    /// Asks the display to refresh as close to `hz` as it can (a game's own rate; None: back to its
+    /// usual rate, as a game ends), and returns the rate it will refresh at. The change may take
+    /// effect at the next frame shown. A display with one rate keeps it.
+    fn match_refresh(&self, hz: Option<f64>) -> f64 { let _ = hz; self.profile().refresh_hz }
 }
 
 /// Simulated hardware, for the desktop build: it prints what it is asked to do (rumble too), its

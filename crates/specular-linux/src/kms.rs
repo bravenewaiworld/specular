@@ -132,6 +132,10 @@ impl Libs {
 #[derive(Clone, Copy)]
 pub struct Mode { info: ModeInfo }
 
+impl PartialEq for Mode {
+    fn eq(&self, o: &Self) -> bool { self.info.clock == o.info.clock && self.refresh_hz() == o.refresh_hz() && self.info.name == o.info.name }
+}
+
 impl Mode {
     pub fn width(&self) -> u32 { self.info.hdisplay as u32 }
     pub fn height(&self) -> u32 { self.info.vdisplay as u32 }
@@ -151,6 +155,10 @@ impl std::fmt::Display for Mode {
             if self.preferred() { " preferred" } else { "" })
     }
 }
+
+/// A mode for the display's owner to switch to at its next present (`set_mode`), asked for from
+/// any thread.
+pub type ModeRequest = std::sync::Arc<std::sync::Mutex<Option<Mode>>>;
 
 /// How the page flips have gone since the last `Kms::take_flip_stats`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

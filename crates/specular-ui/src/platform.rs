@@ -25,7 +25,7 @@ use slint::{PhysicalSize, Window};
 use specular_core::device::Vsync;
 use specular_linux::egl::EglDisplay;
 use specular_linux::input::{ButtonEvent, Input, clock};
-use specular_linux::kms::Kms;
+use specular_linux::kms::{Kms, ModeRequest};
 use specular_linux::vsync::FramePacer;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -55,15 +55,17 @@ pub struct KmsSurface {
     /// Declared before `kms`, so it is dropped first: its EGL surface lives on the GBM surface.
     egl: EglDisplay,
     kms: RefCell<Kms>,
+    /// A mode other threads ask for, set at the next present.
+    request: ModeRequest,
     /// When the last flip statistics were logged, if they are.
     stats: Option<Cell<Duration>>,
 }
 
 impl KmsSurface {
-    /// Opens EGL on `kms`'s GBM surface.
-    pub fn new(kms: Kms) -> Result<Self, Error> {
+    /// Opens EGL on `kms`'s GBM surface. A mode put in `request` is switched to at the next present.
+    pub fn new(kms: Kms, request: ModeRequest) -> Result<Self, Error> {
         let stats = std::env::var_os("SPECULAR_FLIP_STATS").map(|_| Cell::new(clock(libc::CLOCK_MONOTONIC)));
-        Ok(Self { egl: EglDisplay::open(kms.native())?, kms: RefCell::new(kms), stats })
+        Ok(Self { egl: EglDisplay::open(kms.native())?, kms: RefCell::new(kms), request, stats })
     }
 }
 
@@ -76,6 +78,7 @@ impl GlSurface for KmsSurface {
     fn present(&self) -> Result<(), Error> {
         self.egl.swap_buffers()?;
         let mut kms = self.kms.borrow_mut();
+        if let Some(mode) = self.request.lock().unwrap().take() { kms.set_mode(mode)?; }
         kms.present()?;
         if let Some(since) = &self.stats {
             let now = clock(libc::CLOCK_MONOTONIC);

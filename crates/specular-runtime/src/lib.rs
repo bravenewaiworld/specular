@@ -96,8 +96,9 @@ pub struct Outputs {
     /// Where the sound plays at first (`Session::set_sound` changes it).
     pub sound: Option<Box<dyn SoundOut>>,
     pub vsync: Option<Box<dyn Vsync>>,
-    /// The display's refresh rate (Hz).
-    pub display_hz: f64,
+    /// Asks the display for a refresh rate near the game's (Hz; None as the game ends) and returns
+    /// the rate it will have (`Device::match_refresh`).
+    pub match_display: Box<dyn Fn(Option<f64>) -> f64 + Send>,
     pub frames: Arc<FrameSlot>,
     /// Called on the game's thread after each new frame is put in `frames`.
     pub on_frame: Box<dyn Fn() + Send>,
@@ -454,6 +455,13 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
     if let Some((path, _)) = &spec.record { report(LaunchRecord::remove(path), path); }
 }
 
+/// Asks for the display's usual rate when dropped.
+struct Restore(Box<dyn Fn(Option<f64>) -> f64 + Send>);
+
+impl Drop for Restore {
+    fn drop(&mut self) { (self.0)(None); }
+}
+
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
 fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
         started: mpsc::Sender<Result<GameInfo, StartError>>) {
@@ -465,9 +473,12 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     let fps = av.timing.fps.max(1.0);
     // A display within MAX_SPEED_CHANGE of the game's rate paces it (so it runs at the display's
     // rate, its sound sped up or slowed to match); otherwise a timer does, at the game's own.
-    let speed = out.display_hz / fps;
+    let display_hz = (out.match_display)(Some(fps));
+    // Back to the display's usual rate as the game ends, however it ends.
+    let _restore = Restore(out.match_display);
+    let speed = display_hz / fps;
     let by_display = out.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
-    let mut pacer = Pacer::new(if by_display { out.vsync } else { None }, if by_display { out.display_hz } else { fps });
+    let mut pacer = Pacer::new(if by_display { out.vsync } else { None }, if by_display { display_hz } else { fps });
     let mut sound = sound::Sound::new(out.sound, av.timing.sample_rate, if by_display { speed } else { 1.0 });
     let g = av.geometry;
     let options = frontend::with(|f| f.options.declared.clone()).unwrap_or_default();
