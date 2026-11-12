@@ -57,9 +57,7 @@ pub const BOARDS: &[Board] = &[
             &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, VolUp, VolDown, Power]
         },
         inputs: &["gpio-keys-control", "gpio-keys-vol", "rk805 pwrkey"],
-        // Off: after a switch the panel shows garbled vertical bands, even back in its usual mode,
-        // until the next start (Specular's docs/mainline.md, Findings).
-        game_rates: false,
+        game_rates: true,
         sticks: Some("adc-joystick"),
         menu_chord: true,
         rumble: Some("pwm-vibrator"),
