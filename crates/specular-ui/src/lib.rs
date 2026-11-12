@@ -308,26 +308,20 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     }).map_err(|e| format!("this window can't show games: {e:?}"))?;
     RUNNER.with(|r| *r.borrow_mut() = Some(runner.clone()));
     if keyboard {
-        let (headphones, tv) = (Cell::new(false), Cell::new(false));
+        // Each key's simulated plug, what it is (for the log), and the message it sends.
+        let plugs = [(HEADPHONES_KEY, "input: simulated headphones", Msg::Headphones as fn(bool) -> Msg), (TV_KEY, "display: simulated TV", Msg::Hdmi)]
+            .map(|(key, what, msg)| (key, what, msg, Cell::new(false)));
         window.on_key(move |text, pressed| match key_button(&text) {
             Some(button) => { post(Msg::Button(ButtonEvent { button, pressed, time: now(), stick: false })); true }
-            None if text.to_lowercase() == HEADPHONES_KEY => {
+            None => {
+                let Some((_, what, msg, plugged)) = plugs.iter().find(|p| text.to_lowercase() == p.0) else { return false };
                 if pressed {
-                    headphones.set(!headphones.get());
-                    eprintln!("input: simulated headphones {}", if headphones.get() { "plugged in" } else { "unplugged" });
-                    post(Msg::Headphones(headphones.get()));
+                    plugged.set(!plugged.get());
+                    eprintln!("{what} {}", if plugged.get() { "plugged in" } else { "unplugged" });
+                    post(msg(plugged.get()));
                 }
                 true
             }
-            None if text.to_lowercase() == TV_KEY => {
-                if pressed {
-                    tv.set(!tv.get());
-                    eprintln!("display: simulated TV {}", if tv.get() { "plugged in" } else { "unplugged" });
-                    post(Msg::Hdmi(tv.get()));
-                }
-                true
-            }
-            None => false,
         });
     }
     runner.tick_clock();
@@ -466,8 +460,8 @@ impl Volume {
     /// before its setting is known. Sets all of them even if one fails, and returns the first
     /// error.
     fn write(&self, audio: &dyn Audio, which: impl Fn(&Output) -> bool) -> std::io::Result<()> {
-        let passing = self.output.comes_and_goes().then(|| self.output.clone());
-        [Output::Speaker, Output::Headphones].into_iter().chain(passing).filter(which).fold(Ok(()), |result, output| {
+        let comes_and_goes = self.output.comes_and_goes().then(|| self.output.clone());
+        [Output::Speaker, Output::Headphones].into_iter().chain(comes_and_goes).filter(which).fold(Ok(()), |result, output| {
             let level = if self.muted { 0 } else { self.levels.get(output.volume_setting()).copied().unwrap_or(0) };
             eprintln!("sound: {output:?} volume {level}{}", if self.muted { " (muted)" } else { "" });
             result.and(audio.set_volume(&output, level))

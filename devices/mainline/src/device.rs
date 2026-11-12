@@ -32,7 +32,7 @@ const MEASURE_VBLANKS: u32 = 30;
 pub struct Mainline {
     board: &'static Board,
     card: PathBuf,
-    /// The UI's size: the panel's, whichever output shows it.
+    /// The UI's size: the main output's (the panel's), whichever output shows it.
     size: (u32, u32),
     active_crtc: ActiveCrtc,
     request: ModeRequest,
@@ -40,7 +40,8 @@ pub struct Mainline {
     backlight: Arc<Mutex<Backlight>>,
     /// The TV's volume level, which its sound is scaled by (`SoftVolume`).
     hdmi_volume: Arc<AtomicU8>,
-    /// The moves to (true) and from a TV, for the app; the receiver goes to `hardware`.
+    /// The moves to (true) and from a TV, for the app; the first `hardware` call takes the
+    /// receiver.
     hdmi: (mpsc::Sender<bool>, Mutex<Option<mpsc::Receiver<bool>>>),
 }
 
@@ -76,6 +77,7 @@ impl Mainline {
         Self { board, card: card.into(), size: kms.size(), active_crtc: kms.active_crtc(), request,
             shown: Arc::new(Mutex::new(Shown { output, refresh_hz, current: mode, moves: 0 })),
             backlight: Arc::new(Mutex::new(Backlight { light, wanted: true, tv: false })),
+            // 0 (silent) until the app sets the TV's level, as sound moves there.
             hdmi_volume: Arc::default(), hdmi: (sender, Mutex::new(Some(receiver))) }
     }
 
@@ -99,10 +101,13 @@ impl Mainline {
             let (shown, card, crtc, output) = (shown.clone(), card.clone(), crtc.clone(), output.clone());
             std::thread::spawn(move || {
                 let measured = DrmVsync::open(&card, crtc).and_then(|mut v| v.measure(MEASURE_VBLANKS));
-                let mut s = shown.lock().unwrap();
-                if s.moves != moves { return; }
                 let refresh = match measured {
-                    Ok(hz) => { s.refresh_hz = hz; format!("measured {hz:.3} Hz") }
+                    Ok(hz) => {
+                        // A later move's output has its own measurement coming.
+                        let mut s = shown.lock().unwrap();
+                        if s.moves == moves { s.refresh_hz = hz; }
+                        format!("measured {hz:.3} Hz")
+                    }
                     Err(e) => format!("refresh not measured ({e})"),
                 };
                 let sound = if output.external { board.hdmi_sound.unwrap_or("none") } else { board.sound };
@@ -209,7 +214,7 @@ impl Backlight {
     fn apply(&self) -> io::Result<()> { self.light()?.set_panel(self.wanted && !self.tv) }
 }
 
-/// The UI's side of `Backlight` (on the hardware thread).
+/// `Backlight` as the app's `Display` (used on its hardware thread); `on_switch` holds it too.
 struct SharedBacklight(Arc<Mutex<Backlight>>);
 
 impl Display for SharedBacklight {

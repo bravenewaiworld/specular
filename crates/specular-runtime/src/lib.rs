@@ -412,15 +412,16 @@ struct Pacer {
 }
 
 impl Pacer {
+    /// Paces by `vsync` (if any) at `hz` until `pace` says otherwise.
     fn new(vsync: Option<Box<dyn Vsync>>, hz: f64) -> Self {
         let by_display = vsync.is_some();
         Self { vsync, by_display, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new(), last_vsync: None }
     }
 
-    /// Paces a game at `fps` on a display refreshing at `display_hz`, and returns how much faster
-    /// than its own rate the game runs: by the vsync, if there is one and the display is within
-    /// `MAX_SPEED_CHANGE` of the game (its sound then sped up or slowed to match); else by a timer
-    /// at the game's own rate (1).
+    /// Paces a game at `fps` on a display refreshing at `display_hz`: by the vsync if there is one
+    /// and the display is within `MAX_SPEED_CHANGE` of `fps`, else by a timer at `fps`. Returns the
+    /// speed-up to give the sound (`display_hz / fps`, or 1 on a timer). Forgets the frame delay
+    /// learned so far: the display may be another one.
     fn pace(&mut self, fps: f64, display_hz: f64) -> f64 {
         let speed = display_hz / fps;
         self.by_display = self.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
@@ -430,7 +431,7 @@ impl Pacer {
         if self.by_display { speed } else { 1.0 }
     }
 
-    /// Waits until the core should run. With a vsync, returns how long after the previous wait
+    /// Waits until the core should run. Paced by the vsync, returns how long after the previous wait
     /// this one's vsync came (None for the first, after a pause, and on a timer).
     fn wait(&mut self) -> Option<Duration> {
         if self.by_display && let Some(v) = self.vsync.as_mut() {
@@ -454,7 +455,7 @@ impl Pacer {
     /// The game paused or resumed: the next wait's gap would count the pause.
     fn paused(&mut self) { self.last_vsync = None; }
 
-    /// With a vsync, records how long a run took, and every 60 runs sets the frame delay to what
+    /// Paced by the vsync, records how long a run took, and every 60 runs sets the frame delay to what
     /// the slowest runs (the 95th percentile) leave.
     fn ran(&mut self, took: Duration) {
         if !self.by_display || self.vsync.is_none() { return; }
@@ -492,7 +493,8 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     };
     let av = game.av;
     let fps = av.timing.fps.max(1.0);
-    // Back to the display's usual rate as the game ends, however it ends.
+    // Asks the display for the game's rate, as it starts and at each resume; dropped, for the
+    // display's usual rate again, however the game ends.
     let display = Restore(out.match_display);
     let mut pacer = Pacer::new(out.vsync, fps);
     let speed = pacer.pace(fps, (display.0)(Some(fps)));

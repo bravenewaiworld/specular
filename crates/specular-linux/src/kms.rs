@@ -148,6 +148,7 @@ impl std::fmt::Debug for Mode {
 impl Mode {
     pub fn width(&self) -> u32 { self.info.hdisplay as u32 }
     pub fn height(&self) -> u32 { self.info.vdisplay as u32 }
+    pub fn size(&self) -> (u32, u32) { (self.width(), self.height()) }
     /// The refresh rate its timings give (the pixel clock over the total pixels per frame). The
     /// panel's real rate can differ, when the clock it gets isn't the one asked for: measure it
     /// with `DrmVsync::measure`.
@@ -155,8 +156,8 @@ impl Mode {
         let total = self.info.htotal as f64 * self.info.vtotal as f64;
         if total == 0.0 { 0.0 } else { self.info.clock as f64 * 1000.0 / total }
     }
-    /// Whether it draws every line each refresh (not interlaced or line-doubled), as Specular's
-    /// picture needs.
+    /// Whether it draws every line each refresh (not interlaced or line-doubled). Specular uses
+    /// only such modes: interlacing makes thin lines of the UI flicker.
     pub fn progressive(&self) -> bool { self.info.flags & (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN) == 0 }
     fn preferred(&self) -> bool { self.info.kind & DRM_MODE_TYPE_PREFERRED != 0 }
 }
@@ -209,8 +210,9 @@ pub fn fit(from: (u32, u32), to: (u32, u32)) -> Rect {
     Rect { x: (tw - width) / 2, y: (th - height) / 2, width, height }
 }
 
-/// A connected output and how Specular drives it: its connector, a CRTC for it, and the mode
-/// chosen for it (its preferred mode on the panel; `tv_mode` on an external display).
+/// A connected display output (not to be confused with `device::Output`, where sound goes) and
+/// how Specular drives it: its connector, a CRTC for it, and the mode chosen for it (the main
+/// output's preferred one, `choose_main`; a TV's from `tv_mode`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Output {
     /// As the kernel names it (e.g. DSI-1, HDMI-A-1).
@@ -240,10 +242,11 @@ fn tv_mode(modes: &[Mode]) -> Option<Mode> {
 }
 
 /// The mode of `modes` nearest `hz` (a game's rate), if one is within `within` of it (a
-/// fraction) and is progressive and of `usual`'s size (its surface's).
+/// fraction) and is progressive and of `usual`'s size: `usual` is the output's chosen mode, whose
+/// size its GBM surface has, and only modes of that size can be switched to.
 pub fn nearest_mode(modes: &[Mode], usual: Mode, hz: f64, within: f64) -> Option<Mode> {
     let off = |m: &Mode| (m.refresh_hz() / hz - 1.0).abs();
-    modes.iter().filter(|m| m.progressive() && (m.width(), m.height()) == (usual.width(), usual.height()) && off(m) <= within)
+    modes.iter().filter(|m| m.progressive() && m.size() == usual.size() && off(m) <= within)
         .min_by(|a, b| off(a).total_cmp(&off(b))).copied()
 }
 
@@ -272,15 +275,17 @@ fn choose_main(connectors: &[Connector], crtcs: &[u32]) -> io::Result<Output> {
 }
 
 /// The external output to show the UI on instead of the main one, if one is connected with a
-/// usable mode (`tv_mode`); None when the main output isn't a built-in panel (it then stays).
+/// usable mode (`tv_mode`). Always None when the main output is itself external (a board without
+/// a built-in panel): the picture then never moves.
 fn choose_tv(connectors: &[Connector], crtcs: &[u32], main: &Output) -> Option<Output> {
     if main.external { return None; }
     connectors.iter().filter(|c| c.connected && !c.internal && c.id != main.connector)
         .find_map(|c| output(c, tv_mode(&c.modes)?, crtcs, Some(main.crtc)).ok())
 }
 
-/// `c` in `mode`, on the CRTC driving it now, else on the first it can use, preferring any but
-/// `avoid` (the panel's: it is free once the panel is off, but leaving it be is simpler).
+/// `c` in `mode`, on the CRTC driving it now (even if that is `avoid`), else on the first it can
+/// use other than `avoid` (the panel's CRTC: it would be free once the panel is off, but with a
+/// CRTC of its own the TV never has to take over the panel's), else on `avoid`.
 fn output(c: &Connector, mode: Mode, crtcs: &[u32], avoid: Option<u32>) -> io::Result<Output> {
     let possible = |i: &usize| c.possible_crtcs & (1 << i) != 0;
     let index = c.current_crtc.and_then(|id| crtcs.iter().position(|&x| x == id))
@@ -290,7 +295,8 @@ fn output(c: &Connector, mode: Mode, crtcs: &[u32], avoid: Option<u32>) -> io::R
 }
 
 /// An output the picture is on, or can be: its GBM surface, whose buffers it scans out, and the
-/// buffers it has locked.
+/// buffers taken from that surface for the screen (`gbm_surface_lock_front_buffer`) and not yet
+/// given back.
 struct Screen {
     output: Output,
     /// The mode in use (`output.mode` unless `set_mode` changed it).
@@ -351,7 +357,8 @@ impl Screen {
 /// EGL into the main output's GBM surface (`native`): usually the built-in panel, whose size the
 /// UI keeps. While a TV is connected (`find_tv`, `show_on`) the picture is on the TV instead and
 /// the panel is off: the UI's frames are then copied, scaled, onto the TV's own GBM surface
-/// (`tv_native`, `picture`). `present` puts each frame on whichever shows it.
+/// (`tv_native`) by the owner (`egl::EglDisplay::copy_to`). `present` puts each frame on whichever
+/// output shows the picture.
 pub struct Kms {
     libs: Libs,
     card: File,
@@ -388,7 +395,7 @@ impl Kms {
     pub fn output(&self) -> &Output { &self.active().output }
 
     /// The UI's size: the main output's mode's, whichever output shows it.
-    pub fn size(&self) -> (u32, u32) { (self.main.output.mode.width(), self.main.output.mode.height()) }
+    pub fn size(&self) -> (u32, u32) { self.main.output.mode.size() }
 
     /// The mode in use on the output showing the picture.
     pub fn mode(&self) -> Mode { self.active().mode }
@@ -400,8 +407,7 @@ impl Kms {
     /// the next present, with a full mode set: the screen may blank for a moment.
     pub fn set_mode(&mut self, mode: Mode) -> io::Result<()> {
         let screen = self.tv.as_mut().unwrap_or(&mut self.main);
-        let size = |m: &Mode| (m.width(), m.height());
-        if !screen.output.modes.contains(&mode) || size(&mode) != size(&screen.output.mode) {
+        if !screen.output.modes.contains(&mode) || mode.size() != screen.output.mode.size() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("kms: {mode} isn't a mode of {} at its surface's size", screen.output.name)));
         }
         eprintln!("kms: switching {} to {mode}", screen.output.name);
@@ -418,11 +424,6 @@ impl Kms {
     /// The TV's GBM surface while the picture is on one, for a second EGL surface
     /// (`EglDisplay::create_copy_target`).
     pub fn tv_native(&self) -> Option<*mut c_void> { self.tv.as_ref().map(|s| s.surface) }
-
-    /// Where the UI's picture goes on the TV's surface while it is on one (`fit`).
-    pub fn picture(&self) -> Option<Rect> {
-        self.tv.as_ref().map(|tv| fit(self.size(), (tv.output.mode.width(), tv.output.mode.height())))
-    }
 
     /// The CRTC showing the picture, shared with every `DrmVsync` opened from it.
     pub fn active_crtc(&self) -> ActiveCrtc { self.active_crtc.clone() }
@@ -443,7 +444,8 @@ impl Kms {
 
     /// Moves the picture to `tv` (None: back to the main output) at the next present, turning the
     /// output that showed it off. Any EGL surface on the TV's GBM surface must be destroyed
-    /// first. On failure the picture goes back to the main output.
+    /// first. If the TV's GBM surface can't be made, the picture stays on (goes back to) the main
+    /// output; if waiting for a pending flip fails, nothing changes.
     pub fn show_on(&mut self, tv: Option<Output>) -> io::Result<()> {
         self.wait_for_flip()?;
         self.active_crtc.store(NO_CRTC, Ordering::Relaxed);
@@ -454,7 +456,8 @@ impl Kms {
             None if tv.is_some() => self.main.off(&self.libs, fd),
             None => {}
         }
-        // Back in its usual mode: a game's (`set_mode`) is asked for again as the game resumes.
+        // The main output in its usual mode again: a game's mode (`set_mode`) is dropped, and asked
+        // for again as the game resumes.
         (self.main.mode, self.main.mode_set) = (self.main.output.mode, true);
         let Some(tv) = tv else { return Ok(()) };
         self.tv = Some(Screen::new(&self.libs, self.device, tv)?);
@@ -477,20 +480,19 @@ impl Kms {
     fn flip_to(&mut self, bo: *mut c_void) -> io::Result<()> {
         let fd = self.card.as_raw_fd();
         self.wait_for_flip()?;
-        let Kms { libs, tv, main, active_crtc, last_flip, .. } = self;
-        let screen = tv.as_mut().unwrap_or(main);
-        let fb = screen.framebuffer(libs, fd, bo)?;
+        let screen = self.tv.as_mut().unwrap_or(&mut self.main);
+        let fb = screen.framebuffer(&self.libs, fd, bo)?;
         let crtc = screen.output.crtc;
         if screen.mode_set {
-            let r = unsafe { (libs.set_crtc)(fd, crtc, fb, 0, 0, &screen.output.connector, 1, &screen.mode.info) };
+            let r = unsafe { (self.libs.set_crtc)(fd, crtc, fb, 0, 0, &screen.output.connector, 1, &screen.mode.info) };
             if r != 0 { return Err(context(io::Error::from_raw_os_error(-r), format!("drmModeSetCrtc for {} on CRTC {crtc} (another program holds the display?)", screen.output.name))); }
-            if let Some(old) = screen.shown.replace(bo) { unsafe { (libs.gbm_surface_release_buffer)(screen.surface, old) }; }
+            if let Some(old) = screen.shown.replace(bo) { unsafe { (self.libs.gbm_surface_release_buffer)(screen.surface, old) }; }
             screen.mode_set = false;
-            active_crtc.store(screen.output.crtc_index, Ordering::Relaxed);
-            *last_flip = None;
+            self.active_crtc.store(screen.output.crtc_index, Ordering::Relaxed);
+            self.last_flip = None;
             return Ok(());
         }
-        let r = unsafe { (libs.page_flip)(fd, crtc, fb, DRM_MODE_PAGE_FLIP_EVENT, std::ptr::null_mut()) };
+        let r = unsafe { (self.libs.page_flip)(fd, crtc, fb, DRM_MODE_PAGE_FLIP_EVENT, std::ptr::null_mut()) };
         if r != 0 { return Err(context(io::Error::from_raw_os_error(-r), format!("drmModePageFlip for {} on CRTC {crtc}", screen.output.name))); }
         screen.flipping = Some(bo);
         Ok(())
@@ -519,10 +521,9 @@ impl Kms {
     }
 
     fn flipped(&mut self, at: Duration) {
-        let Kms { libs, tv, main, .. } = self;
-        let screen = tv.as_mut().unwrap_or(main);
+        let screen = self.tv.as_mut().unwrap_or(&mut self.main);
         if let Some(old) = std::mem::replace(&mut screen.shown, screen.flipping.take()) {
-            unsafe { (libs.gbm_surface_release_buffer)(screen.surface, old) };
+            unsafe { (self.libs.gbm_surface_release_buffer)(screen.surface, old) };
         }
         let refresh = Duration::from_secs_f64(1.0 / screen.mode.refresh_hz().max(1.0));
         if let Some(gap) = self.last_flip.map(|last| at.saturating_sub(last)) {
@@ -615,13 +616,14 @@ struct WaitVblank { kind: u32, sequence: u32, sec: i64, usec: i64 }
 /// file of the card (it needs no DRM master), so each thread that waits has its own.
 pub struct DrmVsync { card: File, crtc: ActiveCrtc }
 
-/// How long a wait takes while the picture moves between outputs (no CRTC has vblanks then).
+/// How long a wait takes while the picture moves between outputs (no CRTC has vblanks then):
+/// about a refresh at 60 Hz.
 const SWITCHING_WAIT: Duration = Duration::from_millis(16);
 
 impl DrmVsync {
     /// Opens `card` for waits on the CRTC `crtc` names, whichever it is at each wait. Fails if a
     /// wait fails (the CRTC is off, or the driver has no vblank interrupt), so callers can fall
-    /// back to a timer.
+    /// back to a timer. (Opened while the picture moves, it can't tell, and succeeds.)
     pub fn open(card: &Path, crtc: ActiveCrtc) -> io::Result<Self> {
         let mut v = Self { card: File::options().read(true).write(true).open(card).map_err(|e| context(e, card.display()))?, crtc };
         v.wait_at()?;

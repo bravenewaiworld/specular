@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use khronos_egl as egl;
 
+use crate::kms::{Rect, fit};
+
 type Egl = egl::DynamicInstance<egl::EGL1_4>;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -113,10 +115,28 @@ impl EglDisplay {
 }
 
 /// A second on-screen surface, on another GBM surface of the same format (a TV's:
-/// `kms::Kms::tv_native`), that the frames drawn on the main surface are copied onto
-/// (`EglDisplay::copy_to`). Give it back with `EglDisplay::destroy_copy_target` before its GBM
-/// surface goes.
-pub struct CopyTarget { surface: egl::Surface, gl: CopyGl }
+/// `kms::Kms::tv_native`), that the frames drawn on the main surface are copied onto, scaled to
+/// fit (`EglDisplay::copy_to`). Drop it before its GBM surface goes.
+pub struct CopyTarget {
+    libs: Arc<Libs>,
+    display: egl::Display,
+    surface: egl::Surface,
+    gl: CopyGl,
+    picture: Rect,
+    /// `glBlitFramebuffer`'s source and destination corners (GL's rows count from the bottom).
+    blit: [i32; 8],
+}
+
+impl CopyTarget {
+    /// Where the main surface's picture goes on this one (`kms::fit`).
+    pub fn picture(&self) -> Rect { self.picture }
+}
+
+impl Drop for CopyTarget {
+    fn drop(&mut self) {
+        if let Err(e) = self.libs.egl.destroy_surface(self.display, self.surface) { eprintln!("egl: destroying the second surface: {e}"); }
+    }
+}
 
 // GLES 3 (gl3.h).
 const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
@@ -135,8 +155,9 @@ struct CopyGl {
 }
 
 impl EglDisplay {
-    /// A `CopyTarget` on the GBM surface `gbm_surface`. Needs a GLES 3 context (for the blit).
-    pub fn create_copy_target(&self, gbm_surface: *mut c_void) -> Result<CopyTarget, Error> {
+    /// A `CopyTarget` on the GBM surface `gbm_surface` of size `to`, for a main surface of size
+    /// `from`. Needs a GLES 3 context (for the blit).
+    pub fn create_copy_target(&self, gbm_surface: *mut c_void, from: (u32, u32), to: (u32, u32)) -> Result<CopyTarget, Error> {
         if self.version < 3 { return Err("copying the picture to a second display needs GLES 3".into()); }
         let f = |name: &CStr| {
             let p = self.proc_address(name);
@@ -153,33 +174,31 @@ impl EglDisplay {
             }
         };
         let surface = unsafe { self.libs.egl.create_window_surface(self.display, self.config, gbm_surface, None)? };
-        Ok(CopyTarget { surface, gl })
+        let picture = fit(from, to);
+        let bottom = (to.1 - picture.y - picture.height) as i32;
+        let (x, width, height) = (picture.x as i32, picture.width as i32, picture.height as i32);
+        let blit = [0, 0, from.0 as i32, from.1 as i32, x, bottom, x + width, bottom + height];
+        Ok(CopyTarget { libs: self.libs.clone(), display: self.display, surface, gl, picture, blit })
     }
 
-    /// Destroys `target`'s EGL surface.
-    pub fn destroy_copy_target(&self, target: CopyTarget) {
-        if let Err(e) = self.libs.egl.destroy_surface(self.display, target.surface) { eprintln!("egl: destroying the second surface: {e}"); }
-    }
-
-    /// Copies the frame just drawn on the main surface (`from` pixels, not swapped yet) onto
-    /// `to`, scaled into `rect` (from the top left) with black around it, ends that frame there
-    /// (as `swap_buffers` does on the main surface), and makes the main surface current again. The
-    /// main surface is never swapped meanwhile: it keeps being drawn into, at its own size.
-    pub fn copy_to(&self, to: &CopyTarget, from: (u32, u32), to_size: (u32, u32), rect: crate::kms::Rect) -> Result<(), Error> {
+    /// Copies the frame just drawn into the main surface's back buffer onto `to`, scaled into its
+    /// `picture` with black around it, swaps `to` (ending the frame there, as `swap_buffers` does
+    /// on the main surface), and makes the main surface current again. While a `CopyTarget` shows
+    /// the picture the main surface is never swapped: each frame is drawn into its back buffer at
+    /// its own size, and copied from there.
+    pub fn copy_to(&self, to: &CopyTarget) -> Result<(), Error> {
         let egl = &self.libs.egl;
-        // Drawing to the target, reading from the main surface: framebuffer 0 is each one's.
+        // The target as the draw surface, the main one as the read surface: framebuffer 0 is then
+        // the target's back buffer for drawing and the main surface's for reading.
         egl.make_current(self.display, Some(to.surface), Some(self.surface), Some(self.context))?;
-        let g = &to.gl;
-        // GL's rows count from the bottom.
-        let bottom = (to_size.1 - rect.y - rect.height) as i32;
+        let (g, [sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1]) = (&to.gl, to.blit);
         unsafe {
             (g.bind_framebuffer)(GL_READ_FRAMEBUFFER, 0);
             (g.bind_framebuffer)(GL_DRAW_FRAMEBUFFER, 0);
             (g.disable)(GL_SCISSOR_TEST);
             (g.clear_color)(0.0, 0.0, 0.0, 1.0);
             (g.clear)(GL_COLOR_BUFFER_BIT);
-            (g.blit_framebuffer)(0, 0, from.0 as i32, from.1 as i32, rect.x as i32, bottom, (rect.x + rect.width) as i32, bottom + rect.height as i32,
-                GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            (g.blit_framebuffer)(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, GL_COLOR_BUFFER_BIT, GL_LINEAR);
         }
         let swapped = egl.swap_buffers(self.display, to.surface);
         self.make_current()?;

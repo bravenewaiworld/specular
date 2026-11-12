@@ -26,7 +26,7 @@ use slint::{PhysicalSize, Window};
 use specular_core::device::Vsync;
 use specular_linux::egl::{CopyTarget, EglDisplay};
 use specular_linux::input::{ButtonEvent, Input, clock};
-use specular_linux::kms::{Kms, ModeRequest, Output, Rect};
+use specular_linux::kms::{self, Kms, ModeRequest, Rect};
 use specular_linux::vsync::FramePacer;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -59,10 +59,10 @@ impl GlSurface for EglDisplay {
 /// present after each hotplug event. With `SPECULAR_FLIP_STATS` set (to anything), logs how the
 /// flips went every 10 s while frames are presented (`kms::FlipStats`), as a `kms:` line.
 pub struct KmsSurface {
-    /// On the TV's GBM surface while the picture is on one; given back in `drop`, before `kms`
-    /// goes.
+    /// On the TV's GBM surface while the picture is on one.
     tv: RefCell<Option<CopyTarget>>,
-    /// Declared before `kms`, so it is dropped first: its EGL surface lives on the GBM surface.
+    /// Declared (like `tv`) before `kms`, so it is dropped first: its EGL surface lives on the GBM
+    /// surface.
     egl: EglDisplay,
     kms: RefCell<Kms>,
     /// A mode other threads ask for, set at the next present.
@@ -78,7 +78,7 @@ pub struct KmsSurface {
 
 /// Told of each move of the picture once the new output shows its first frame: the output, where
 /// the UI's picture is on it (on a TV), and how long the move took.
-pub type OnSwitch = Box<dyn FnMut(&Output, Option<Rect>, Duration)>;
+pub type OnSwitch = Box<dyn FnMut(&kms::Output, Option<Rect>, Duration)>;
 
 impl KmsSurface {
     /// Opens EGL on `kms`'s GBM surface, and follows the hotplug events of `card` (the card `kms`
@@ -107,16 +107,19 @@ impl KmsSurface {
     }
 
     /// Moves the picture to `tv` (None: the panel) at the next present; to the panel if it can't.
-    fn move_to(&self, kms: &mut Kms, tv: Option<Output>) {
+    fn move_to(&self, kms: &mut Kms, tv: Option<kms::Output>) {
         if self.moving.get().is_none() { self.moving.set(Some(clock(libc::CLOCK_MONOTONIC))); }
-        if let Some(old) = self.tv.take() { self.egl.destroy_copy_target(old); }
+        drop(self.tv.take()); // before its GBM surface goes
         let name = tv.as_ref().map(|o| o.name.clone());
         let target = kms.show_on(tv).map_err(Error::from)
-            .and_then(|()| kms.tv_native().map(|s| self.egl.create_copy_target(s)).transpose());
+            .and_then(|()| kms.tv_native().map(|s| self.egl.create_copy_target(s, kms.size(), kms.mode().size())).transpose());
         match target {
             Ok(target) => *self.tv.borrow_mut() = target,
             Err(e) => {
-                eprintln!("display: can't show the picture on {}: {e}; it stays on the panel", name.as_deref().unwrap_or("the panel"));
+                match name {
+                    Some(name) => eprintln!("display: can't show the picture on {name}: {e}; it stays on the panel"),
+                    None => eprintln!("display: moving the picture back to the panel: {e}"),
+                }
                 if kms.tv().is_some() && let Err(e) = kms.show_on(None) { eprintln!("display: back to the panel: {e}"); }
             }
         }
@@ -125,17 +128,12 @@ impl KmsSurface {
     /// Ends the frame drawn on the output showing the picture: on the panel, swaps the main
     /// surface; on a TV, copies the frame onto the TV's surface.
     fn show(&self, kms: &mut Kms) -> Result<(), Error> {
-        match (self.tv.borrow().as_ref(), kms.picture()) {
-            (Some(tv), Some(picture)) => self.egl.copy_to(tv, kms.size(), (kms.mode().width(), kms.mode().height()), picture)?,
-            _ => self.egl.swap_buffers()?,
+        // `self.tv` is Some exactly while `kms.tv()` is (`move_to`).
+        match self.tv.borrow().as_ref() {
+            Some(tv) => self.egl.copy_to(tv)?,
+            None => self.egl.swap_buffers()?,
         }
         Ok(kms.present()?)
-    }
-}
-
-impl Drop for KmsSurface {
-    fn drop(&mut self) {
-        if let Some(tv) = self.tv.take() { self.egl.destroy_copy_target(tv); }
     }
 }
 
@@ -148,7 +146,8 @@ impl GlSurface for KmsSurface {
     fn present(&self) -> Result<(), Error> {
         let mut kms = self.kms.borrow_mut();
         if self.hotplug.swap(false, Relaxed) { self.follow_outputs(&mut kms); }
-        // A mode asked for just before the picture moved may be the other output's.
+        // A mode asked for just before the picture moved was one of the other output's: `set_mode`
+        // refuses it, and the game asks again as it resumes.
         if let Some(mode) = self.request.lock().unwrap().take() && let Err(e) = kms.set_mode(mode) { eprintln!("{e}"); }
         if let Err(e) = self.show(&mut kms) {
             let Some(tv) = kms.tv().map(|o| o.name.clone()) else { return Err(e) };
@@ -157,7 +156,7 @@ impl GlSurface for KmsSurface {
             self.show(&mut kms)?;
         }
         if let Some(since) = self.moving.take() {
-            (self.on_switch.borrow_mut())(kms.output(), kms.picture(), clock(libc::CLOCK_MONOTONIC).saturating_sub(since));
+            (self.on_switch.borrow_mut())(kms.output(), self.tv.borrow().as_ref().map(CopyTarget::picture), clock(libc::CLOCK_MONOTONIC).saturating_sub(since));
         }
         if let Some(since) = &self.stats {
             let now = clock(libc::CLOCK_MONOTONIC);
