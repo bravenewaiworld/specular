@@ -493,6 +493,32 @@ fn headphones_in_the_jack_have_their_own_volume_also_mid_game() {
 }
 
 #[test]
+fn a_tv_takes_the_sound_and_pauses_the_game_as_the_picture_moves() {
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10); // playing
+    a.handle(Msg::Headphones(true));
+    // The TV comes before the jack; the game is paused, with its menu open.
+    let e = a.handle(Msg::Hdmi(true));
+    assert_eq!(e.first(), Some(&Effect::PauseGame(true)));
+    assert_eq!(e.last(), Some(&Effect::SoundTo(Output::Hdmi)));
+    assert_eq!(a.input_target(), InputTarget::App);
+    assert_eq!(a.handle(Msg::Hdmi(true)), vec![]); // no change
+    let e = tap(&mut a, Button::VolDown, 20);
+    assert!(e.contains(&Effect::Apply { key: builtin::HDMI_VOLUME, value: json!(19) }), "{e:?}");
+    // Resumed, then unplugged: paused again, the sound back in the headphones.
+    assert!(tap(&mut a, Button::B, 30).contains(&Effect::PauseGame(false)));
+    let e = a.handle(Msg::Hdmi(false));
+    assert_eq!(e.first(), Some(&Effect::PauseGame(true)));
+    assert_eq!(e.last(), Some(&Effect::SoundTo(Output::Headphones)));
+    // Out of a game, only the sound moves.
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    assert_eq!(a.handle(Msg::Hdmi(true)), vec![Effect::SoundTo(Output::Hdmi)]);
+}
+
+#[test]
 fn headphones_in_at_start_up_take_over_once_the_settings_load() {
     let mut a = app();
     assert_eq!(a.handle(Msg::Headphones(true)), vec![]);
@@ -964,6 +990,19 @@ mod wireless {
         assert_eq!(radio_effects(&a.handle(Msg::Bluetooth(BtEvent::Devices(vec![headset])))), [&Effect::SoundTo(Output::Bluetooth(address))]);
         a.handle(Msg::Bluetooth(BtEvent::Devices(vec![])));
         assert!(tap(&mut a, Button::VolUp, 0).contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Headphones }));
+    }
+
+    #[test]
+    fn a_bluetooth_headset_comes_before_a_tv() {
+        let mut a = radio_app();
+        let mut on = serde_json::Map::new();
+        on.insert(builtin::BLUETOOTH.into(), json!(true));
+        a.handle(Msg::SettingsLoaded(Layer::Global, on));
+        let address = BtAddress("00:11:22:33:44:55".into());
+        let headset = BtDevice { address: address.clone(), name: "Buds".into(), kind: BtKind::Headphones, paired: true, connected: true, audio: true };
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![headset])));
+        assert_eq!(radio_effects(&a.handle(Msg::Hdmi(true))), Vec::<&Effect>::new());
+        assert_eq!(radio_effects(&a.handle(Msg::Bluetooth(BtEvent::Devices(vec![])))), [&Effect::SoundTo(Output::Hdmi)]);
     }
 }
 

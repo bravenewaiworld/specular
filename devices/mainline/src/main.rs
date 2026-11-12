@@ -27,10 +27,11 @@ fn main() -> Result<(), specular_ui::Error> {
     let request = ModeRequest::default();
     let device = Mainline::new(board, &kms, card, request.clone());
     let vsync = device.open_vsync();
-    let size = slint::PhysicalSize::new(kms.mode().width(), kms.mode().height());
+    let on_switch = device.on_switch();
+    let size = slint::PhysicalSize::new(kms.size().0, kms.size().1);
     let games_card = board.games_card.then(|| GamesCard { roms: GAMES_CARD_ROMS.into(), changes: GAMES_CARD_STATE.into() });
     specular_ui::run(Box::new(device), DataRoot(data.into(), games_card), Some(Box::new(move |on_button| {
-        let platform = GlPlatform::new(KmsSurface::new(kms, request)?, size, board.input(), vsync)?;
+        let platform = GlPlatform::new(KmsSurface::new(kms, card, request, on_switch)?, size, board.input(), vsync)?;
         platform.on_button(on_button);
         slint::platform::set_platform(Box::new(platform)).map_err(|e| format!("{e:?}"))?;
         Ok(())

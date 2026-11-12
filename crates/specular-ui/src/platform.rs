@@ -13,6 +13,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::num::NonZeroU32;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
@@ -23,9 +24,9 @@ use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
 use slint::{PhysicalSize, Window};
 
 use specular_core::device::Vsync;
-use specular_linux::egl::EglDisplay;
+use specular_linux::egl::{CopyTarget, EglDisplay};
 use specular_linux::input::{ButtonEvent, Input, clock};
-use specular_linux::kms::{Kms, ModeRequest};
+use specular_linux::kms::{Kms, ModeRequest, Output, Rect};
 use specular_linux::vsync::FramePacer;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -38,6 +39,9 @@ pub trait GlSurface {
     fn present(&self) -> Result<(), Error>;
     /// The address of a GL function, or null if there is none.
     fn proc_address(&self, name: &CStr) -> *const c_void;
+    /// Whether a frame should be drawn and presented even though nothing in the UI changed (a
+    /// newly connected output has nothing on it until one is).
+    fn wants_frame(&self) -> bool { false }
 }
 
 /// For an `EglDisplay` on `Native::Default`, whose swap shows the frame (the Brick's PowerVR NULL
@@ -48,10 +52,16 @@ impl GlSurface for EglDisplay {
     fn proc_address(&self, name: &CStr) -> *const c_void { EglDisplay::proc_address(self, name) }
 }
 
-/// A DRM/KMS display: EGL draws into GBM buffers, and each present flips one onto the panel at
-/// the next vblank. With `SPECULAR_FLIP_STATS` set (to anything), logs how the flips went every
-/// 10 s while frames are presented (`kms::FlipStats`), as a `kms:` line.
+/// A DRM/KMS display: EGL draws into GBM buffers, and each present flips one onto the screen at
+/// the next vblank. A TV plugged in (HDMI; also one in at start-up) takes the picture and the
+/// panel goes off, until it is unplugged: the UI is still drawn at the panel's size, and each
+/// frame copied onto the TV scaled to fit (`kms::fit`). The connectors are read again at the
+/// present after each hotplug event. With `SPECULAR_FLIP_STATS` set (to anything), logs how the
+/// flips went every 10 s while frames are presented (`kms::FlipStats`), as a `kms:` line.
 pub struct KmsSurface {
+    /// On the TV's GBM surface while the picture is on one; given back in `drop`, before `kms`
+    /// goes.
+    tv: RefCell<Option<CopyTarget>>,
     /// Declared before `kms`, so it is dropped first: its EGL surface lives on the GBM surface.
     egl: EglDisplay,
     kms: RefCell<Kms>,
@@ -59,13 +69,73 @@ pub struct KmsSurface {
     request: ModeRequest,
     /// When the last flip statistics were logged, if they are.
     stats: Option<Cell<Duration>>,
+    /// Set by the hotplug thread (and at start-up): read the connectors at the next present.
+    hotplug: Arc<AtomicBool>,
+    /// When the picture started moving to another output, until its first frame there.
+    moving: Cell<Option<Duration>>,
+    on_switch: RefCell<OnSwitch>,
 }
 
+/// Told of each move of the picture once the new output shows its first frame: the output, where
+/// the UI's picture is on it (on a TV), and how long the move took.
+pub type OnSwitch = Box<dyn FnMut(&Output, Option<Rect>, Duration)>;
+
 impl KmsSurface {
-    /// Opens EGL on `kms`'s GBM surface. A mode put in `request` is switched to at the next present.
-    pub fn new(kms: Kms, request: ModeRequest) -> Result<Self, Error> {
+    /// Opens EGL on `kms`'s GBM surface, and follows the hotplug events of `card` (the card `kms`
+    /// was opened on) on a thread of its own. A mode put in `request` is switched to at the next
+    /// present.
+    pub fn new(kms: Kms, card: &Path, request: ModeRequest, on_switch: OnSwitch) -> Result<Self, Error> {
         let stats = std::env::var_os("SPECULAR_FLIP_STATS").map(|_| Cell::new(clock(libc::CLOCK_MONOTONIC)));
-        Ok(Self { egl: EglDisplay::open(kms.native())?, kms: RefCell::new(kms), request, stats })
+        let hotplug = Arc::new(AtomicBool::new(true));
+        let (flag, name) = (hotplug.clone(), card.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        std::thread::Builder::new().name("hotplug".into()).spawn(move || {
+            // Waking the event loop makes it draw (`wants_frame`), which presents.
+            let woken = specular_linux::hotplug::watch(&name, || { flag.store(true, Relaxed); let _ = slint::invoke_from_event_loop(|| {}); });
+            if let Err(e) = woken { eprintln!("hotplug: {e}; a TV plugged in or out won't be noticed"); }
+        })?;
+        Ok(Self { tv: RefCell::default(), egl: EglDisplay::open(kms.native())?, kms: RefCell::new(kms), request, stats, hotplug,
+            moving: Cell::default(), on_switch: RefCell::new(on_switch) })
+    }
+
+    /// Reads the connectors, and moves the picture if it should be elsewhere now.
+    fn follow_outputs(&self, kms: &mut Kms) {
+        match kms.find_tv() {
+            Ok(tv) if tv.as_ref() != kms.tv() => self.move_to(kms, tv),
+            Ok(_) => {}
+            Err(e) => eprintln!("display: reading the connectors: {e}"),
+        }
+    }
+
+    /// Moves the picture to `tv` (None: the panel) at the next present; to the panel if it can't.
+    fn move_to(&self, kms: &mut Kms, tv: Option<Output>) {
+        if self.moving.get().is_none() { self.moving.set(Some(clock(libc::CLOCK_MONOTONIC))); }
+        if let Some(old) = self.tv.take() { self.egl.destroy_copy_target(old); }
+        let name = tv.as_ref().map(|o| o.name.clone());
+        let target = kms.show_on(tv).map_err(Error::from)
+            .and_then(|()| kms.tv_native().map(|s| self.egl.create_copy_target(s)).transpose());
+        match target {
+            Ok(target) => *self.tv.borrow_mut() = target,
+            Err(e) => {
+                eprintln!("display: can't show the picture on {}: {e}; it stays on the panel", name.as_deref().unwrap_or("the panel"));
+                if kms.tv().is_some() && let Err(e) = kms.show_on(None) { eprintln!("display: back to the panel: {e}"); }
+            }
+        }
+    }
+
+    /// Ends the frame drawn on the output showing the picture: on the panel, swaps the main
+    /// surface; on a TV, copies the frame onto the TV's surface.
+    fn show(&self, kms: &mut Kms) -> Result<(), Error> {
+        match (self.tv.borrow().as_ref(), kms.picture()) {
+            (Some(tv), Some(picture)) => self.egl.copy_to(tv, kms.size(), (kms.mode().width(), kms.mode().height()), picture)?,
+            _ => self.egl.swap_buffers()?,
+        }
+        Ok(kms.present()?)
+    }
+}
+
+impl Drop for KmsSurface {
+    fn drop(&mut self) {
+        if let Some(tv) = self.tv.take() { self.egl.destroy_copy_target(tv); }
     }
 }
 
@@ -76,10 +146,19 @@ impl GlSurface for KmsSurface {
     fn make_current(&self) -> Result<(), Error> { self.egl.make_current() }
 
     fn present(&self) -> Result<(), Error> {
-        self.egl.swap_buffers()?;
         let mut kms = self.kms.borrow_mut();
-        if let Some(mode) = self.request.lock().unwrap().take() { kms.set_mode(mode)?; }
-        kms.present()?;
+        if self.hotplug.swap(false, Relaxed) { self.follow_outputs(&mut kms); }
+        // A mode asked for just before the picture moved may be the other output's.
+        if let Some(mode) = self.request.lock().unwrap().take() && let Err(e) = kms.set_mode(mode) { eprintln!("{e}"); }
+        if let Err(e) = self.show(&mut kms) {
+            let Some(tv) = kms.tv().map(|o| o.name.clone()) else { return Err(e) };
+            eprintln!("display: showing the picture on {tv} failed ({e}); back to the panel");
+            self.move_to(&mut kms, None);
+            self.show(&mut kms)?;
+        }
+        if let Some(since) = self.moving.take() {
+            (self.on_switch.borrow_mut())(kms.output(), kms.picture(), clock(libc::CLOCK_MONOTONIC).saturating_sub(since));
+        }
         if let Some(since) = &self.stats {
             let now = clock(libc::CLOCK_MONOTONIC);
             if now - since.get() >= FLIP_STATS_EVERY {
@@ -92,6 +171,8 @@ impl GlSurface for KmsSurface {
     }
 
     fn proc_address(&self, name: &CStr) -> *const c_void { self.egl.proc_address(name) }
+
+    fn wants_frame(&self) -> bool { self.hotplug.load(Relaxed) }
 }
 
 struct Gl<S>(Rc<S>);
@@ -176,6 +257,7 @@ impl<S: GlSurface + 'static> GlPlatform<S> {
     /// vsync would delay every following game frame by a refresh.
     fn draw(&self) -> Result<bool, PlatformError> {
         let Some(w) = self.window.get() else { return Ok(false) };
+        if self.surface.wants_frame() { w.needs_redraw.set(true); }
         if !w.needs_redraw.get() || !self.pacer.ready() { return Ok(false); }
         w.needs_redraw.set(false);
         w.renderer.render()?;

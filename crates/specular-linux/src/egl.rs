@@ -1,7 +1,8 @@
 //! EGL with a GLES 3 context for the UI, on whatever window system a device's driver offers: the
 //! driver's own default display (the Brick's PowerVR "NULL window system", which draws straight to
-//! the panel), or a GBM surface that `kms::Kms` puts on the panel. The EGL and GLES libraries are
-//! loaded at runtime, so a binary has no link-time dependency on a GPU driver.
+//! the panel), or a GBM surface that `kms::Kms` puts on the panel; and on GBM, a second surface on
+//! a TV's GBM surface that each frame is copied onto, scaled (`CopyTarget`). The EGL and GLES
+//! libraries are loaded at runtime, so a binary has no link-time dependency on a GPU driver.
 
 use std::ffi::{CStr, c_void};
 use std::sync::Arc;
@@ -108,6 +109,81 @@ impl EglDisplay {
     /// surface it only makes it the front buffer, which `kms::Kms::present` then shows.
     pub fn swap_buffers(&self) -> Result<(), Error> {
         Ok(self.libs.egl.swap_buffers(self.display, self.surface)?)
+    }
+}
+
+/// A second on-screen surface, on another GBM surface of the same format (a TV's:
+/// `kms::Kms::tv_native`), that the frames drawn on the main surface are copied onto
+/// (`EglDisplay::copy_to`). Give it back with `EglDisplay::destroy_copy_target` before its GBM
+/// surface goes.
+pub struct CopyTarget { surface: egl::Surface, gl: CopyGl }
+
+// GLES 3 (gl3.h).
+const GL_READ_FRAMEBUFFER: u32 = 0x8CA8;
+const GL_DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
+const GL_LINEAR: u32 = 0x2601;
+const GL_SCISSOR_TEST: u32 = 0x0C11;
+
+/// The GL functions `copy_to` uses.
+struct CopyGl {
+    bind_framebuffer: unsafe extern "C" fn(u32, u32),
+    blit_framebuffer: unsafe extern "C" fn(i32, i32, i32, i32, i32, i32, i32, i32, u32, u32),
+    clear_color: unsafe extern "C" fn(f32, f32, f32, f32),
+    clear: unsafe extern "C" fn(u32),
+    disable: unsafe extern "C" fn(u32),
+}
+
+impl EglDisplay {
+    /// A `CopyTarget` on the GBM surface `gbm_surface`. Needs a GLES 3 context (for the blit).
+    pub fn create_copy_target(&self, gbm_surface: *mut c_void) -> Result<CopyTarget, Error> {
+        if self.version < 3 { return Err("copying the picture to a second display needs GLES 3".into()); }
+        let f = |name: &CStr| {
+            let p = self.proc_address(name);
+            if p.is_null() { Err(format!("GL function {name:?} not found")) } else { Ok(p) }
+        };
+        // SAFETY: each is the GLES function of that name, whose C signature matches the field's.
+        let gl = unsafe {
+            CopyGl {
+                bind_framebuffer: std::mem::transmute(f(c"glBindFramebuffer")?),
+                blit_framebuffer: std::mem::transmute(f(c"glBlitFramebuffer")?),
+                clear_color: std::mem::transmute(f(c"glClearColor")?),
+                clear: std::mem::transmute(f(c"glClear")?),
+                disable: std::mem::transmute(f(c"glDisable")?),
+            }
+        };
+        let surface = unsafe { self.libs.egl.create_window_surface(self.display, self.config, gbm_surface, None)? };
+        Ok(CopyTarget { surface, gl })
+    }
+
+    /// Destroys `target`'s EGL surface.
+    pub fn destroy_copy_target(&self, target: CopyTarget) {
+        if let Err(e) = self.libs.egl.destroy_surface(self.display, target.surface) { eprintln!("egl: destroying the second surface: {e}"); }
+    }
+
+    /// Copies the frame just drawn on the main surface (`from` pixels, not swapped yet) onto
+    /// `to`, scaled into `rect` (from the top left) with black around it, ends that frame there
+    /// (as `swap_buffers` does on the main surface), and makes the main surface current again. The
+    /// main surface is never swapped meanwhile: it keeps being drawn into, at its own size.
+    pub fn copy_to(&self, to: &CopyTarget, from: (u32, u32), to_size: (u32, u32), rect: crate::kms::Rect) -> Result<(), Error> {
+        let egl = &self.libs.egl;
+        // Drawing to the target, reading from the main surface: framebuffer 0 is each one's.
+        egl.make_current(self.display, Some(to.surface), Some(self.surface), Some(self.context))?;
+        let g = &to.gl;
+        // GL's rows count from the bottom.
+        let bottom = (to_size.1 - rect.y - rect.height) as i32;
+        unsafe {
+            (g.bind_framebuffer)(GL_READ_FRAMEBUFFER, 0);
+            (g.bind_framebuffer)(GL_DRAW_FRAMEBUFFER, 0);
+            (g.disable)(GL_SCISSOR_TEST);
+            (g.clear_color)(0.0, 0.0, 0.0, 1.0);
+            (g.clear)(GL_COLOR_BUFFER_BIT);
+            (g.blit_framebuffer)(0, 0, from.0 as i32, from.1 as i32, rect.x as i32, bottom, (rect.x + rect.width) as i32, bottom + rect.height as i32,
+                GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        }
+        let swapped = egl.swap_buffers(self.display, to.surface);
+        self.make_current()?;
+        Ok(swapped?)
     }
 }
 

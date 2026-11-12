@@ -55,6 +55,7 @@ impl Device for Brick {
             card: Some(system::card()),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
+            hdmi: None,
             // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.
             rumble: Some(Box::new(specular_linux::rumble::EvdevRumble::new())),
             file_transfer: Some(Box::new(specular_crystaline::transfer::WebdavTransfer)),
@@ -67,6 +68,7 @@ impl Device for Brick {
         Ok(Box::new(match output {
             Output::Speaker | Output::Headphones => Alsa::open("default")?,
             Output::Bluetooth(address) => Alsa::bluetooth(address)?,
+            Output::Hdmi => return Err(io::Error::new(io::ErrorKind::Unsupported, "the Brick has no HDMI")),
         }))
     }
 
@@ -139,6 +141,7 @@ impl Audio for Volume {
             Output::Speaker => "name=Speaker Playback Volume",
             Output::Headphones => "name=Headphone Playback Volume",
             Output::Bluetooth(address) => return specular_linux::sound::set_bluetooth_volume(address, level),
+            Output::Hdmi => return Ok(()),
         };
         run("/usr/bin/amixer", &["-q", "-c", "audiocodec", "cset", control, &codec_step(level).to_string()])
     }

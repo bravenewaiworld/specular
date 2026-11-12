@@ -32,6 +32,9 @@ pub struct Board {
     pub backlight: &'static str,
     /// The ALSA device sound plays on.
     pub sound: &'static str,
+    /// The ALSA device that plays on a TV through HDMI (None: no HDMI sound). It has no mixer
+    /// control: its volume is set in software.
+    pub hdmi_sound: Option<&'static str>,
     /// The volume control.
     pub volume: Mixer,
 }
@@ -65,9 +68,10 @@ pub const BOARDS: &[Board] = &[
         menu_chord: true,
         rumble: Some("pwm-vibrator"),
         backlight: "backlight",
-        // Card 0 is HDMI; the RK817 codec's card plays on the speaker and the headphones (the jack
-        // cuts the speaker in hardware).
+        // The RK817 codec's card plays on the speaker and the headphones (the jack cuts the
+        // speaker in hardware).
         sound: "default:CARD=rk817ext",
+        hdmi_sound: Some("default:CARD=HDMI"),
         volume: Mixer { card: "rk817ext", control: "Master Playback Volume", max: 255, db_per_step: 95.0 / 255.0 }, // -95 to 0 dB in 255 steps (amixer's dB range)
     },
 ];

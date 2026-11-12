@@ -8,7 +8,9 @@
 //! next refresh; starting late means buttons are read late, so a press reaches the screen
 //! sooner), then runs the core once and hands the frame to the UI. Without a vsync, or when the
 //! display's rate is far from the game's, the core is run by a timer at its own frame rate.
-//! Paced by the vsync, the frames also choose the CPU's minimum speed (see `cpu`).
+//! Paced by the vsync, the frames also choose the CPU's minimum speed (see `cpu`). The display's
+//! rate is asked for as the game starts, and again each time it resumes: the picture may have
+//! moved to another display meanwhile (a TV plugged in or out).
 
 mod core;
 mod cpu;
@@ -97,7 +99,7 @@ pub struct Outputs {
     pub sound: Option<Box<dyn SoundOut>>,
     pub vsync: Option<Box<dyn Vsync>>,
     /// Asks the display for a refresh rate near the game's (Hz; None as the game ends) and returns
-    /// the rate it will have (`Device::match_refresh`).
+    /// the rate it will have (`Device::match_refresh`). Asked again each time the game resumes.
     pub match_display: Box<dyn Fn(Option<f64>) -> f64 + Send>,
     pub frames: Arc<FrameSlot>,
     /// Called on the game's thread after each new frame is put in `frames`.
@@ -398,6 +400,8 @@ const UI_TIME: Duration = Duration::from_millis(6);
 /// Times the game's frames (see the module doc).
 struct Pacer {
     vsync: Option<Box<dyn Vsync>>,
+    /// Whether the vsync paces the frames (else a timer, at `period`).
+    by_display: bool,
     period: Duration,
     next: Instant,
     delay: Duration,
@@ -409,13 +413,27 @@ struct Pacer {
 
 impl Pacer {
     fn new(vsync: Option<Box<dyn Vsync>>, hz: f64) -> Self {
-        Self { vsync, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new(), last_vsync: None }
+        let by_display = vsync.is_some();
+        Self { vsync, by_display, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new(), last_vsync: None }
+    }
+
+    /// Paces a game at `fps` on a display refreshing at `display_hz`, and returns how much faster
+    /// than its own rate the game runs: by the vsync, if there is one and the display is within
+    /// `MAX_SPEED_CHANGE` of the game (its sound then sped up or slowed to match); else by a timer
+    /// at the game's own rate (1).
+    fn pace(&mut self, fps: f64, display_hz: f64) -> f64 {
+        let speed = display_hz / fps;
+        self.by_display = self.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
+        self.period = Duration::from_secs_f64(1.0 / if self.by_display { display_hz } else { fps });
+        (self.delay, self.last_vsync) = (Duration::ZERO, None);
+        self.runs.clear();
+        if self.by_display { speed } else { 1.0 }
     }
 
     /// Waits until the core should run. With a vsync, returns how long after the previous wait
     /// this one's vsync came (None for the first, after a pause, and on a timer).
     fn wait(&mut self) -> Option<Duration> {
-        if let Some(v) = self.vsync.as_mut() {
+        if self.by_display && let Some(v) = self.vsync.as_mut() {
             match v.wait() {
                 Ok(()) => {
                     let now = Instant::now();
@@ -439,7 +457,7 @@ impl Pacer {
     /// With a vsync, records how long a run took, and every 60 runs sets the frame delay to what
     /// the slowest runs (the 95th percentile) leave.
     fn ran(&mut self, took: Duration) {
-        if self.vsync.is_none() { return; }
+        if !self.by_display || self.vsync.is_none() { return; }
         self.runs.push(took);
         if self.runs.len() < 60 { return; }
         self.runs.sort();
@@ -474,15 +492,11 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
     };
     let av = game.av;
     let fps = av.timing.fps.max(1.0);
-    // A display within MAX_SPEED_CHANGE of the game's rate paces it (so it runs at the display's
-    // rate, its sound sped up or slowed to match); otherwise a timer does, at the game's own.
-    let display_hz = (out.match_display)(Some(fps));
     // Back to the display's usual rate as the game ends, however it ends.
-    let _restore = Restore(out.match_display);
-    let speed = display_hz / fps;
-    let by_display = out.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
-    let mut pacer = Pacer::new(if by_display { out.vsync } else { None }, if by_display { display_hz } else { fps });
-    let mut sound = sound::Sound::new(out.sound, av.timing.sample_rate, if by_display { speed } else { 1.0 });
+    let display = Restore(out.match_display);
+    let mut pacer = Pacer::new(out.vsync, fps);
+    let speed = pacer.pace(fps, (display.0)(Some(fps)));
+    let mut sound = sound::Sound::new(out.sound, av.timing.sample_rate, speed);
     let g = av.geometry;
     let options = frontend::with(|f| f.options.declared.clone()).unwrap_or_default();
     let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps, options }));
@@ -507,6 +521,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                     frontend::with(|f| f.pause_rumble(p));
                     pacer.paused();
                     cpu.pause(p);
+                    if !p { sound.set_speed(pacer.pace(fps, (display.0)(Some(fps)))); }
                 }
                 // Its compressing may still slow the frames after the game resumes.
                 Cmd::Autosave => { game.write_autosave(); cpu.state_made(); }

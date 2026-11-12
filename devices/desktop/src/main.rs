@@ -48,7 +48,10 @@ impl Device for Desktop {
     /// addresses only open if they happen to be real).
     fn open_sound(&self, output: &Output) -> io::Result<Box<dyn SoundOut>> {
         use specular_linux::sound::Alsa;
-        Ok(Box::new(match output { Output::Speaker | Output::Headphones => Alsa::open("default")?, Output::Bluetooth(address) => Alsa::bluetooth(address)? }))
+        Ok(Box::new(match output {
+            Output::Speaker | Output::Headphones | Output::Hdmi => Alsa::open("default")?,
+            Output::Bluetooth(address) => Alsa::bluetooth(address)?,
+        }))
     }
     fn open_vsync(&self) -> Option<Box<dyn Vsync>> { None }
 }

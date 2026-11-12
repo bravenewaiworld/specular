@@ -124,21 +124,33 @@ pub enum Output {
     Headphones,
     /// A connected Bluetooth audio device.
     Bluetooth(BtAddress),
+    /// The TV the picture is on (HDMI): its sound goes with it.
+    Hdmi,
 }
 
 impl Output {
     /// The setting holding this output's volume (all Bluetooth devices share one).
     pub fn volume_setting(&self) -> &'static str {
         use crate::settings::builtin;
-        match self { Output::Speaker => builtin::VOLUME, Output::Headphones => builtin::HEADPHONE_VOLUME, Output::Bluetooth(_) => builtin::BLUETOOTH_VOLUME }
+        match self {
+            Output::Speaker => builtin::VOLUME,
+            Output::Headphones => builtin::HEADPHONE_VOLUME,
+            Output::Bluetooth(_) => builtin::BLUETOOTH_VOLUME,
+            Output::Hdmi => builtin::HDMI_VOLUME,
+        }
     }
 
     /// Whether a game's open `SoundOut` can carry on unchanged when sound moves between these
     /// outputs. True for the speaker and the jack: the device's sound driver switches one stream
     /// between them.
     pub fn same_stream(&self, other: &Output) -> bool {
-        self == other || !matches!(self, Output::Bluetooth(_)) && !matches!(other, Output::Bluetooth(_))
+        let built_in = |o: &Output| matches!(o, Output::Speaker | Output::Headphones);
+        self == other || built_in(self) && built_in(other)
     }
+
+    /// Whether it is there only some of the time (Bluetooth, HDMI): its level is set only while
+    /// sound goes to it (`Audio::set_volume`).
+    pub fn comes_and_goes(&self) -> bool { matches!(self, Output::Bluetooth(_) | Output::Hdmi) }
 }
 
 /// Sound output.
@@ -148,7 +160,7 @@ pub trait Audio: Send {
     /// unmuted, whichever output plays. A port must keep both and play the level of the output in
     /// use (on the Brick the kernel's codec driver does), so setting the other one isn't heard; a
     /// port without a jack (`Hardware::headphones` is None) may ignore the headphones'. A
-    /// Bluetooth output's is set only while sound goes to it.
+    /// Bluetooth or HDMI output's is set only while sound goes to it.
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()>;
 }
 
@@ -159,6 +171,15 @@ pub trait HeadphoneJack: Send {
     /// Follows the jack until it can't any more, blocking (the UI crate gives it a thread of its
     /// own): calls `plugged` with the state at the start, if it can be read, then on each change.
     fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>);
+}
+
+/// Whether the picture is on a TV (HDMI) instead of the device's own screen. The device moves the
+/// picture by itself; this tells the app, which moves the sound there too (`Output::Hdmi`) and
+/// pauses a game (its frames are paced by another display now).
+pub trait Hdmi: Send {
+    /// Follows the picture until it can't any more, blocking (the UI crate gives it a thread of its
+    /// own): calls `on_tv` with true as the picture moves to a TV, and false as it comes back.
+    fn watch(self: Box<Self>, on_tv: Box<dyn FnMut(bool) + Send>);
 }
 
 /// Where a game's or the interface's sound goes: a queue of 16-bit stereo frames, played at a
@@ -281,6 +302,8 @@ pub struct Hardware {
     pub time_zone: Option<Box<dyn crate::timezone::TimeZone>>,
     /// None on devices that can't tell when headphones are plugged in.
     pub headphones: Option<Box<dyn HeadphoneJack>>,
+    /// None on devices without HDMI.
+    pub hdmi: Option<Box<dyn Hdmi>>,
     /// None on devices without a rumble motor.
     pub rumble: Option<Box<dyn Rumble>>,
     /// None on devices without file transfer.
@@ -418,6 +441,7 @@ pub mod simulated {
             installer: Some(Box::new(crate::install::Simulated)),
             time_zone: Some(Box::new(crate::timezone::Simulated::new())),
             headphones: None,
+            hdmi: None,
             rumble: Some(Box::new(Sim(t))),
             file_transfer: Some(Box::new(SimTransfer)),
             ssh: Some(Box::new(SimSsh(ssh.into()))),

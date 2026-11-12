@@ -118,6 +118,8 @@ pub enum Msg {
     /// Headphones are plugged into the device's jack (true) or not: sent by a device that can
     /// tell, with the state when it starts following the jack, then on each change.
     Headphones(bool),
+    /// The picture moved to a TV (true) or back to the device's own screen (`device::Hdmi`).
+    Hdmi(bool),
     /// The installer's answer to `InstallCmd::Offer`.
     InstallOffer(Result<crate::install::Offer, String>),
     /// The progress of the task started with `InstallCmd::Start`.
@@ -490,6 +492,8 @@ pub struct App {
     muted: bool,
     /// Whether headphones are in the jack, as the device last said (`Msg::Headphones`).
     headphones: bool,
+    /// Whether the picture is on a TV, as the device last said (`Msg::Hdmi`).
+    hdmi: bool,
     /// When the power button went down, while that press can still be a tap (a release before
     /// `POWER_HOLD` sleeps). None once it has been held long enough to open the power menu, so
     /// its release does nothing; also None for a press the app never saw (the one that woke the
@@ -569,6 +573,7 @@ impl App {
             idle_since: None,
             muted: false,
             headphones: false,
+            hdmi: false,
             power_down: None,
             grid_columns: 1,
             list_area: None,
@@ -946,6 +951,13 @@ impl App {
             Msg::WifiNeed { need, wanted, time } => { self.now = self.now.max(time); self.wifi_need(need, wanted); vec![] }
             Msg::SoundFailed(output) => self.sound_failed(output),
             Msg::Headphones(plugged) => { self.headphones = plugged; vec![] } // the output follows (`reconcile_radios`)
+            // A game is paused: its frames are paced by another display now, which the runtime
+            // matches as it resumes. The sound follows (`reconcile_radios`).
+            Msg::Hdmi(on) => {
+                if self.hdmi == on { return vec![]; }
+                self.hdmi = on;
+                if self.input_target() == InputTarget::Game { self.open_game_menu() } else { vec![] }
+            }
             Msg::InstallOffer(offer) => self.install_offer(offer),
             Msg::InstallProgress(p) => self.install_progress(p),
             Msg::FileTransfer { start, result } => self.transfer_done(start, result),

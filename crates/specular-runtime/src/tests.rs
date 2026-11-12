@@ -319,6 +319,22 @@ fn the_pacer_times_the_vsyncs_but_not_across_a_pause() {
     assert_eq!(Pacer::new(None, 60.0).wait(), None, "a timer");
 }
 
+#[test]
+fn the_pacer_follows_the_display_only_near_the_games_rate() {
+    let mut p = Pacer::new(Some(Box::new(Instant0)), 60.0);
+    // A GBA game on a 59.94 Hz TV mode: by the display, the game sped up to match.
+    let speed = p.pace(59.727, 59.94);
+    assert!(p.by_display && (speed - 59.94 / 59.727).abs() < 1e-9);
+    assert_eq!(p.period, Duration::from_secs_f64(1.0 / 59.94));
+    // A 50 Hz game on a 60 Hz display: by a timer, at its own rate.
+    assert_eq!(p.pace(50.0, 60.0), 1.0);
+    assert!(!p.by_display);
+    assert_eq!(p.period, Duration::from_secs_f64(1.0 / 50.0));
+    assert_eq!(p.wait(), None, "a timer");
+    // Without a vsync, always a timer.
+    assert_eq!(Pacer::new(None, 60.0).pace(60.0, 60.0), 1.0);
+}
+
 /// A vsync that comes 1 ms after each wait starts, but 60 ms (more than three refreshes at 60 Hz)
 /// on the waits numbered in `late`.
 struct Refreshes { waits: u32, late: &'static [u32] }

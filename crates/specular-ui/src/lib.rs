@@ -171,8 +171,8 @@ impl DataRoot {
 }
 
 /// Runs Specular on `device` until the event loop ends. `platform` sets up the device's platform;
-/// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`)
-/// and the headphone jack (`HEADPHONES_KEY`).
+/// without one, Slint's default window is used and keyboard keys act as buttons (see `KEYS`),
+/// the headphone jack (`HEADPHONES_KEY`) and a TV (`TV_KEY`).
 /// The device is also used from other threads, to open sound outputs (which can block).
 /// `credits` are what the binary ships (worked out by its build script; see specular-credits).
 /// Must be called before any other thread starts (see `use_fallback_fonts`).
@@ -208,6 +208,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
         Some(jack) => { std::thread::spawn(move || jack.watch(Box::new(|plugged| post(Msg::Headphones(plugged))))); }
         None => eprintln!("input: this device has no headphone detection; headphones get the speaker's volume"),
     }
+    if let Some(hdmi) = hardware.hdmi.take() { std::thread::spawn(move || hdmi.watch(Box::new(|on| post(Msg::Hdmi(on))))); }
     let rumble = hardware.rumble.take().map(rumble_thread);
     if rumble.is_none() { eprintln!("rumble: this device has none"); }
     let mut app = App::new(systems.clone(), settings::declarations(&systems));
@@ -307,7 +308,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     }).map_err(|e| format!("this window can't show games: {e:?}"))?;
     RUNNER.with(|r| *r.borrow_mut() = Some(runner.clone()));
     if keyboard {
-        let headphones = Cell::new(false);
+        let (headphones, tv) = (Cell::new(false), Cell::new(false));
         window.on_key(move |text, pressed| match key_button(&text) {
             Some(button) => { post(Msg::Button(ButtonEvent { button, pressed, time: now(), stick: false })); true }
             None if text.to_lowercase() == HEADPHONES_KEY => {
@@ -315,6 +316,14 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
                     headphones.set(!headphones.get());
                     eprintln!("input: simulated headphones {}", if headphones.get() { "plugged in" } else { "unplugged" });
                     post(Msg::Headphones(headphones.get()));
+                }
+                true
+            }
+            None if text.to_lowercase() == TV_KEY => {
+                if pressed {
+                    tv.set(!tv.get());
+                    eprintln!("display: simulated TV {}", if tv.get() { "plugged in" } else { "unplugged" });
+                    post(Msg::Hdmi(tv.get()));
                 }
                 true
             }
@@ -449,15 +458,16 @@ impl Volume {
 
     fn set_output(&mut self, audio: &dyn Audio, output: Output) -> std::io::Result<()> {
         self.output = output;
-        self.write(audio, |o| matches!(o, Output::Bluetooth(_)))
+        self.write(audio, Output::comes_and_goes)
     }
 
     /// Sets the levels of the outputs `which` picks, out of the speaker, the headphones and the
-    /// current output if it is Bluetooth: each its level, or 0 while muted or before its setting
-    /// is known. Sets all of them even if one fails, and returns the first error.
+    /// current output if it comes and goes (Bluetooth, HDMI): each its level, or 0 while muted or
+    /// before its setting is known. Sets all of them even if one fails, and returns the first
+    /// error.
     fn write(&self, audio: &dyn Audio, which: impl Fn(&Output) -> bool) -> std::io::Result<()> {
-        let bluetooth = matches!(self.output, Output::Bluetooth(_)).then(|| self.output.clone());
-        [Output::Speaker, Output::Headphones].into_iter().chain(bluetooth).filter(which).fold(Ok(()), |result, output| {
+        let passing = self.output.comes_and_goes().then(|| self.output.clone());
+        [Output::Speaker, Output::Headphones].into_iter().chain(passing).filter(which).fold(Ok(()), |result, output| {
             let level = if self.muted { 0 } else { self.levels.get(output.volume_setting()).copied().unwrap_or(0) };
             eprintln!("sound: {output:?} volume {level}{}", if self.muted { " (muted)" } else { "" });
             result.and(audio.set_volume(&output, level))
@@ -1116,7 +1126,12 @@ impl Runner {
                 w.set_volume(level as f32 / builtin::VOLUME_MAX as f32);
                 w.set_volume_text(level.to_string().into());
                 w.set_volume_muted(muted);
-                w.set_volume_mark(match output { Output::Speaker => IconKind::None, Output::Headphones => IconKind::Headphones, Output::Bluetooth(_) => IconKind::Bluetooth });
+                w.set_volume_mark(match output {
+                    Output::Speaker => IconKind::None,
+                    Output::Headphones => IconKind::Headphones,
+                    Output::Bluetooth(_) => IconKind::Bluetooth,
+                    Output::Hdmi => IconKind::Tv,
+                });
                 self.show_for(&self.volume_timer, VOLUME_TIME, AppWindow::set_volume_shown);
             }
             Effect::ShowLetter(letter) => {
@@ -1492,7 +1507,7 @@ impl Runner {
         self.effects.borrow_mut().apply(key, value);
         let cmd = match key {
             builtin::BRIGHTNESS => HwCmd::Brightness(level as u8),
-            builtin::VOLUME | builtin::HEADPHONE_VOLUME | builtin::BLUETOOTH_VOLUME => HwCmd::Volume { setting: key, level: level as u8 },
+            builtin::VOLUME | builtin::HEADPHONE_VOLUME | builtin::BLUETOOTH_VOLUME | builtin::HDMI_VOLUME => HwCmd::Volume { setting: key, level: level as u8 },
             builtin::FRAME_STATS => { self.show_frame_stats(value.as_bool().unwrap_or(false)); return; }
             builtin::SCALING => {
                 if let Some(w) = self.window.upgrade() { w.set_scaling(value.as_str().unwrap_or("integer").into()); }
@@ -1854,6 +1869,9 @@ const KEYS: &[(&str, Button, &str)] = &[
 
 /// The desktop key that plugs simulated headphones into the jack, or unplugs them (`Msg::Headphones`).
 const HEADPHONES_KEY: &str = "h";
+/// The desktop key that moves the picture to a simulated TV, or back (`Msg::Hdmi`): the sound
+/// and a game follow as on a device, though the window stays as it is.
+const TV_KEY: &str = "t";
 
 fn key_button(text: &str) -> Option<Button> {
     let t = text.to_lowercase();
