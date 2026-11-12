@@ -1,18 +1,19 @@
-//! The CPU's speed on the Brick: Crystaline OS's crystaline-power, which sets the speed range of the
-//! one clock all four CPU cores share, and a minimum within it (its `cpu-min`, refused until a profile
-//! has been applied since start-up). Nothing it sets outlasts a restart.
+//! The CPU's speed: Crystaline OS's crystaline-power, which sets the speed range of the one clock
+//! all the CPU cores share (on the Brick and the RK3566 boards), and a minimum within it (its
+//! `cpu-min`, refused until a profile has been applied since start-up). Nothing it sets outlasts a
+//! restart.
 
 use specular_core::device::Cpu;
 
-use specular_crystaline::command::run;
+use crate::command::run;
 
 const PROGRAM: &str = "/usr/sbin/crystaline-power";
 
-/// The Brick's `Cpu`: crystaline-power.
-pub struct BrickCpu;
+/// `Cpu` through crystaline-power.
+pub struct CrystalineCpu;
 
-impl Cpu for BrickCpu {
-    /// Applies the balanced profile (408–2000 MHz), the one the system boots with, again: `cpu-min` is
+impl Cpu for CrystalineCpu {
+    /// Applies the balanced profile (the slowest speed to the fastest), the one the system boots with, again: `cpu-min` is
     /// refused until a profile has been applied since boot. Then reads the speed steps.
     fn prepare(&self) -> Result<Vec<u32>, String> {
         run("cpu", PROGRAM, &["profile", "balanced"])?;
@@ -36,7 +37,7 @@ fn steps(status: &str) -> Result<Vec<u32>, String> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn reads_the_speed_steps_from_brick_powers_status() {
+    fn reads_the_speed_steps_from_crystaline_powers_status() {
         let status = "profile   balanced\ncpu       408-2000 MHz, now 1200 MHz, thermal limit step 0/8 (0: not limited)\ncpu-min   default\n\
                       cpu-steps 408 600 816 1008 1200 1416 1608 1800 2000\ngovernor  ondemand, sampling 50 ms\n";
         assert_eq!(super::steps(status), Ok(vec![408, 600, 816, 1008, 1200, 1416, 1608, 1800, 2000]));

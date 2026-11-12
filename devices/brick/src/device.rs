@@ -14,7 +14,6 @@ use specular_linux::bluez::Bluez;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
-use specular_linux::wpa::WpaSupplicant;
 
 /// Every LED, in chain order (LED-class names "sunxi_led0r" … "sunxi_led13b"): the 8 along the top
 /// show the first accent; F2 and F1 on the front, then the 4 under the shoulder buttons, the second.
@@ -49,7 +48,7 @@ impl Device for Brick {
             display: Box::new(Disp),
             lights: Box::new(BrickLights(RgbLeds::new(Path::new("/sys/class/leds"), &names))),
             audio: Box::new(Volume),
-            wifi: Some(Box::new(Traced::new("wifi", WpaSupplicant::new(crate::wifi::SOCKET, Box::new(crate::wifi::BrickWifi))))),
+            wifi: specular_crystaline::wifi::wifi(),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
             installer: Some(Box::new(crate::install::BrickInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
@@ -60,7 +59,7 @@ impl Device for Brick {
             rumble: Some(Box::new(specular_linux::rumble::EvdevRumble::new())),
             file_transfer: Some(Box::new(specular_crystaline::transfer::WebdavTransfer)),
             ssh: Some(Box::new(specular_crystaline::ssh::CrystalineSsh)),
-            cpu: Some(Box::new(crate::cpu::BrickCpu)),
+            cpu: Some(Box::new(specular_crystaline::cpu::CrystalineCpu)),
         }
     }
 
@@ -85,9 +84,7 @@ struct BrickPower(PowerSupply);
 impl Power for BrickPower {
     fn battery(&self) -> io::Result<specular_core::device::Battery> { self.0.battery() }
 
-    /// Through the system's `sleepnow`, which also stops WiFi around sleep (its driver can't
-    /// suspend while connected).
-    fn sleep(&self) -> io::Result<()> { run("/usr/bin/sleepnow", &[]) }
+    fn sleep(&self) -> io::Result<()> { system::sleep() }
 
     fn shutdown(&self) -> io::Result<()> { system::shutdown() }
 

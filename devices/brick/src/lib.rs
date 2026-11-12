@@ -1,8 +1,6 @@
 //! Specular on the TrimUI Brick. Everything specific to the Brick lives in this crate.
 
-pub mod cpu;
 pub mod device;
 pub mod fonts;
 pub mod install;
 pub mod platform;
-pub mod wifi;

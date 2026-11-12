@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use specular_core::input::Button;
 use specular_core::device::{Audio, Battery, Device, DeviceProfile, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_crystaline::system;
+use specular_core::wireless::trace::Traced;
 use specular_linux::backlight::SysfsBacklight;
+use specular_linux::bluez::Bluez;
+use specular_linux::rumble::EvdevRumble;
 use specular_linux::kms::{DrmVsync, Kms};
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
@@ -65,17 +68,17 @@ impl Device for Mainline {
             display,
             lights: Box::new(NoLights),
             audio: Box::new(Volume(&self.board.volume)),
-            wifi: None,
-            bluetooth: None,
+            wifi: specular_crystaline::wifi::wifi(),
+            bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
             installer: None,
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),
             // The jack cuts the speaker in hardware and reports nothing: one output, one volume.
             headphones: None,
-            rumble: None,
+            rumble: self.board.rumble.map(|m| Box::new(EvdevRumble::motor(m)) as Box<dyn specular_core::device::Rumble>),
             file_transfer: Some(Box::new(specular_crystaline::transfer::WebdavTransfer)),
             ssh: Some(Box::new(specular_crystaline::ssh::CrystalineSsh)),
-            cpu: None,
+            cpu: Some(Box::new(specular_crystaline::cpu::CrystalineCpu)),
         }
     }
 
@@ -100,8 +103,7 @@ struct MainlinePower(PowerSupply);
 impl Power for MainlinePower {
     fn battery(&self) -> io::Result<Battery> { self.0.battery() }
 
-    /// Suspend comes with the mainline family's power work (Crystaline OS's roadmap).
-    fn sleep(&self) -> io::Result<()> { Err(io::Error::new(io::ErrorKind::Unsupported, "sleep isn't available on this board yet")) }
+    fn sleep(&self) -> io::Result<()> { system::sleep() }
 
     fn shutdown(&self) -> io::Result<()> { system::shutdown() }
 

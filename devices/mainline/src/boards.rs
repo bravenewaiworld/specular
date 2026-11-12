@@ -20,6 +20,8 @@ pub struct Board {
     pub inputs: &'static [&'static str],
     /// Select and Start held together are Menu (a board without a Menu button).
     pub menu_chord: bool,
+    /// Its rumble motor's own input device, by evdev name (None: no motor).
+    pub rumble: Option<&'static str>,
     /// Its backlight, by /sys/class/backlight name.
     pub backlight: &'static str,
     /// The ALSA device sound plays on.
@@ -52,6 +54,7 @@ pub const BOARDS: &[Board] = &[
         },
         inputs: &["gpio-keys-control", "gpio-keys-vol", "rk805 pwrkey"],
         menu_chord: true,
+        rumble: Some("pwm-vibrator"),
         backlight: "backlight",
         // Card 0 is HDMI; the RK817 codec's card plays on the speaker and the headphones (the jack
         // cuts the speaker in hardware).
@@ -61,9 +64,10 @@ pub const BOARDS: &[Board] = &[
 ];
 
 impl Board {
-    /// Its buttons' input.
+    /// Its buttons' input. Mainline boards' buttons come from kernel drivers, which send the face
+    /// buttons' codes by position.
     pub fn input(&self) -> Input {
-        let input = Input::new(self.inputs);
+        let input = Input::new(self.inputs).positional();
         if self.menu_chord { input.menu_chord() } else { input }
     }
 }

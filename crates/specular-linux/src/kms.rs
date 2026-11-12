@@ -172,6 +172,10 @@ pub struct Kms {
     /// The CRTC's position in the card's list, which vblank waits name it by.
     crtc_index: u32,
     mode: Mode,
+    /// Every mode the output offers, as it lists them.
+    modes: Vec<Mode>,
+    /// Whether the next present sets `mode` (a full mode set) rather than flipping.
+    mode_set: bool,
     device: *mut c_void,
     surface: *mut c_void,
     /// Each GBM buffer presented so far, with its DRM framebuffer.
@@ -198,7 +202,7 @@ impl Kms {
         if res.is_null() { return Err(context(io::Error::last_os_error(), "drmModeGetResources (not a KMS device?)")); }
         let picked = pick(&libs, fd, unsafe { &*res });
         unsafe { (libs.free_resources)(res) };
-        let (connector, crtc, crtc_index, mode) = picked?;
+        let (connector, crtc, crtc_index, mode, modes) = picked?;
         eprintln!("kms: using {mode} on CRTC {crtc}");
         let device = unsafe { (libs.gbm_create_device)(fd) };
         if device.is_null() { return Err(context(io::Error::last_os_error(), "gbm_create_device")); }
@@ -207,12 +211,27 @@ impl Kms {
             unsafe { (libs.gbm_device_destroy)(device) };
             return Err(context(io::Error::last_os_error(), "gbm_surface_create (XRGB8888, scanout)"));
         }
-        Ok(Kms { libs, card: file, connector, crtc, crtc_index, mode, device, surface, framebuffers: Vec::new(),
+        Ok(Kms { libs, card: file, connector, crtc, crtc_index, mode, modes, mode_set: true, device, surface, framebuffers: Vec::new(),
             shown: None, flipping: None, last_flip: None, stats: FlipStats::default() })
     }
 
     /// The mode in use.
     pub fn mode(&self) -> Mode { self.mode }
+
+    /// Every mode the output offers.
+    pub fn modes(&self) -> &[Mode] { &self.modes }
+
+    /// Switches to `mode` (one of `modes`, of the same size) at the next present, with a full mode
+    /// set: the panel may blank for a moment.
+    pub fn set_mode(&mut self, mode: Mode) -> io::Result<()> {
+        if (mode.width(), mode.height()) != (self.mode.width(), self.mode.height()) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("kms: {mode} isn't the surface's size")));
+        }
+        eprintln!("kms: switching to {mode}");
+        self.mode = mode;
+        self.mode_set = true;
+        Ok(())
+    }
 
     /// For EGL: the GBM device and surface, and the surface's format.
     pub fn native(&self) -> crate::egl::Native {
@@ -227,7 +246,7 @@ impl Kms {
     pub fn vsync(&self, card: &Path) -> io::Result<DrmVsync> { DrmVsync::open(card, self.crtc_index) }
 
     /// Puts the frame EGL just finished (after `eglSwapBuffers`) on screen at the next vblank. The
-    /// first sets the mode. If the frame before is still waiting for its flip, waits for it first
+    /// first, and the first after `set_mode`, sets the mode. If the frame before is still waiting for its flip, waits for it first
     /// (at most a refresh).
     pub fn present(&mut self) -> io::Result<()> {
         let bo = unsafe { (self.libs.gbm_surface_lock_front_buffer)(self.surface) };
@@ -240,13 +259,15 @@ impl Kms {
     fn flip_to(&mut self, bo: *mut c_void) -> io::Result<()> {
         let fb = self.framebuffer(bo)?;
         let fd = self.card.as_raw_fd();
-        if self.shown.is_none() {
+        self.wait_for_flip()?;
+        if self.mode_set {
             let r = unsafe { (self.libs.set_crtc)(fd, self.crtc, fb, 0, 0, &self.connector, 1, &self.mode.info) };
             if r != 0 { return Err(context(io::Error::from_raw_os_error(-r), format!("drmModeSetCrtc on CRTC {} (another program holds the display?)", self.crtc))); }
-            self.shown = Some(bo);
+            if let Some(old) = self.shown.replace(bo) { unsafe { (self.libs.gbm_surface_release_buffer)(self.surface, old) }; }
+            self.mode_set = false;
+            self.last_flip = None;
             return Ok(());
         }
-        self.wait_for_flip()?;
         let r = unsafe { (self.libs.page_flip)(fd, self.crtc, fb, DRM_MODE_PAGE_FLIP_EVENT, std::ptr::null_mut()) };
         if r != 0 { return Err(context(io::Error::from_raw_os_error(-r), format!("drmModePageFlip on CRTC {}", self.crtc))); }
         self.flipping = Some(bo);
@@ -318,12 +339,12 @@ impl Drop for Kms {
     }
 }
 
-/// The connector, CRTC (id and index) and mode to use, logging every connector and mode seen.
-fn pick(libs: &Libs, fd: c_int, res: &Resources) -> io::Result<(u32, u32, u32, Mode)> {
+/// The connector, CRTC (id and index) and mode to use, and the connector's modes, logging every connector and mode seen.
+fn pick(libs: &Libs, fd: c_int, res: &Resources) -> io::Result<(u32, u32, u32, Mode, Vec<Mode>)> {
     let ids = |p: *const u32, n: c_int| if p.is_null() || n <= 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(p, n as usize) } };
     let crtcs = ids(res.crtcs, res.count_crtcs);
     // (built-in, connector, the CRTCs it can use as bits, the CRTC driving it now, mode)
-    let mut best: Option<(bool, u32, u32, Option<u32>, Mode)> = None;
+    let mut best: Option<(bool, u32, u32, Option<u32>, Mode, Vec<Mode>)> = None;
     for &id in ids(res.connectors, res.count_connectors) {
         let c = unsafe { (libs.get_connector)(fd, id) };
         if c.is_null() { continue; }
@@ -350,16 +371,16 @@ fn pick(libs: &Libs, fd: c_int, res: &Resources) -> io::Result<(u32, u32, u32, M
                     if e == conn.encoder_id && enc_ref.crtc_id != 0 { current_crtc = Some(enc_ref.crtc_id); }
                     unsafe { (libs.free_encoder)(enc) };
                 }
-                best = Some((internal, id, possible, current_crtc, mode));
+                best = Some((internal, id, possible, current_crtc, mode, modes.clone()));
             }
         }
         unsafe { (libs.free_connector)(c) };
     }
-    let (_, connector, possible, current_crtc, mode) = best.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "kms: no connected output with a mode"))?;
+    let (_, connector, possible, current_crtc, mode, modes) = best.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "kms: no connected output with a mode"))?;
     let index = current_crtc.and_then(|id| crtcs.iter().position(|&c| c == id))
         .or_else(|| (0..crtcs.len()).find(|&i| possible & (1 << i) != 0))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "kms: no CRTC can drive the output"))?;
-    Ok((connector, crtcs[index], index as u32, mode))
+    Ok((connector, crtcs[index], index as u32, mode, modes))
 }
 
 /// The card's driver name and version, for the log.

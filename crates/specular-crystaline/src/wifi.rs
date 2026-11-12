@@ -1,27 +1,43 @@
-//! The Brick's WiFi around wpa_supplicant: the XR829's driver, and runit's `wpa_supplicant` and
-//! `wifi-dhcp` services (down at start-up; see their run scripts in the system image).
+//! WiFi around wpa_supplicant: the board's WiFi driver (`BOARD_WIFI_MODULE` in the system's board
+//! description), and runit's `wpa_supplicant` and `wifi-dhcp` services (down at start-up; see their
+//! run scripts in the system image).
 
 use std::io;
 use std::path::Path;
 
-use specular_linux::wpa::WifiDevice;
+use specular_core::wireless::trace::Traced;
+use specular_linux::wpa::{WifiDevice, WpaSupplicant};
 
-/// wpa_supplicant's control socket for the XR829's interface.
+/// wpa_supplicant's control socket for the WiFi interface.
 pub const SOCKET: &str = "/run/wpa_supplicant/wlan0";
 
-/// Loading the driver powers the chip's WiFi part up and unloading it powers it down again
-/// (Bluetooth, on the same chip, is separate and unaffected).
-pub struct BrickWifi;
+/// The WiFi service for `Hardware::wifi`: wpa_supplicant on the board's driver, traced; None if the
+/// board has no WiFi.
+pub fn wifi() -> Option<Box<specular_core::wireless::Wifi>> {
+    Some(Box::new(Traced::new("wifi", WpaSupplicant::new(SOCKET, Box::new(CrystalineWifi::new()?)))))
+}
 
-impl WifiDevice for BrickWifi {
+/// Loading the driver powers the chip's WiFi part up and unloading it powers it down again
+/// (Bluetooth, on the same chip on the Brick and the RGB20 Pro, is separate and unaffected).
+pub struct CrystalineWifi { module: String }
+
+impl CrystalineWifi {
+    /// The board's WiFi, if its description names a driver.
+    pub fn new() -> Option<Self> {
+        let module = crate::system::board_env("BOARD_WIFI_MODULE")?;
+        Some(Self { module })
+    }
+}
+
+impl WifiDevice for CrystalineWifi {
     fn set_power(&mut self, on: bool) -> io::Result<()> {
         if on {
-            run("/sbin/modprobe", &["xr829_wlan"])?;
+            run("/sbin/modprobe", &[&self.module])?;
             return run("/usr/bin/sv", &["up", "wpa_supplicant", "wifi-dhcp"]);
         }
         // -v: waits for wpa_supplicant to exit, so the driver is no longer in use.
         run("/usr/bin/sv", &["-v", "down", "wifi-dhcp", "wpa_supplicant"])?;
-        if Path::new("/sys/module/xr829_wlan").exists() { run("/sbin/rmmod", &["xr829_wlan"])?; }
+        if Path::new("/sys/module").join(&self.module).exists() { run("/sbin/rmmod", &[&self.module])?; }
         Ok(())
     }
 

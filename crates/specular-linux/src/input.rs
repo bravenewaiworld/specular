@@ -31,7 +31,10 @@ const HAT: [[Button; 2]; 2] = [[Button::Left, Button::Right], [Button::Up, Butto
 /// Key codes of an Xbox 360 style pad (what most handhelds' gamepad programs present, e.g. the
 /// Brick's padbridge), the keys a handheld's own `gpio-keys` report instead of its hat and trigger
 /// axes, and the volume and power keys. Specular names buttons by position, so the Xbox pad's
-/// bottom button (its "A") is Specular's B, its left one ("X") Specular's Y, and so on.
+/// bottom button (its "A") is Specular's B, its left one ("X") Specular's Y, and so on. Such pads
+/// send 0x133 for the left button and 0x134 for the top one, as SDL's Xbox mapping reads them; a
+/// kernel driver following Documentation/input/gamepad.rst sends them the other way round
+/// (`Input::positional`).
 fn key(code: u16) -> Option<Button> {
     Some(match code {
         0x130 => Button::B, 0x131 => Button::A, 0x133 => Button::Y, 0x134 => Button::X, // Xbox A, B, X, Y
@@ -49,7 +52,7 @@ fn key(code: u16) -> Option<Button> {
 struct InputDevice { name: &'static str, file: Option<File>, held: Vec<Button>, hat: [i32; 2], dropping: bool }
 
 /// The input devices Specular reads, by name.
-pub struct Input { devices: Vec<InputDevice>, next_retry: Instant, menu_chord: Option<Chord> }
+pub struct Input { devices: Vec<InputDevice>, next_retry: Instant, positional: bool, menu_chord: Option<Chord> }
 
 /// Whether Select and Start are held (on any device), and so Menu is (`Input::menu_chord`).
 #[derive(Default)]
@@ -96,7 +99,7 @@ pub(crate) struct EventDevice {
     /// Its node, e.g. "event3" (under `DEV`).
     node: String,
     /// Its name, or the node's if it has none.
-    name: String,
+    pub(crate) name: String,
     /// The folder holding its `capabilities/`.
     info: PathBuf,
 }
@@ -159,8 +162,12 @@ impl Input {
     /// until `retry` is called.
     pub fn new(names: &[&'static str]) -> Self {
         let devices = names.iter().map(|&name| InputDevice { name, file: None, held: Vec::new(), hat: [0; 2], dropping: false }).collect();
-        Self { devices, next_retry: Instant::now(), menu_chord: None }
+        Self { devices, next_retry: Instant::now(), positional: false, menu_chord: None }
     }
+
+    /// Reads 0x133 as the top button (`BTN_NORTH`) and 0x134 as the left one (`BTN_WEST`), as
+    /// kernel drivers send them (Documentation/input/gamepad.rst), rather than as Xbox style pads do.
+    pub fn positional(mut self) -> Self { self.positional = true; self }
 
     /// Also reports Menu while Select and Start are both held, for a device without a Menu button.
     /// Select and Start are still reported themselves, so a game sees both pressed briefly.
@@ -215,6 +222,11 @@ impl Input {
                 }
                 let (time, kind, code, value) = parse_event(&buf);
                 d.event(kind, code, value, time, out);
+            }
+        }
+        if self.positional {
+            for e in &mut out[from..] {
+                e.button = match e.button { Button::X => Button::Y, Button::Y => Button::X, b => b };
             }
         }
         self.add_menu_chord(out, from);
