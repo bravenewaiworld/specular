@@ -42,9 +42,10 @@ Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBL
 - (2026-11-11, device) The RGB20 Pro's DSI panel offers 12 modes, all 1024×768: 60.00 (preferred, 51.07 MHz), 120.00, 90.00, 75.47, 59.73, 59.94, 60.10, 60.00, 57.50, 50.01, 49.95 and 50.00 Hz. Source: `kms:` lines.
 - (2026-11-11, device) In its preferred 60.00 Hz mode the RGB20 Pro's panel refreshes at 59.33 Hz: the display clock gets 50.5 MHz instead of 51.07 (Crystaline OS's stage 2 finding on the RK3566's display clock). Source: `kms: refresh measured`, `devices/mainline/examples/kms_spike.rs`.
 - (2026-11-11, device) Panfrost (Mesa 26.0.1, Mali-G52) on the RGB20 Pro: clearing and flipping 300 frames took 5.04 s, 298 flips, none more than 1.5 refreshes after the one before, the longest gap 16.9 ms (one refresh), the slowest present 17.2 ms. Source: `kms_spike`.
+- (2026-11-12, device) A GBA game (mGBA) on the RGB20 Pro, run from the library: 594 flips in each 10 s for 50 s (59.4 a second: one per refresh at 59.33 Hz), none late, the longest gap 16.9 ms. The first 10 s, with the launch and its zoom, had 9 late flips and the 10 s after 2 (around the first autosave's flash, 33.7 ms). The first frame came 648 ms after the launch. Source: `SPECULAR_FLIP_STATS=1`, with `SPECULAR_SCRIPT` launching the game.
+- (2026-11-12, device) Mesa can't keep its shader cache on the RGB20 Pro: `/root/.cache` is on the read-only root filesystem, so every start compiles its shaders again. Source: Specular's log.
 - (2026-11-11, device) Specular starts on the RGB20 Pro and draws its first screen; the battery, buttons, time zone and SD card services start without errors. Source: Specular's log, a `SPECULAR_SNAPSHOT`.
 
 ## Open questions
 
-- Does a GBA game keep one frame per refresh at 59.33 Hz, with no late flips over a minute? `SPECULAR_FLIP_STATS=1` logs the flips every 10 s.
 - Is FN on SARADC channel 0, as on the RGB20SX? Crystaline OS's device tree reports it as `adc-keys` there; a press confirms it.
