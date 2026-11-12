@@ -27,8 +27,8 @@ impl Installer for CrystalineInstaller {
     fn follow(&self, progress: Box<dyn FnMut(Progress) + Send>) { run(vec!["follow".into()], true, progress); }
 }
 
-/// crystaline-install's command line for `task`. crystaline-install itself decides whether `restore`
-/// restores or prepares one, by where the system runs from.
+/// crystaline-install's command line for `task`. crystaline-install itself decides whether
+/// `restore` restores or prepares one, by where the system runs from.
 fn args(task: Task) -> Vec<String> {
     match task {
         Task::Install { backup, keep_card_bootable } => std::iter::once("install".to_string())
@@ -40,8 +40,8 @@ fn args(task: Task) -> Vec<String> {
     }
 }
 
-/// Runs crystaline-install with `args`, reporting what it prints to `progress`, from a thread of its
-/// own. With `may_say_nothing` (`follow`: no task running), reports nothing if it prints nothing.
+/// Runs crystaline-install with `args`, reporting what it prints to `progress`, from a thread of
+/// its own. With `may_say_nothing` (`follow`: no task running), reports nothing if it prints nothing.
 fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Progress) + Send>) {
     eprintln!("install: {PROGRAM} {}", args.join(" "));
     let child = Command::new(PROGRAM).args(&args).stdout(Stdio::piped()).spawn();
@@ -64,8 +64,8 @@ fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Pro
         }
         let status = child.wait();
         // It stopped without saying how it ended: the task crashed or was killed. (When following,
-        // crystaline-install exits normally even if the task it follows was killed, so its exit status
-        // says nothing then.)
+        // crystaline-install exits normally even if the task it follows was killed, so its exit
+        // status says nothing then.)
         if !ended && (said || !may_say_nothing) {
             match status { Ok(s) if s.success() => {}, Ok(s) => eprintln!("install: {PROGRAM} ended with {s}"), Err(e) => eprintln!("install: waiting for {PROGRAM}: {e}") }
             progress(Progress::Done(Err(TaskError { message: "The installer stopped unexpectedly.".into(), hint: "Details are in the log on the SD card (logs/).".into(), log })));
@@ -73,8 +73,8 @@ fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Pro
     });
 }
 
-/// One line of crystaline-install's output, as progress (None for lines that aren't, including a task
-/// this version of Specular doesn't know).
+/// One line of crystaline-install's output, as progress (None for lines that aren't, including a
+/// task this version of Specular doesn't know).
 fn parse(line: &str, log: &Option<String>) -> Option<Progress> {
     let (word, rest) = line.split_once(' ').unwrap_or((line, ""));
     Some(match word {
@@ -101,8 +101,8 @@ fn parse(line: &str, log: &Option<String>) -> Option<Progress> {
     })
 }
 
-/// crystaline-install's offer (see its main.rs). Fields an older crystaline-install doesn't print are left
-/// empty.
+/// crystaline-install's offer (see its main.rs). Fields an older crystaline-install doesn't print
+/// are left empty.
 fn offer(v: &serde_json::Value) -> Offer {
     let install = v["install"].as_object().map(|i| InstallOffer {
         bytes: i["bytes"].as_u64().unwrap_or(0),
