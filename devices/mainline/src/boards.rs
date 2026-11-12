@@ -4,6 +4,7 @@
 use std::io;
 
 use specular_core::input::Button;
+use specular_linux::input::Input;
 
 /// One board.
 pub struct Board {
@@ -17,6 +18,8 @@ pub struct Board {
     pub buttons: &'static [Button],
     /// The input devices its buttons come from, by evdev name.
     pub inputs: &'static [&'static str],
+    /// Select and Start held together are Menu (a board without a Menu button).
+    pub menu_chord: bool,
     /// Its backlight, by /sys/class/backlight name.
     pub backlight: &'static str,
     /// The ALSA device sound plays on.
@@ -41,13 +44,14 @@ pub const BOARDS: &[Board] = &[
         compatible: "powkiddy,rgb20-pro",
         name: "Powkiddy RGB20 Pro",
         ppi: 400, // 1024x768 on 65x49 mm
-        // FN is Menu (BTN_MODE, from adc-keys). The stick clicks (BTN_THUMBL/R, reported as F1/F2) aren't
-        // listed: Specular gives them no use yet.
+        // Menu is Select + Start (it has no Menu button). The stick clicks (BTN_THUMBL/R, reported as
+        // F1/F2) aren't listed: Specular gives them no use yet.
         buttons: {
             use Button::*;
             &[Up, Down, Left, Right, A, B, X, Y, L1, R1, L2, R2, Select, Start, Menu, VolUp, VolDown, Power]
         },
-        inputs: &["gpio-keys-control", "gpio-keys-vol", "rk805 pwrkey", "adc-keys"],
+        inputs: &["gpio-keys-control", "gpio-keys-vol", "rk805 pwrkey"],
+        menu_chord: true,
         backlight: "backlight",
         // Card 0 is HDMI; the RK817 codec's card plays on the speaker and the headphones (the jack
         // cuts the speaker in hardware).
@@ -55,6 +59,14 @@ pub const BOARDS: &[Board] = &[
         volume: Mixer { card: "rk817ext", control: "Master Playback Volume", max: 255, db_per_step: 95.0 / 255.0 }, // -95 to 0 dB in 255 steps (amixer's dB range)
     },
 ];
+
+impl Board {
+    /// Its buttons' input.
+    pub fn input(&self) -> Input {
+        let input = Input::new(self.inputs);
+        if self.menu_chord { input.menu_chord() } else { input }
+    }
+}
 
 /// The board in `compatible` (the device tree's list, NUL-separated), or an error naming it.
 pub fn find(compatible: &[u8]) -> io::Result<&'static Board> {

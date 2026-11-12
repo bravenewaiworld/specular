@@ -4,6 +4,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use specular_core::input::Button;
 use specular_core::device::{Audio, Battery, Device, DeviceProfile, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_crystaline::system;
 use specular_linux::backlight::SysfsBacklight;
@@ -49,6 +50,7 @@ impl Device for Mainline {
             ppi: self.board.ppi,
             refresh_hz: self.refresh_hz,
             buttons: self.board.buttons,
+            labels: if self.board.menu_chord { &[(Button::Menu, "SELECT+START")] } else { &[] },
             leds: &[],
         }
     }

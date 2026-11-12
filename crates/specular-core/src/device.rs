@@ -24,6 +24,9 @@ pub struct DeviceProfile {
     pub refresh_hz: f64,
     /// The buttons the device has; hints never show others.
     pub buttons: &'static [Button],
+    /// What hints call a button where the device differs from the usual name (e.g. Menu as
+    /// "SELECT+START" on a device without a Menu button).
+    pub labels: &'static [(Button, &'static str)],
     /// The device's RGB LEDs in chain order, with the accent each one shows (empty for none).
     pub leds: &'static [Accent],
 }

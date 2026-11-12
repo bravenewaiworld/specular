@@ -27,7 +27,7 @@ fn main() -> Result<(), specular_ui::Error> {
     let vsync = device.open_vsync();
     let size = slint::PhysicalSize::new(kms.mode().width(), kms.mode().height());
     specular_ui::run(Box::new(device), DataRoot(data.into()), Some(Box::new(move |on_button| {
-        let platform = GlPlatform::new(KmsSurface::new(kms)?, size, board.inputs, vsync)?;
+        let platform = GlPlatform::new(KmsSurface::new(kms)?, size, board.input(), vsync)?;
         platform.on_button(on_button);
         slint::platform::set_platform(Box::new(platform)).map_err(|e| format!("{e:?}"))?;
         Ok(())

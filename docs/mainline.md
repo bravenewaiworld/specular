@@ -11,7 +11,7 @@ The port to boards running mainline Linux under Crystaline OS's mainline family 
 - **The drawing loop is shared with the Brick** (2026-11-11). `specular_ui::platform::GlPlatform` is the Brick's former event loop, over a `GlSurface` that each device supplies: the Brick's driver display, or `KmsSurface`. Rejected: a copy of the loop per display kind (every pacing fix made twice).
 - **Crystaline OS's services are shared too** (2026-11-11). SSH, file transfer, the time zone, the SD card and the last-shutdown record are contracts of Crystaline OS, not of the Brick, so they live in `crates/specular-crystaline`. Rejected: copying them into each device crate.
 - **The refresh rate is measured, not taken from the mode** (2026-11-11). At start-up the device waits 30 vblanks and uses their rate as `DeviceProfile::refresh_hz`, logged with the mode's own; without vblanks it takes the mode's. On the RGB20 Pro the mode says 60.00 Hz but the panel runs at 59.33 Hz (Findings), and games and sound are paced against the profile's rate.
-- **FN is the Menu button on the RGB20 Pro** (2026-11-11). It has no Menu or Home button. The stick clicks are left out of the profile until games get them.
+- **On the RGB20 Pro, Select and Start held together are Menu** (2026-11-12). It has no Menu, Home or FN button. `Input::menu_chord` reports Menu while both are held, and Select and Start are still reported themselves, so a game sees both pressed for a moment; hints call it SELECT+START (`DeviceProfile::labels`). Rejected: R3, a stick click (PS1 analog games use it); holding Select (a short press would reach the game only on release); FN (there is none: an older ROCKNIX driver's list had one). The stick clicks are left out of the profile until games get them.
 - **The RGB20 Pro's LEDs stay with the system** (2026-11-11). The green and red LEDs show status and charging; `leds` is empty, so Specular's accent lights don't drive them.
 
 ## Design
@@ -28,7 +28,7 @@ Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBL
 
 | Service | How |
 |---|---|
-| Buttons | evdev, the board's input devices by name (`specular-linux`). The RGB20 Pro: `gpio-keys-control` (d-pad as `BTN_DPAD_*`, triggers as `BTN_TL2`/`BTN_TR2` keys), `gpio-keys-vol`, `rk805 pwrkey`, `adc-keys` (FN as `BTN_MODE`) |
+| Buttons | evdev, the board's input devices by name (`specular-linux`). The RGB20 Pro: `gpio-keys-control` (d-pad as `BTN_DPAD_*`, triggers as `BTN_TL2`/`BTN_TR2` keys), `gpio-keys-vol`, `rk805 pwrkey`; Menu is Select + Start |
 | Battery | power-supply class (`rk817-battery`) |
 | Backlight, panel off | backlight class (`specular-linux/src/backlight.rs`): levels 1–10 from 1/16 of `max_brightness` up on a curve; panel off is `bl_power` (the backlight only) |
 | Volume | one mixer control for every output, through amixer: `rk817ext`'s "Master Playback Volume" (0–255, −95 to 0 dB). Levels 2 dB apart, the top at 0 dB |
@@ -45,7 +45,3 @@ Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBL
 - (2026-11-12, device) A GBA game (mGBA) on the RGB20 Pro, run from the library: 594 flips in each 10 s for 50 s (59.4 a second: one per refresh at 59.33 Hz), none late, the longest gap 16.9 ms. The first 10 s, with the launch and its zoom, had 9 late flips and the 10 s after 2 (around the first autosave's flash, 33.7 ms). The first frame came 648 ms after the launch. Source: `SPECULAR_FLIP_STATS=1`, with `SPECULAR_SCRIPT` launching the game.
 - (2026-11-12, device) Mesa can't keep its shader cache on the RGB20 Pro: `/root/.cache` is on the read-only root filesystem, so every start compiles its shaders again. Source: Specular's log.
 - (2026-11-11, device) Specular starts on the RGB20 Pro and draws its first screen; the battery, buttons, time zone and SD card services start without errors. Source: Specular's log, a `SPECULAR_SNAPSHOT`.
-
-## Open questions
-
-- Is FN on SARADC channel 0, as on the RGB20SX? Crystaline OS's device tree reports it as `adc-keys` there; a press confirms it.

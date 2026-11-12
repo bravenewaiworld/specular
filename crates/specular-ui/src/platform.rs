@@ -135,10 +135,9 @@ pub struct GlPlatform<S: GlSurface> {
 }
 
 impl<S: GlSurface + 'static> GlPlatform<S> {
-    /// A window of `size` pixels on `surface`, with buttons from the input devices named `inputs`
-    /// (as `Input::new` takes them). Animations are paced by `vsync`; without it, by `present`
+    /// A window of `size` pixels on `surface`, with buttons from `input`. Animations are paced by `vsync`; without it, by `present`
     /// alone.
-    pub fn new(surface: S, size: PhysicalSize, inputs: &[&'static str], vsync: Option<Box<dyn Vsync>>) -> Result<Self, Error> {
+    pub fn new(surface: S, size: PhysicalSize, input: Input, vsync: Option<Box<dyn Vsync>>) -> Result<Self, Error> {
         let fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
         if fd < 0 { return Err(std::io::Error::last_os_error().into()); }
         let wake = Arc::new(Wake { jobs: Mutex::default(), quit: AtomicBool::new(false), fd: unsafe { File::from(OwnedFd::from_raw_fd(fd)) } });
@@ -149,7 +148,7 @@ impl<S: GlSurface + 'static> GlPlatform<S> {
             window: OnceCell::new(),
             pacer: FramePacer::new(vsync, move || woken.wake()),
             wake,
-            input: RefCell::new(Input::new(inputs)),
+            input: RefCell::new(input),
             on_button: RefCell::default(),
             on_present: RefCell::default(),
         })

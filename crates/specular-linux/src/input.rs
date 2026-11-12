@@ -49,7 +49,11 @@ fn key(code: u16) -> Option<Button> {
 struct InputDevice { name: &'static str, file: Option<File>, held: Vec<Button>, hat: [i32; 2], dropping: bool }
 
 /// The input devices Specular reads, by name.
-pub struct Input { devices: Vec<InputDevice>, next_retry: Instant }
+pub struct Input { devices: Vec<InputDevice>, next_retry: Instant, menu_chord: Option<Chord> }
+
+/// Whether Select and Start are held (on any device), and so Menu is (`Input::menu_chord`).
+#[derive(Default)]
+struct Chord { select: bool, start: bool, menu: bool }
 
 const RETRY: Duration = Duration::from_secs(1);
 const EVIOCSCLOCKID: libc::c_ulong = 0x4004_45a0; // _IOW('E', 0xa0, int)
@@ -155,7 +159,27 @@ impl Input {
     /// until `retry` is called.
     pub fn new(names: &[&'static str]) -> Self {
         let devices = names.iter().map(|&name| InputDevice { name, file: None, held: Vec::new(), hat: [0; 2], dropping: false }).collect();
-        Self { devices, next_retry: Instant::now() }
+        Self { devices, next_retry: Instant::now(), menu_chord: None }
+    }
+
+    /// Also reports Menu while Select and Start are both held, for a device without a Menu button.
+    /// Select and Start are still reported themselves, so a game sees both pressed briefly.
+    pub fn menu_chord(mut self) -> Self { self.menu_chord = Some(Chord::default()); self }
+
+    /// Adds Menu's presses and releases to the events in `out` from `from` on (`menu_chord`), each
+    /// right after the Select or Start event that makes it.
+    fn add_menu_chord(&mut self, out: &mut Vec<ButtonEvent>, from: usize) {
+        let Some(c) = self.menu_chord.as_mut() else { return };
+        let events = out.split_off(from);
+        for e in events {
+            out.push(e);
+            match e.button { Button::Select => c.select = e.pressed, Button::Start => c.start = e.pressed, _ => continue }
+            let both = c.select && c.start;
+            if both != c.menu {
+                c.menu = both;
+                out.push(ButtonEvent { button: Button::Menu, pressed: both, time: e.time });
+            }
+        }
     }
 
     /// Tries to open missing devices, at most once a second. A mute switch found already on
@@ -180,6 +204,7 @@ impl Input {
     /// `retry` brings it back. (`Mute` isn't released: the switch is still where it was, and
     /// `retry` re-reads it.)
     pub fn read(&mut self, out: &mut Vec<ButtonEvent>) {
+        let from = out.len();
         for d in &mut self.devices {
             let mut buf = [0u8; EVENT_SIZE];
             while let Some(file) = d.file.as_mut() {
@@ -192,6 +217,7 @@ impl Input {
                 d.event(kind, code, value, time, out);
             }
         }
+        self.add_menu_chord(out, from);
     }
 }
 
@@ -248,6 +274,18 @@ impl InputDevice {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn select_and_start_together_are_menu() {
+        let mut input = Input::new(&[]).menu_chord();
+        let e = |button, pressed| ButtonEvent { button, pressed, time: Duration::ZERO };
+        let mut out = vec![e(Button::Select, true), e(Button::Start, true), e(Button::Select, false), e(Button::Start, false)];
+        input.add_menu_chord(&mut out, 0);
+        assert_eq!(out, [e(Button::Select, true), e(Button::Start, true), e(Button::Menu, true), e(Button::Select, false),
+            e(Button::Menu, false), e(Button::Start, false)]);
+    }
+
     #[test]
     fn capability_bitmaps() {
         use super::has_bit;

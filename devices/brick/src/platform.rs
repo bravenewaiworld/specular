@@ -6,6 +6,7 @@
 use slint::PhysicalSize;
 use specular_core::device::Vsync;
 use specular_linux::egl::{EglDisplay, Native};
+use specular_linux::input::Input;
 use specular_ui::platform::GlPlatform;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -26,5 +27,5 @@ pub type BrickPlatform = GlPlatform<EglDisplay>;
 /// two refreshes to show; see docs/brick.md).
 pub fn open(vsync: Option<Box<dyn Vsync>>) -> Result<BrickPlatform, Error> {
     crate::fonts::work_around_empty_fontconfig()?;
-    GlPlatform::new(EglDisplay::open(Native::Default)?, SCREEN, INPUT_DEVICES, vsync)
+    GlPlatform::new(EglDisplay::open(Native::Default)?, SCREEN, Input::new(INPUT_DEVICES), vsync)
 }

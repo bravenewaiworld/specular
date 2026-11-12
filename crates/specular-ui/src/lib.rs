@@ -1681,10 +1681,11 @@ impl Runner {
     /// share a badge ("L1/R1").
     fn badges<'a>(&self, hints: impl Iterator<Item = &'a (Button, String)>) -> Vec<Hint> {
         let mut out: Vec<Hint> = vec![];
+        let name = |b: Button| self.profile.labels.iter().find(|(l, _)| *l == b).map_or(button_label(b), |(_, n)| *n);
         for (b, label) in hints.filter(|(b, _)| self.profile.buttons.contains(b)) {
             match out.last_mut() {
-                Some(h) if h.label == label.as_str() => h.button = format!("{}/{}", h.button, button_label(*b)).into(),
-                _ => out.push(Hint { button: button_label(*b).into(), label: label.as_str().into() }),
+                Some(h) if h.label == label.as_str() => h.button = format!("{}/{}", h.button, name(*b)).into(),
+                _ => out.push(Hint { button: name(*b).into(), label: label.as_str().into() }),
             }
         }
         out
