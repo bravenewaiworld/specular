@@ -57,6 +57,8 @@ pub enum Internal {
     /// Unreadable, or a layout we don't recognise.
     #[default]
     Unknown,
+    /// The device has no internal storage: Settings leaves its section out.
+    None,
 }
 
 impl Internal {
@@ -67,7 +69,7 @@ impl Internal {
             Internal::ThisSystem => "This system",
             Internal::UnfinishedInstall => "Unfinished install",
             Internal::UnfinishedRestore => "Unfinished restore",
-            Internal::Unknown => return None,
+            Internal::Unknown | Internal::None => return None,
         })
     }
 

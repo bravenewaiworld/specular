@@ -1,6 +1,7 @@
-//! The Brick's installer: the system's crystaline-install program (Crystaline OS's
-//! userspace/crystaline-install), run with its output read line by line (its protocol is in its
-//! report.rs, its offer in its main.rs).
+//! The installer: Crystaline OS's crystaline-install program (its userspace/crystaline-install),
+//! run with its output read line by line (its protocol is in its report.rs, its offer in its
+//! main.rs). It installs updates on every board, and onto the internal storage on boards that have
+//! one.
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -9,9 +10,9 @@ use specular_core::install::{Backup, InstallOffer, Installer, Internal, Offer, P
 
 const PROGRAM: &str = "/usr/sbin/crystaline-install";
 
-pub struct BrickInstaller;
+pub struct CrystalineInstaller;
 
-impl Installer for BrickInstaller {
+impl Installer for CrystalineInstaller {
     fn offer(&self) -> Result<Offer, String> {
         let out = Command::new(PROGRAM).arg("offer").output().map_err(|e| format!("{PROGRAM}: {e}"))?;
         // Logged whole, so what Settings showed can be worked out afterwards from the log.
@@ -127,9 +128,11 @@ fn offer(v: &serde_json::Value) -> Offer {
     }
 }
 
-/// What the internal storage holds, as crystaline-install names it (crystaline-install's `install::holds`).
+/// What the internal storage holds, as crystaline-install names it (crystaline-install's
+/// `install::holds`; "none" on a device without internal storage).
 fn internal(name: &str) -> Internal {
     match name {
+        "none" => Internal::None,
         "trimui" => Internal::TrimUi,
         "this-system" => Internal::ThisSystem,
         "unfinished-install" => Internal::UnfinishedInstall,

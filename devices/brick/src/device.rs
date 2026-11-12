@@ -50,7 +50,7 @@ impl Device for Brick {
             audio: Box::new(Volume),
             wifi: specular_crystaline::wifi::wifi(),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
-            installer: Some(Box::new(crate::install::BrickInstaller)),
+            installer: Some(Box::new(specular_crystaline::install::CrystalineInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".

@@ -2,5 +2,4 @@
 
 pub mod device;
 pub mod fonts;
-pub mod install;
 pub mod platform;

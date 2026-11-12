@@ -3916,7 +3916,6 @@ dependencies = [
  "khronos-egl",
  "libc",
  "libloading",
- "serde_json",
  "slint",
  "specular-core",
  "specular-credits",
@@ -3947,6 +3946,7 @@ dependencies = [
 name = "specular-crystaline"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "specular-core",
  "specular-linux",
 ]

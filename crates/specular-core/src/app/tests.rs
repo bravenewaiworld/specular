@@ -1029,6 +1029,15 @@ mod install {
     }
 
     #[test]
+    fn settings_leave_out_internal_storage_on_a_device_without_it() {
+        let mut a = install_app();
+        settings(&mut a, Offer { install: None, why_not: Some("this device has no internal storage".into()), internal: Internal::None, backups: vec![], ..offer() });
+        let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
+        assert!(labels.contains(&"Updates".into()) && labels.contains(&"Install update".into()), "{labels:?}");
+        assert!(!labels.contains(&"Internal storage".into()), "{labels:?}");
+    }
+
+    #[test]
     fn settings_show_the_version_updates_and_the_previous_version() {
         let mut a = install_app();
         settings(&mut a, offer());

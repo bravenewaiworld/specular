@@ -82,7 +82,7 @@ impl Device for Mainline {
             audio: Box::new(Volume(&self.board.volume)),
             wifi: specular_crystaline::wifi::wifi(),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
-            installer: None,
+            installer: Some(Box::new(specular_crystaline::install::CrystalineInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),
             // The jack cuts the speaker in hardware and reports nothing: one output, one volume.
