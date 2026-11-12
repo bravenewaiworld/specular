@@ -1,6 +1,6 @@
 # Architecture
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-11-11
 
 How Specular is put together: the toolkit, the crates and threads, the boundary a device port implements, where plugins will plug in, and the memory and licence limits that shape all of it. Most later choices follow from two goals: the UI must stay smooth on a slow handheld, and the same code must run on any Linux device.
 
@@ -41,13 +41,17 @@ crates/
   specular-credits/  works out what a binary ships and its licences; run by the device crates'
                      build scripts
   specular-ui/       Slint theme, prefabs and screens; carries out the app's effects; owns the
-                     threads; art service; run(device)
+                     threads; art service; run(device); the Slint platform for devices without a
+                     window system (platform.rs)
   specular-linux/    standard Linux implementations: evdev (buttons, the jack, rumble), power
-                     supply, LED class, ALSA, wpa_supplicant, BlueZ, framebuffer vsync and frame
-                     pacing
+                     supply, LED class, backlight class, ALSA, wpa_supplicant, BlueZ, EGL, DRM/KMS
+                     display, framebuffer and DRM vsync, frame pacing
+  specular-crystaline/  Crystaline OS's services, for the devices that run it: SSH, file
+                     transfer, time zone, SD card, power commands
 devices/
   desktop/           Slint's default window, simulated hardware, keyboard as gamepad
   brick/             the TrimUI Brick (see brick.md)
+  mainline/          boards on mainline Linux, one binary with a board table (see mainline.md)
 design/              design/mockup.html, the interactive look (see look-and-motion.md)
 data/db/             game tables for box art (see library-and-box-art.md)
 data/credits.tsv     what Specular ships besides crates, for the credits (see Credits below)
@@ -164,7 +168,7 @@ pub trait HeadphoneJack: Send {
 
 Sound goes to the first connected Bluetooth device taking sound, else to headphones in the jack, else to the speaker; the volume keys and the gauge act on that output's level.
 
-The display platform is passed to `run` separately, since it is Slint-specific. It installs a Slint platform (how pixels reach the screen) and delivers button events on the UI thread; without one, Slint's default window is used with the keyboard as buttons.
+The display platform is passed to `run` separately, since it is Slint-specific. It installs a Slint platform (how pixels reach the screen) and delivers button events on the UI thread; without one, Slint's default window is used with the keyboard as buttons. A device without a window system uses `specular_ui::platform::GlPlatform` and supplies only its `GlSurface`: how the UI's GL context is made current and how a frame is shown (the Brick's driver display, or `KmsSurface` for DRM/KMS).
 
 ```rust
 pub type InstallPlatform = Box<dyn FnOnce(Box<dyn FnMut(ButtonEvent)>) -> Result<(), Error>>;

@@ -3920,6 +3920,7 @@ dependencies = [
  "slint",
  "specular-core",
  "specular-credits",
+ "specular-crystaline",
  "specular-linux",
  "specular-ui",
 ]
@@ -3943,6 +3944,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "specular-crystaline"
+version = "0.1.0"
+dependencies = [
+ "specular-core",
+ "specular-linux",
+]
+
+[[package]]
 name = "specular-desktop"
 version = "0.1.0"
 dependencies = [
@@ -3958,11 +3967,27 @@ dependencies = [
 name = "specular-linux"
 version = "0.1.0"
 dependencies = [
+ "khronos-egl",
  "libc",
+ "libloading",
  "serde",
  "specular-core",
  "tempfile",
  "zbus",
+]
+
+[[package]]
+name = "specular-mainline"
+version = "0.1.0"
+dependencies = [
+ "glow",
+ "libc",
+ "slint",
+ "specular-core",
+ "specular-credits",
+ "specular-crystaline",
+ "specular-linux",
+ "specular-ui",
 ]
 
 [[package]]
@@ -3992,6 +4017,7 @@ dependencies = [
  "slint",
  "slint-build",
  "specular-core",
+ "specular-linux",
  "specular-runtime",
  "tempfile",
  "ureq",

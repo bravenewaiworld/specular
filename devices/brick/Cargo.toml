@@ -12,6 +12,7 @@ libc = "0.2"
 libloading = "0.8"
 serde_json = "1"
 specular-core = { path = "../../crates/specular-core" }
+specular-crystaline = { path = "../../crates/specular-crystaline" }
 specular-linux = { path = "../../crates/specular-linux" }
 specular-ui = { path = "../../crates/specular-ui" }
 slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }

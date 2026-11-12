@@ -9,8 +9,8 @@ use std::path::Path;
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Display, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
 use specular_core::wireless::trace::Traced;
+use specular_crystaline::system::{self, run};
 use specular_linux::bluez::Bluez;
-use specular_linux::card_state::StateFile;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
@@ -24,10 +24,6 @@ const LEDS: &[Accent] = {
 };
 /// The LEDs are very bright at full power; like TrimUI's firmware, limit them to about 40/255.
 const LED_LIMIT: u8 = 40;
-
-/// The SD card's state, kept by the system's `mount-card`, which a recheck runs.
-const CARD_STATE: &str = "/run/card/state";
-const MOUNT_CARD: &str = "/usr/libexec/crystaline/mount-card";
 
 pub struct Brick;
 
@@ -55,15 +51,14 @@ impl Device for Brick {
             wifi: Some(Box::new(Traced::new("wifi", WpaSupplicant::new(crate::wifi::SOCKET, Box::new(crate::wifi::BrickWifi))))),
             bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
             installer: Some(Box::new(crate::install::BrickInstaller)),
-            time_zone: Some(Box::new(crate::timezone::BrickTimeZone)),
-            // Crystaline OS mounts the card as it comes and goes (docs/storage.md there).
-            card: Some(Box::new(Traced::new("card", StateFile::new(CARD_STATE, || run(MOUNT_CARD, &[]))))),
+            time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
+            card: Some(system::card()),
             // The codec driver's jack input device, "audiocodec sunxi Audio Jack".
             headphones: Some(Box::new(specular_linux::jack::EvdevJack)),
             // padbridge's pad, "TRIMUI Player1", which passes rumble on to the motor.
             rumble: Some(Box::new(specular_linux::rumble::EvdevRumble::new())),
-            file_transfer: Some(Box::new(crate::transfer::BrickTransfer)),
-            ssh: Some(Box::new(crate::ssh::BrickSsh)),
+            file_transfer: Some(Box::new(specular_crystaline::transfer::WebdavTransfer)),
+            ssh: Some(Box::new(specular_crystaline::ssh::CrystalineSsh)),
             cpu: Some(Box::new(crate::cpu::BrickCpu)),
         }
     }
@@ -93,30 +88,11 @@ impl Power for BrickPower {
     /// suspend while connected).
     fn sleep(&self) -> io::Result<()> { run("/usr/bin/sleepnow", &[]) }
 
-    fn shutdown(&self) -> io::Result<()> { run("/sbin/poweroff", &[]) }
+    fn shutdown(&self) -> io::Result<()> { system::shutdown() }
 
-    fn restart(&self) -> io::Result<()> { run("/sbin/reboot", &[]) }
+    fn restart(&self) -> io::Result<()> { system::restart() }
 
-    /// Crystaline OS writes this file at boot under /run (in memory, so it is gone after the next
-    /// restart), and leaves deleting it to Specular: Crystaline OS's docs/system-image.md, How the last run
-    /// ended.
-    fn last_shutdown(&self) -> io::Result<Option<String>> {
-        let text = match std::fs::read_to_string(LAST_SHUTDOWN) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            read => read?,
-        };
-        // Told anyway if it can't be removed; a restarted Specular then tells it again.
-        if let Err(e) = std::fs::remove_file(LAST_SHUTDOWN) { eprintln!("power: can't remove {LAST_SHUTDOWN}: {e}"); }
-        Ok(Some(text))
-    }
-}
-
-/// How the last run ended, when not cleanly: one word and a newline.
-const LAST_SHUTDOWN: &str = "/run/crystaline/last-shutdown";
-
-fn run(program: &str, args: &[&str]) -> io::Result<()> {
-    let status = std::process::Command::new(program).args(args).status()?;
-    if status.success() { Ok(()) } else { Err(io::Error::other(format!("{program}: {status}"))) }
+    fn last_shutdown(&self) -> io::Result<Option<String>> { system::last_shutdown() }
 }
 
 /// The backlight and panel through /dev/disp (ioctls from include/video/sunxi_display2.h).

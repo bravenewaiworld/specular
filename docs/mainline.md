@@ -1,0 +1,50 @@
+# Mainline boards
+
+Status: In progress · Updated: 2026-11-11
+
+The port to boards running mainline Linux under Crystaline OS's mainline family (`devices/mainline`): first the Powkiddy RGB20 Pro (Rockchip RK3566), later the Orange Pi 5. How Specular draws through DRM/KMS, how one binary serves every board, and what was measured. Unlike the Brick, everything here goes through standard Linux interfaces, so this is also the reference for any future Linux device with a KMS display.
+
+## Decisions
+
+- **One binary for every mainline board; what differs is data** (2026-11-11). `devices/mainline/src/boards.rs` holds a `Board` per board (name, ppi, buttons, input devices, backlight, ALSA device, volume control), found at start-up from `/proc/device-tree/compatible`. Crystaline OS's mainline family ships one root filesystem for all its boards, so its Specular must already serve them all. Rejected: a device crate per board (`devices/rgb20pro`; a binary per board in a shared root filesystem).
+- **The display is DRM/KMS with a GBM surface, presented by page flips** (2026-11-11). EGL draws into GBM buffers; each present flips the new buffer onto the CRTC at the next vblank (`specular-linux/src/kms.rs`). libdrm and libgbm are loaded at runtime, as the GPU libraries are, so no build needs their headers. Rejected: the DRM fbdev emulation (`/dev/fb0`: no vsync wait and a copy per frame); atomic modesetting (more code for nothing a single full-screen plane needs, until per-game mode switching).
+- **The drawing loop is shared with the Brick** (2026-11-11). `specular_ui::platform::GlPlatform` is the Brick's former event loop, over a `GlSurface` that each device supplies: the Brick's driver display, or `KmsSurface`. Rejected: a copy of the loop per display kind (every pacing fix made twice).
+- **Crystaline OS's services are shared too** (2026-11-11). SSH, file transfer, the time zone, the SD card and the last-shutdown record are contracts of Crystaline OS, not of the Brick, so they live in `crates/specular-crystaline`. Rejected: copying them into each device crate.
+- **The refresh rate is measured, not taken from the mode** (2026-11-11). At start-up the device waits 30 vblanks and uses their rate as `DeviceProfile::refresh_hz`, logged with the mode's own; without vblanks it takes the mode's. On the RGB20 Pro the mode says 60.00 Hz but the panel runs at 59.33 Hz (Findings), and games and sound are paced against the profile's rate.
+- **FN is the Menu button on the RGB20 Pro** (2026-11-11). It has no Menu or Home button. The stick clicks are left out of the profile until games get them.
+- **The RGB20 Pro's LEDs stay with the system** (2026-11-11). The green and red LEDs show status and charging; `leds` is empty, so Specular's accent lights don't drive them.
+
+## Design
+
+### Display
+
+`Kms::open` picks the first connected built-in panel (LVDS, eDP or DSI; else the first connected output), its preferred mode and a CRTC that can drive it (the one driving it now first), and makes a GBM surface of that size in XRGB8888. Specular is then the card's DRM master. `EglDisplay::open(Native::Gbm { .. })` takes an EGL 1.5 platform display on the GBM device and a config whose native visual is the surface's format.
+
+`KmsSurface::present`: `eglSwapBuffers`, then lock the new front buffer, give it a DRM framebuffer the first time it is seen, and flip to it. The first present sets the mode instead. If the flip before is still pending, it first waits for that flip's event (at most a refresh), then gives the buffer it replaced back to GBM. So two buffers are locked at most.
+
+Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBLANK` on a file of its own (no DRM master needed), one per waiting thread, plugged into `FramePacer` and the game thread's `Vsync` as `FbVsync` is on the Brick.
+
+### Board table and hardware
+
+| Service | How |
+|---|---|
+| Buttons | evdev, the board's input devices by name (`specular-linux`). The RGB20 Pro: `gpio-keys-control` (d-pad as `BTN_DPAD_*`, triggers as `BTN_TL2`/`BTN_TR2` keys), `gpio-keys-vol`, `rk805 pwrkey`, `adc-keys` (FN as `BTN_MODE`) |
+| Battery | power-supply class (`rk817-battery`) |
+| Backlight, panel off | backlight class (`specular-linux/src/backlight.rs`): levels 1–10 from 1/16 of `max_brightness` up on a curve; panel off is `bl_power` (the backlight only) |
+| Volume | one mixer control for every output, through amixer: `rk817ext`'s "Master Playback Volume" (0–255, −95 to 0 dB). Levels 2 dB apart, the top at 0 dB |
+| Sound | ALSA `default:CARD=rk817ext` (card 0 is HDMI) |
+| Headphones | none: the jack cuts the speaker in hardware and reports nothing |
+| SSH, file transfer, time zone, SD card, power off, restart | Crystaline OS (`specular-crystaline`) |
+| Sleep, WiFi, Bluetooth, rumble, CPU speed | not yet (ROADMAP.md) |
+
+## Findings
+
+- (2026-11-11, device) The RGB20 Pro's DSI panel offers 12 modes, all 1024×768: 60.00 (preferred, 51.07 MHz), 120.00, 90.00, 75.47, 59.73, 59.94, 60.10, 60.00, 57.50, 50.01, 49.95 and 50.00 Hz. Source: `kms:` lines.
+- (2026-11-11, device) In its preferred 60.00 Hz mode the RGB20 Pro's panel refreshes at 59.33 Hz: the display clock gets 50.5 MHz instead of 51.07 (Crystaline OS's stage 2 finding on the RK3566's display clock). Source: `kms: refresh measured`, `devices/mainline/examples/kms_spike.rs`.
+- (2026-11-11, device) Panfrost (Mesa 26.0.1, Mali-G52) on the RGB20 Pro: clearing and flipping 300 frames took 5.04 s, 298 flips, none more than 1.5 refreshes after the one before, the longest gap 16.9 ms (one refresh), the slowest present 17.2 ms. Source: `kms_spike`.
+- (2026-11-11, device) Specular starts on the RGB20 Pro and draws its first screen; the battery, buttons, time zone and SD card services start without errors. Source: Specular's log, a `SPECULAR_SNAPSHOT`.
+
+## Open questions
+
+- Does a GBA game keep one frame per refresh at 59.33 Hz, with no late flips over a minute? `SPECULAR_FLIP_STATS=1` logs the flips every 10 s.
+- Is FN on SARADC channel 0, as on the RGB20SX? Crystaline OS's device tree reports it as `adc-keys` there; a press confirms it.

@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use glow::HasContext;
-use specular_brick::egl::EglDisplay;
+use specular_linux::egl::{EglDisplay, Native};
 use specular_brick::platform::SCREEN;
 
 const FBIOGET_VSCREENINFO: libc::c_ulong = 0x4600;
@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let takes_ms = mode == "late" || mode == "vsync";
     let delay = Duration::from_millis(if takes_ms { args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8) } else { 0 });
     let frames: u32 = args.get(if takes_ms { 3 } else { 2 }).and_then(|s| s.parse().ok()).unwrap_or(300);
-    let egl = EglDisplay::open()?;
+    let egl = EglDisplay::open(Native::Default)?;
     let gl = unsafe { glow::Context::from_loader_function_cstr(|n| egl.proc_address(n)) };
     let fb = std::fs::OpenOptions::new().read(true).open("/dev/fb0")?;
     let fb_vsync = fb.try_clone()?;

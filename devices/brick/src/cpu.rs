@@ -4,7 +4,7 @@
 
 use specular_core::device::Cpu;
 
-use crate::command::run;
+use specular_crystaline::command::run;
 
 const PROGRAM: &str = "/usr/sbin/crystaline-power";
 

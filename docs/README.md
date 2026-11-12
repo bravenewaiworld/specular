@@ -16,6 +16,7 @@ Why Specular works the way it does: decisions, designs and research, one doc per
 | [time-zone.md](time-zone.md) | Choosing the time zone: by hand, or looked up with the user's permission |
 | [installer.md](installer.md) | Installing the system to internal storage, from Settings |
 | [brick.md](brick.md) | The TrimUI Brick port: display platform, hardware services, measurements |
+| [mainline.md](mainline.md) | Boards on mainline Linux (the RGB20 Pro): KMS display, the board table, measurements |
 
 ## Format
 

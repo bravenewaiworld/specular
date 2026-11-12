@@ -29,14 +29,17 @@ const ABS_Z: u16 = 2; const ABS_RZ: u16 = 5; const ABS_HAT0X: u16 = 16; const AB
 const HAT: [[Button; 2]; 2] = [[Button::Left, Button::Right], [Button::Up, Button::Down]];
 
 /// Key codes of an Xbox 360 style pad (what most handhelds' gamepad programs present, e.g. the
-/// Brick's padbridge) and the power key. Specular names buttons by position, so the Xbox pad's
+/// Brick's padbridge), the keys a handheld's own `gpio-keys` report instead of its hat and trigger
+/// axes, and the volume and power keys. Specular names buttons by position, so the Xbox pad's
 /// bottom button (its "A") is Specular's B, its left one ("X") Specular's Y, and so on.
 fn key(code: u16) -> Option<Button> {
     Some(match code {
         0x130 => Button::B, 0x131 => Button::A, 0x133 => Button::Y, 0x134 => Button::X, // Xbox A, B, X, Y
         0x136 => Button::L1, 0x137 => Button::R1,                                        // BTN_TL/TR
+        0x138 => Button::L2, 0x139 => Button::R2,                                        // BTN_TL2/TR2 (triggers as keys)
         0x13a => Button::Select, 0x13b => Button::Start, 0x13c => Button::Menu,          // BTN_SELECT/START/MODE
         0x13d => Button::F1, 0x13e => Button::F2,                                        // BTN_THUMBL/THUMBR
+        0x220 => Button::Up, 0x221 => Button::Down, 0x222 => Button::Left, 0x223 => Button::Right, // BTN_DPAD_* (a d-pad as keys)
         115 => Button::VolUp, 114 => Button::VolDown, 116 => Button::Power,              // KEY_VOLUMEUP/DOWN, KEY_POWER
         _ => return None,
     })

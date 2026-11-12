@@ -6,7 +6,11 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# EGL is loaded at runtime (egl.rs); "1_5" for GBM displays, though a driver may offer only 1.4.
+khronos-egl = { version = "6.0.0", default-features = false, features = ["1_5", "dynamic"] }
 libc = "0.2"
+# The GPU, DRM and GBM libraries, loaded at runtime (egl.rs, kms.rs).
+libloading = "0.8"
 serde = "1"
 specular-core = { path = "../specular-core" }
 # BlueZ's D-Bus interface (bluez.rs), through its blocking API.

@@ -1,4 +1,4 @@
-//! File transfer on the Brick: runit's `webdav` service, in which dufs (a small HTTP and WebDAV
+//! File transfer: runit's `webdav` service, in which dufs (a small HTTP and WebDAV
 //! file server) serves the SD card on port 80, as WebDAV and as Crystaline OS's own browser page,
 //! with no password. The system boots with the service down, and its run script takes it back
 //! down when no card is mounted.
@@ -17,10 +17,10 @@ const START_WAIT: Duration = Duration::from_secs(5);
 /// How many of the service's last log lines a failure shows.
 const LOG_LINES: usize = 3;
 
-/// The Brick's `FileTransfer`: runit's `webdav` service.
-pub struct BrickTransfer;
+/// `FileTransfer` through runit's `webdav` service.
+pub struct WebdavTransfer;
 
-impl FileTransfer for BrickTransfer {
+impl FileTransfer for WebdavTransfer {
     /// Started once port 80 takes connections. If it doesn't, the service is stopped rather
     /// than left retrying out of sight, and the error is the service manager's status and the
     /// service's last log lines.

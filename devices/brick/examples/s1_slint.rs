@@ -17,7 +17,6 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use specular_linux::input::{Button, clock};
-use specular_brick::platform::BrickPlatform;
 
 /// The display's frame period (it runs at about 60.2 Hz).
 const PERIOD: Duration = Duration::from_micros(16_611);
@@ -106,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let vsync: Option<Box<dyn specular_core::device::Vsync>> = if args.iter().any(|a| a == "--vsync") {
         Some(Box::new(specular_linux::vsync::FbVsync::open(std::path::Path::new("/dev/fb0"))?))
     } else { None };
-    let platform = BrickPlatform::new(vsync)?;
+    let platform = specular_brick::platform::open(vsync)?;
     let m = Rc::new(RefCell::new(Measure::default()));
     // The scene exists only after the platform is handed to Slint, so the button handler finds
     // it through this slot.

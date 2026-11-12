@@ -1,4 +1,4 @@
-//! The Brick's time zone: the system's crystaline-timezone program (Crystaline OS's
+//! The time zone: the system's crystaline-timezone program (Crystaline OS's
 //! docs/power.md, "Time zone"): `get` prints the zone, `set <zone>` sets it (exit 1 for a zone
 //! it has no file for), `list` prints UTC then tzdata's `zone.tab` zones by name. It keeps the
 //! zone across restarts, and logs its own errors to the system log too.
@@ -9,10 +9,10 @@ use specular_core::timezone::TimeZone;
 
 const PROGRAM: &str = "/usr/sbin/crystaline-timezone";
 
-/// The Brick's `TimeZone`, through `/usr/sbin/crystaline-timezone`.
-pub struct BrickTimeZone;
+/// `TimeZone` through `/usr/sbin/crystaline-timezone`.
+pub struct CrystalineTimeZone;
 
-impl TimeZone for BrickTimeZone {
+impl TimeZone for CrystalineTimeZone {
     fn get(&mut self) -> Result<String, String> { run(&["get"]) }
     /// `set` exits 1 for a zone it doesn't have.
     fn set(&mut self, zone: &str) -> Result<(), String> { run(&["set", zone]).map(drop) }

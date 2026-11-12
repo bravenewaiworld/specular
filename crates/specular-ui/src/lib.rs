@@ -10,6 +10,7 @@ mod art;
 mod frames;
 mod game;
 mod keys;
+pub mod platform;
 mod sounds;
 mod timezone;
 mod watch;

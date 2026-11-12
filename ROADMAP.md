@@ -35,6 +35,8 @@ TODO:
  - Zooming into and out of a game runs at half rate on the Brick (a median of 33 ms between frames, most of them late): find why
  - A game keeps its 60.2 fps and its latency with a toast or the volume gauge animating over it: to measure on the Brick with the frame statistics (docs/brick.md, Open questions)
  - Separate volume levels for speaker and headphones, each in its own codec control (built; on the Brick, the levels set at start-up and muting checked; switching outputs needs a person, see DEVELOPMENT.md)
+ - Mainline boards (docs/mainline.md): one binary for every board of Crystaline OS's mainline family, drawing through DRM/KMS with page flips, the refresh rate measured at start-up, buttons, battery, backlight, volume, SSH, file transfer, time zone and the SD card (built; on the RGB20 Pro, Specular starts and draws, and a KMS test flips at every refresh at 59.33 Hz; left: a game's frame pacing, FN as Menu, and the Brick checked on the shared drawing loop and Crystaline OS services)
+ - Mainline boards: sleep, WiFi, Bluetooth, rumble (the RGB20 Pro's `pwm-vibrator` is a motor's own device, which `EvdevRumble` doesn't use), the CPU's minimum speed, the analog sticks, and the panel at a game's own refresh rate (Crystaline OS's stage 4)
 
 ### Core Integration and Support
 
