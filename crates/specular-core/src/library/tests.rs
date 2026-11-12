@@ -38,7 +38,7 @@ fn finds_games_by_extension_and_zip_contents() {
     touch(roms, ".Trashes/old.gba", b"");
     touch(roms, "broken.zip", b"not a zip");
     touch(roms, "README.txt", b"Games go here"); // Specular's guide (`guides`)
-    let scan = scan(roms, &builtin_systems());
+    let scan = scan(&Roms::system(roms), &builtin_systems());
     let found: Vec<(&str, &str)> = scan.games.iter().map(|g| (g.system, g.title.as_str())).collect();
     assert_eq!(found, [("gba", "Golden Sun"), ("gba", "Mother 3")]);
     // Out of the box, no core plays the SNES: its games are counted instead.
@@ -54,7 +54,7 @@ fn disc_tracks_and_playlist_discs_are_not_games() {
     touch(roms, "ps1/FF9/Final Fantasy IX (USA).m3u", b"Final Fantasy IX (USA) (Disc 1).chd\n./final fantasy ix (usa) (disc 2).chd\n");
     touch(roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 1).chd", b"");
     touch(roms, "ps1/FF9/Final Fantasy IX (USA) (Disc 2).chd", b"");
-    let games = scan(roms, &builtin_systems()).games;
+    let games = scan(&Roms::system(roms), &builtin_systems()).games;
     let paths: Vec<&Path> = games.iter().map(|g| g.path.as_path()).collect();
     assert_eq!(paths, [Path::new("ps1/FF9/Final Fantasy IX (USA).m3u"), Path::new("ps1/Vagrant Story (USA).cue")]);
 }
@@ -194,4 +194,32 @@ fn a_game_its_cores_built_in_bios_halted_is_told_which_file_to_add() {
         put one of scph5500.bin, scph5501.bin, scph5502.bin, psxonpsp660.bin, ps1_rom.bin in bios/ on the SD card, then start the game again.");
     // mGBA never says its BIOS halted a game: only the wording for a core without BIOS files.
     assert_eq!(core("gba").bios_halt_notice(), "It may need a BIOS file in bios/ on the SD card.");
+}
+
+#[test]
+fn a_games_card_joins_the_list_under_its_own_folder() {
+    let (system, second) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    touch(system.path(), "gba/Golden Sun.gba", b"");
+    touch(system.path(), "gba/Mother 3.gba", b"");
+    touch(system.path(), "@card2/gba/Not a games card.gba", b""); // a folder of that name on the system card isn't scanned
+    touch(second.path(), "gba/Mother 3.gba", b""); // on both cards: listed once, from the system card
+    touch(second.path(), "gba/Metroid Fusion.gba", b"");
+    let roms = Roms { system: system.path().into(), second: Some(second.path().into()) };
+    let paths: Vec<_> = scan(&roms, &builtin_systems()).games.into_iter().map(|g| g.path).collect();
+    assert_eq!(paths, [Path::new("gba/Golden Sun.gba"), Path::new("@card2/gba/Metroid Fusion.gba"), Path::new("gba/Mother 3.gba")]);
+    // Out: its games aren't listed, and their files can't be found.
+    let out = Roms::system(system.path());
+    assert_eq!(scan(&out, &builtin_systems()).games.len(), 2);
+    assert_eq!(out.file(Path::new("@card2/gba/Metroid Fusion.gba")), None);
+    assert_eq!(roms.file(Path::new("@card2/gba/Metroid Fusion.gba")), Some(second.path().join("gba/Metroid Fusion.gba")));
+}
+
+#[test]
+fn a_games_card_games_states_stay_on_the_system_card() {
+    let roms = Roms { system: "/sd/roms".into(), second: Some("/games/roms".into()) };
+    let game = |path: &str| Game { system: "gba", path: path.into(), title: String::new(), sort_key: String::new() };
+    let saves = Path::new("/sd/saves");
+    assert_eq!(game("gba/A.gba").state_path(&roms, saves, "state1"), Path::new("/sd/roms/gba/.states/A.state1"));
+    assert_eq!(game("@card2/gba/A.gba").state_path(&roms, saves, "state1"), Path::new("/sd/saves/@card2/gba/.states/A.state1"));
+    assert_eq!(game("@card2/gba/A.gba").save_path(saves, "srm"), Path::new("/sd/saves/@card2/gba/A.srm"));
 }

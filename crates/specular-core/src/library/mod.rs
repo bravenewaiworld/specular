@@ -263,11 +263,49 @@ pub fn builtin_systems() -> Vec<SystemDecl> {
     ]
 }
 
-/// A game on the card.
+/// The folder name the games card's games appear under in `Game::path`, as if its `roms/` were a
+/// folder of the system card's. The scan skips a real folder of this name on the system card.
+pub const SECOND_CARD: &str = "@card2";
+
+/// Where the games are: the system card's `roms/`, and the games card's (a card in a second slot
+/// that holds only games) while one is in. Everything kept about a game (saves, states, settings,
+/// pictures) stays on the system card, the games card's games under `SECOND_CARD`.
+#[derive(Clone, Debug)]
+pub struct Roms {
+    /// The system card's `roms/`.
+    pub system: PathBuf,
+    /// The games card's `roms/`; None while no games card is in, or on a device without a slot.
+    pub second: Option<PathBuf>,
+}
+
+impl Roms {
+    /// Only the system card's games.
+    pub fn system(roms: impl Into<PathBuf>) -> Self { Self { system: roms.into(), second: None } }
+
+    /// Whether a game's path is on the games card.
+    pub fn on_second(path: &Path) -> bool { path.starts_with(SECOND_CARD) }
+
+    /// The file at a game's path; None for a games-card path while no games card is in.
+    pub fn file(&self, path: &Path) -> Option<PathBuf> {
+        match path.strip_prefix(SECOND_CARD) {
+            Ok(rest) => self.second.as_ref().map(|s| s.join(rest)),
+            Err(_) => Some(self.system.join(path)),
+        }
+    }
+
+    /// The path whose folder holds a game's `.states/`: the ROM itself on the system card; for a
+    /// games-card game (nothing is written to that card), the same path under `saves`.
+    pub fn beside(&self, saves: &Path, path: &Path) -> PathBuf {
+        if Self::on_second(path) { saves.join(path) } else { self.system.join(path) }
+    }
+}
+
+/// A game on a card.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Game {
     pub system: &'static str,
-    /// Relative to `roms/`, e.g. "gba/RPG/Golden Sun (USA, Europe).gba".
+    /// Relative to `roms/`, e.g. "gba/RPG/Golden Sun (USA, Europe).gba"; the games card's games
+    /// under `SECOND_CARD` (`Roms::file` finds the file).
     pub path: PathBuf,
     /// The name shown, from the file name (tags such as "(USA, Europe)" removed).
     pub title: String,
@@ -290,10 +328,11 @@ impl Game {
         saves.join(self.path.with_extension(extension))
     }
 
-    /// Where a save state of this game goes: in the `.states` folder beside its ROM (shared by
-    /// the folder's games), with the ROM's name and the slot's extension (e.g. "state1").
-    pub fn state_path(&self, roms: &Path, extension: &str) -> PathBuf {
-        saves::in_states_folder(&roms.join(self.path.with_extension(extension)))
+    /// Where a save state of this game goes: in a `.states` folder beside its ROM (shared by the
+    /// folder's games), or under `saves/` for a games-card game (`Roms::beside`), with the ROM's
+    /// name and the slot's extension (e.g. "state1").
+    pub fn state_path(&self, roms: &Roms, saves: &Path, extension: &str) -> PathBuf {
+        saves::in_states_folder(&roms.beside(saves, &self.path.with_extension(extension)))
     }
 }
 
@@ -323,23 +362,33 @@ impl Scan {
     }
 }
 
-/// Finds every game under `roms` of `systems`, those with no core too (`Scan::unplayable`).
-/// Unreadable folders and files are skipped; the scan never fails as a whole.
-pub fn scan(roms: &Path, systems: &[SystemDecl]) -> Scan {
-    let mut files = Vec::new();
-    walk(roms, roms, 0, &mut files);
-    let parts = parts_of_other_games(roms, &files);
-    let found = files.iter()
-        .filter(|f| !parts.contains(&lower(f)))
-        .filter_map(|f| {
-            let system = system_of(&roms.join(f), systems)?;
-            let stem = f.file_stem()?.to_str()?;
-            Some(Game { system, path: f.clone(), title: display_title(stem), sort_key: sort_key(stem) })
-        });
+/// Finds every game of `systems` on both cards, those with no core too (`Scan::unplayable`). A
+/// game at the same path on both is listed once, from the system card. Unreadable folders and
+/// files are skipped; the scan never fails as a whole.
+pub fn scan(roms: &Roms, systems: &[SystemDecl]) -> Scan {
+    let system = files_of_games(&roms.system);
+    let listed: HashSet<PathBuf> = system.iter().map(|f| lower(f)).collect();
+    let second = roms.second.as_deref().map(files_of_games).unwrap_or_default().into_iter()
+        .filter(|f| !listed.contains(&lower(f)))
+        .map(|f| Path::new(SECOND_CARD).join(f));
+    let found = system.into_iter().chain(second).filter_map(|f| {
+        let system = system_of(&roms.file(&f)?, systems)?;
+        let stem = f.file_stem()?.to_str()?;
+        Some(Game { system, title: display_title(stem), sort_key: sort_key(stem), path: f })
+    });
     let (mut games, unplayable): (Vec<Game>, Vec<Game>) = found.partition(|g| systems.iter().any(|s| s.id == g.system && !s.cores.is_empty()));
     let order = |id: &str| systems.iter().position(|s| s.id == id);
     games.sort_by(|a, b| (order(a.system), &a.sort_key, &a.path).cmp(&(order(b.system), &b.sort_key, &b.path)));
     Scan { games, unplayable }
+}
+
+/// The files under `roms` that may be games (relative to it): all but those a .cue or .m3u lists.
+fn files_of_games(roms: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    walk(roms, roms, 0, &mut files);
+    let parts = parts_of_other_games(roms, &files);
+    files.retain(|f| !parts.contains(&lower(f)));
+    files
 }
 
 fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -349,7 +398,7 @@ fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         let Some(name) = name.to_str() else { continue };
         let Ok(kind) = e.file_type() else { continue };
         if kind.is_dir() {
-            if depth < MAX_DEPTH && !skip_dir(name) { walk(root, &e.path(), depth + 1, out); }
+            if depth < MAX_DEPTH && !skip_dir(name) && !(depth == 0 && name == SECOND_CARD) { walk(root, &e.path(), depth + 1, out); }
         } else if kind.is_file() && !skip_file(name)
             && let Ok(rel) = e.path().strip_prefix(root) { out.push(rel.to_path_buf()); }
     }

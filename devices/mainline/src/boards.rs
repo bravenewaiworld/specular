@@ -20,6 +20,8 @@ pub struct Board {
     pub inputs: &'static [&'static str],
     /// Whether a game may switch the panel to the mode nearest its rate (`Device::match_refresh`).
     pub game_rates: bool,
+    /// Whether it has a second slot for a games card (Crystaline OS's `mount-card games`).
+    pub games_card: bool,
     /// Its analog sticks' joystick device, by evdev name (None: no sticks).
     pub sticks: Option<&'static str>,
     /// Select and Start held together are Menu (a board without a Menu button).
@@ -58,6 +60,7 @@ pub const BOARDS: &[Board] = &[
         },
         inputs: &["gpio-keys-control", "gpio-keys-vol", "rk805 pwrkey"],
         game_rates: true,
+        games_card: true,
         sticks: Some("adc-joystick"),
         menu_chord: true,
         rumble: Some("pwm-vibrator"),

@@ -29,7 +29,7 @@ use specular_core::app::{App, BiosChange, Credit, Credits, Effect, InputTarget, 
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Hardware, Motors, Output, Rgb, Rumble, SshCmd};
 use specular_core::effects::{self, Effects, Event};
 use specular_core::rumble::RumbleLine;
-use specular_core::library::{self, Game, SystemDecl, user_cores};
+use specular_core::library::{self, Game, Roms, SystemDecl, user_cores};
 use specular_core::input::{Button, ButtonEvent};
 use specular_core::launch::{self, LaunchRecord};
 use specular_core::list;
@@ -135,12 +135,28 @@ fn font_size(path: &Path) -> Result<u64, String> {
     file.metadata().map(|m| m.len()).map_err(|e| format!("can't read it: {e}"))
 }
 
-/// Where Specular's data lives: the SD card's folders.
+/// Where Specular's data lives: the system SD card's data folder (`.0`), and the games card
+/// (`.1`) on a device with a slot for one.
 #[derive(Clone, Debug)]
-pub struct DataRoot(pub PathBuf);
+pub struct DataRoot(pub PathBuf, pub Option<GamesCard>);
+
+/// Where the OS mounts a second, games-only card (`library::Roms`) and records its state.
+#[derive(Clone, Debug)]
+pub struct GamesCard {
+    /// Its `roms/` folder, there only while the card is in.
+    pub roms: PathBuf,
+    /// The folder holding the OS's `state` file for the card (read by `games_card_problem`), which
+    /// changes whenever the card comes, goes or changes: watched, since a card mounted or
+    /// unmounted changes nothing a watch on `roms` sees.
+    pub changes: PathBuf,
+}
 
 impl DataRoot {
+    /// The system card's `roms/`.
     pub fn roms(&self) -> PathBuf { self.0.join("roms") }
+    /// Where the games are now. The games card counts as in only while its `roms/` folder exists
+    /// (the OS makes one when it mounts the card).
+    pub fn games(&self) -> Roms { Roms { system: self.roms(), second: self.1.as_ref().map(|c| c.roms.clone()).filter(|r| r.is_dir()) } }
     /// The settings files, in the folder of their current format.
     pub fn config(&self) -> PathBuf { settings::migrate::config_dir(&self.0) }
     pub fn cache(&self) -> PathBuf { self.0.join("cache") }
@@ -212,10 +228,10 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     // Before the art threads start, so neither misses box art not yet in cache/art/boxart/.
     specular_core::art::move_old_cache(&data.cache());
     // Every system Specular declares: one may get a core from the card later.
-    let art_worker = art::worker(data.roms(), data.cache(), library::builtin_systems(), vec![Box::new(art::LibretroThumbnails::new())], online,
+    let art_worker = art::worker(data.clone(), data.cache(), library::builtin_systems(), vec![Box::new(art::LibretroThumbnails::new())], online,
         |rom| on_ui(move |r| r.art_stored(rom)),
         |wanted| post(Msg::WifiNeed { need: WifiNeed::BoxArt, wanted, time: now() }));
-    let art_loader = art::loader(data.roms(), data.cache(),
+    let art_loader = art::loader(data.clone(), data.cache(),
         |rom, kind, picture| on_ui(move |r| r.art_loaded((rom, kind), picture.map(slint::Image::from_rgba8))));
     let runner = Rc::new(Runner {
         app: RefCell::new(app),
@@ -726,7 +742,11 @@ fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch
         // there as a core plays its first game, and become settings at the next look. (Only on
         // a writable card.)
         if writable && let Err(e) = std::fs::create_dir_all(&learned) { wrote_to_card(&format!("cores: can't make {}", learned.display()), &e); }
-        if let Some(w) = &watch { w.watch(&roms, &[&cores_dir, &learned]); }
+        let games_now = data.games();
+        if let Some(w) = &watch {
+            w.watch(&roms, &[&cores_dir, &learned]);
+            if let Some(card) = &data.1 { w.watch(&card.roms, &[&card.changes]); }
+        }
         let now = on_card.find(&cores_dir, &learned, &all);
         if found.as_ref() != Some(&now) {
             log_cores(&cores_dir, &now);
@@ -744,26 +764,37 @@ fn scan_thread(data: DataRoot, reading: u32, writable: bool, watch: Option<watch
             post_reading(reading, Msg::Cores { systems: systems.clone(), settings: decls.clone(), turned_away: now.turned_away.clone() });
             found = Some(now);
         }
-        let scan = library::scan(&roms, &every);
+        let scan = library::scan(&games_now, &every);
         let now_no_emulator = scan.no_emulator(&every);
         if now_no_emulator != no_emulator {
             for (system, n) in &now_no_emulator { eprintln!("library: {n} {system} games aren't listed: no core plays them"); }
             no_emulator = now_no_emulator.clone();
         }
         let games = scan.games;
-        for (from, to) in specular_core::library::saves::follow_moved_roms(&roms, &saves, &games) {
+        for (from, to) in specular_core::library::saves::follow_moved_roms(&games_now, &saves, &games) {
             eprintln!("saves: {} was renamed or moved to {}; its saves moved with it", from.display(), to.display());
         }
         // Before the games are listed, so no game can be played or have its settings shown
         // before they are loaded.
-        let orphans = load_games_layers(reading, &config, &decls, &games, &scan.unplayable, &mut loaded, &mut logged_orphans);
+        let orphans = load_games_layers(reading, &config, &decls, &games, &scan.unplayable, games_now.second.is_some(), &mut loaded, &mut logged_orphans);
         let set_aside = store::set_aside(&config);
-        post_reading(reading, Msg::LeftOut(LeftOut { no_emulator: now_no_emulator, set_aside, orphans }));
+        let games_card = data.1.as_ref().and_then(games_card_problem);
+        post_reading(reading, Msg::LeftOut(LeftOut { no_emulator: now_no_emulator, set_aside, orphans, games_card }));
         post_reading(reading, Msg::Library(games));
         // (Dropping the watch on the way out lets go of the card's folders, so a card pulled can
         // be unmounted.)
         if !watch.as_ref().is_some_and(watch::CardWatch::wait_for_change) { return; }
     }
+}
+
+/// The OS's message for a games card it failed to mount, from `GamesCard::changes`' `state` file
+/// (line 1 the state, e.g. `failed no-partition`; line 2 the message shown). None for any other
+/// state.
+fn games_card_problem(card: &GamesCard) -> Option<String> {
+    let text = std::fs::read_to_string(card.changes.join("state")).ok()?;
+    let mut lines = text.lines();
+    let failed = lines.next()?.starts_with("failed");
+    failed.then(|| lines.next().unwrap_or("The games card can't be read.").to_string())
 }
 
 /// Logs the cores found in the card's `cores/` (`dir`), and the files there turned away.
@@ -819,8 +850,9 @@ fn load_layer(config: &Path, decls: &[settings::SettingDecl], layer: &Layer) -> 
 /// Loads the settings file of each of `games` that has one and isn't `loaded` yet. Returns every file
 /// under `games/` that matches no game on the card, `games` or `unplayable` (a ROM renamed, say), as
 /// its game's path under `roms/` without the file type; logs each the first time (`logged`). Such
-/// a file is loaded if its game appears in a later scan.
-fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl], games: &[Game], unplayable: &[Game], loaded: &mut HashSet<String>, logged: &mut HashSet<String>) -> Vec<String> {
+/// a file is loaded if its game appears in a later scan. While the games card is out (not
+/// `second_in`), its games' settings files aren't reported as matching no game.
+fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl], games: &[Game], unplayable: &[Game], second_in: bool, loaded: &mut HashSet<String>, logged: &mut HashSet<String>) -> Vec<String> {
     let mut files = settings::games_with_settings(config);
     for g in unplayable { if let Layer::Game { game, .. } = g.settings_layer() { files.remove(&game); } }
     for g in games {
@@ -828,6 +860,8 @@ fn load_games_layers(reading: u32, config: &Path, decls: &[settings::SettingDecl
         let Layer::Game { game, .. } = &layer else { continue };
         if files.remove(game) && loaded.insert(game.clone()) { post_reading(reading, Msg::SettingsLoaded(layer.clone(), load_layer(config, decls, &layer))); }
     }
+    // A games card's games' settings while it is out are for games that will be back.
+    if !second_in { files.retain(|f| !Roms::on_second(Path::new(f))); }
     for f in files.iter().filter(|f| logged.insert(f.to_string())) { eprintln!("settings: games/{f}.json is for no game in the library, so it isn't loaded"); }
     files.into_iter().collect()
 }
@@ -980,7 +1014,18 @@ impl Runner {
             // The app's clock moves only with buttons and ticks; a question WiFi opens (the time
             // zone's) times its guard from it.
             Msg::Wifi(_) => self.handle(Msg::Tick(now())),
-            Msg::Library(games) => { let _ = self.art_worker.send(art::ArtCmd::Library(games.clone())); }
+            Msg::Library(games) => {
+                let _ = self.art_worker.send(art::ArtCmd::Library(games.clone()));
+                // A game from the games card that is no longer listed (usually: its card was taken
+                // out): its saves are on the system card, so it is saved and closed (most cores
+                // hold their ROM, but a disc game reads as it plays).
+                let gone = self.playing.borrow().as_ref().map(|p| p.record.1.game.clone())
+                    .filter(|rom| Roms::on_second(rom) && !games.iter().any(|g| &g.path == rom));
+                if let Some(rom) = gone {
+                    eprintln!("game: {} left the list (its games card taken out?): saving and closing it", rom.display());
+                    post(Msg::GameStopped("The games card was taken out, so the game was saved and closed.".into()));
+                }
+            }
             Msg::Battery(b) => self.tell_effects(Event::Battery(*b)),
             _ => {}
         }
@@ -1158,7 +1203,8 @@ impl Runner {
         let app = self.app.borrow();
         let extensions = app.ctx().systems.iter().find(|s| s.id == game.system).map_or(&[][..], |s| s.extensions);
         let Some(core) = app.core_of(&game) else { return post(Msg::AutosaveChecked { game, bios: None }) };
-        let (rom, bios_dir, autosave) = (self.data.roms().join(&game.path), self.data.bios(), game.state_path(&self.data.roms(), "autosave"));
+        let games = self.data.games();
+        let (rom, bios_dir, autosave) = (games.file(&game.path).unwrap_or_default(), self.data.bios(), game.state_path(&games, &self.data.saves(), "autosave"));
         std::thread::spawn(move || {
             let now = core.starts_on(&rom, extensions, &bios_dir);
             let bios = specular_runtime::state_bios(&autosave).zip(now).filter(|(m, n)| m != n).map(|(made_on, now)| BiosChange { made_on, now: now.into() });
@@ -1172,8 +1218,8 @@ impl Runner {
     /// Renames `game`'s autosave to `<name>.old-autosave` (replacing an earlier one), so it starts
     /// afresh (`Effect::LaunchAfresh`); Ok if it has none. Err: why not, for the player.
     fn set_aside_autosave(&self, game: &Game) -> Result<(), String> {
-        let roms = self.data.roms();
-        let (from, to) = (game.state_path(&roms, "autosave"), game.state_path(&roms, "old-autosave"));
+        let (games, saves) = (self.data.games(), self.data.saves());
+        let (from, to) = (game.state_path(&games, &saves, "autosave"), game.state_path(&games, &saves, "old-autosave"));
         let r = std::fs::rename(&from, &to).and_then(|()| specular_core::settings::store::sync_dir(to.parent().unwrap_or(Path::new("."))));
         match r {
             Ok(()) => { eprintln!("game: starting afresh: {} set aside as {}", from.display(), to.display()); Ok(()) }
@@ -1327,7 +1373,8 @@ impl Runner {
         self.launches.set(launch);
         let Some(core) = self.app.borrow().playing_core() else { return self.started(launch, Err(format!("There's no emulator for {} games.", system.map_or(game.system, |s| s.name)))) };
         let extensions = system.as_ref().map_or(&[][..], |s| s.extensions);
-        let (rom, bios_dir) = (self.data.roms().join(&game.path), self.data.bios());
+        let Some(rom) = self.data.games().file(&game.path) else { return self.started(launch, Err("The games card with this game isn't in.".into())) };
+        let bios_dir = self.data.bios();
         if let Err(why) = core.check_bios(&rom, extensions, &bios_dir) { return self.started(launch, Err(why)); }
         if afresh && let Err(why) = self.set_aside_autosave(game) { return self.started(launch, Err(why)); }
         let bios = core.starts_on(&rom, extensions, &bios_dir);

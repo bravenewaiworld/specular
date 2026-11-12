@@ -12,6 +12,8 @@ use slint::{Rgba8Pixel, SharedPixelBuffer};
 use specular_core::art::{self, ArtError, ArtIndex, ArtKind, ArtSource, Entry, GameDb, Identity, Method, IMAGE_SIZE};
 use specular_core::library::{Game, SystemDecl};
 
+use crate::DataRoot;
+
 /// A decoded picture, 8-bit RGBA.
 pub struct Picture { pub width: u32, pub height: u32, pub rgba: Vec<u8> }
 
@@ -122,17 +124,18 @@ const RETRY_LATER: Duration = Duration::from_secs(60);
 /// game with the user's own image (which counts as box art). It calls `need_network(true)` when it
 /// has a download waiting for the network, and `need_network(false)` once it has nothing left to do
 /// (or is paused).
-pub fn worker(roms: PathBuf, cache: PathBuf, systems: Vec<SystemDecl>, sources: Vec<Box<dyn ArtSource>>, online: bool,
+pub fn worker(data: DataRoot, cache: PathBuf, systems: Vec<SystemDecl>, sources: Vec<Box<dyn ArtSource>>, online: bool,
               stored: impl Fn(PathBuf) + Send + 'static, need_network: impl Fn(bool) + Send + 'static) -> mpsc::Sender<ArtCmd> {
     let (tx, rx) = mpsc::channel();
     let queue = Queue { online, ..Queue::default() };
-    let worker = Worker { roms, cache, systems, sources, tables: HashMap::new(), identified: Default::default(), downloaded: Default::default(), none: Default::default() };
+    let worker = Worker { data, cache, systems, sources, tables: HashMap::new(), identified: Default::default(), downloaded: Default::default(), none: Default::default() };
     std::thread::spawn(move || worker.run(rx, queue, stored, need_network));
     tx
 }
 
 struct Worker {
-    roms: PathBuf,
+    /// Where the games are (`DataRoot::games`, asked anew each time: the games card comes and goes).
+    data: DataRoot,
     cache: PathBuf,
     systems: Vec<SystemDecl>,
     sources: Vec<Box<dyn ArtSource>>,
@@ -275,11 +278,12 @@ impl Worker {
         // The kinds to download, best first: those before the first the game has a picture of.
         // (Checked before identifying, so a game with the user's own image, whose system shows
         // box art, is never identified.)
-        let has = |k| art::files(&self.roms, &self.cache, &game.path, k).iter().any(|p| p.exists());
+        let roms = self.data.games();
+        let has = |k| art::files(&roms, &self.cache, &game.path, k).iter().any(|p| p.exists());
         let wanted: Vec<ArtKind> = kind.fallbacks().iter().copied().take_while(|&k| !has(k)).filter(|k| k.thumbnails().is_some()).collect();
         if wanted.is_empty() { return Outcome::Nothing; }
         let Some(system) = self.systems.iter().find(|s| s.id == game.system).cloned() else { return Outcome::Nothing };
-        let rom = self.roms.join(&game.path);
+        let Some(rom) = roms.file(&game.path) else { return Outcome::Nothing };
         let Ok(meta) = std::fs::metadata(&rom) else { return Outcome::Nothing };
         let modified = meta.modified().map_or(0, unix_secs);
         let (cache, identified) = (&self.cache, &mut self.identified);
@@ -361,7 +365,7 @@ fn write(png: &[u8], path: &Path) -> std::io::Result<()> {
 /// are shown as, most wanted first; each new list replaces the last. For each it calls `loaded`
 /// (on its own thread) with the picture (the first of `art::pictures` there is), shrunk to
 /// `IMAGE_SIZE` (the user's own may be any size); or None if the game has none yet.
-pub fn loader(roms: PathBuf, cache: PathBuf, loaded: impl Fn(PathBuf, ArtKind, Option<SharedPixelBuffer<Rgba8Pixel>>) + Send + 'static)
+pub fn loader(data: DataRoot, cache: PathBuf, loaded: impl Fn(PathBuf, ArtKind, Option<SharedPixelBuffer<Rgba8Pixel>>) + Send + 'static)
     -> mpsc::Sender<Vec<(PathBuf, ArtKind)>> {
     let (tx, rx) = mpsc::channel::<Vec<(PathBuf, ArtKind)>>();
     std::thread::spawn(move || {
@@ -371,7 +375,7 @@ pub fn loader(roms: PathBuf, cache: PathBuf, loaded: impl Fn(PathBuf, ArtKind, O
             if let Some(w) = rx.try_iter().last() { wanted = w; }
             if wanted.is_empty() { continue; }
             let (rom, kind) = wanted.remove(0);
-            let picture = art::pictures(&roms, &cache, &rom, kind).into_iter().find_map(|path| {
+            let picture = art::pictures(&data.games(), &cache, &rom, kind).into_iter().find_map(|path| {
                 let bytes = std::fs::read(&path).ok()?;
                 match decode(&bytes) {
                     Ok(p) => Some(shrink(p, IMAGE_SIZE)),
@@ -418,7 +422,7 @@ mod tests {
         };
         let asked = Arc::new(Mutex::new(Vec::new()));
         let source = Fake { has: vec![ArtKind::TitleScreen, ArtKind::BoxArt], asked: asked.clone() };
-        let mut w = Worker { roms: roms.clone(), cache: cache.clone(), systems: vec![gba], sources: vec![Box::new(source)],
+        let mut w = Worker { data: DataRoot(dir.path().into(), None), cache: cache.clone(), systems: vec![gba], sources: vec![Box::new(source)],
             tables: HashMap::new(), identified: Default::default(), downloaded: Default::default(), none: Default::default() };
         let mut process = |g: &Game, kind, online| { asked.lock().unwrap().clear(); let o = w.process(g, kind, online); (o, asked.lock().unwrap().clone()) };
         let cached = |kind, g: &Game| art::cached_image(&cache, kind, &g.path).exists();

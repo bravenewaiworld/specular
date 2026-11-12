@@ -8,7 +8,8 @@ use specular_core::device::Device;
 use specular_linux::kms::{Kms, ModeRequest};
 use specular_mainline::boards;
 use specular_mainline::device::Mainline;
-use specular_ui::DataRoot;
+use specular_crystaline::system::{GAMES_CARD_ROMS, GAMES_CARD_STATE};
+use specular_ui::{DataRoot, GamesCard};
 use specular_ui::platform::{GlPlatform, KmsSurface};
 
 /// Everything this binary ships, with its licence (written by build.rs).
@@ -27,7 +28,8 @@ fn main() -> Result<(), specular_ui::Error> {
     let device = Mainline::new(board, &kms, card, request.clone());
     let vsync = device.open_vsync();
     let size = slint::PhysicalSize::new(kms.mode().width(), kms.mode().height());
-    specular_ui::run(Box::new(device), DataRoot(data.into()), Some(Box::new(move |on_button| {
+    let games_card = board.games_card.then(|| GamesCard { roms: GAMES_CARD_ROMS.into(), changes: GAMES_CARD_STATE.into() });
+    specular_ui::run(Box::new(device), DataRoot(data.into(), games_card), Some(Box::new(move |on_button| {
         let platform = GlPlatform::new(KmsSurface::new(kms, request)?, size, board.input(), vsync)?;
         platform.on_button(on_button);
         slint::platform::set_platform(Box::new(platform)).map_err(|e| format!("{e:?}"))?;

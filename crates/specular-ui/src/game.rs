@@ -77,11 +77,12 @@ impl Playing {
         let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
+        let (roms, saves) = (data.games(), data.saves());
         let spec = LaunchSpec {
             core: library,
-            rom: data.roms().join(&game.path),
-            save: game.save_path(&data.saves(), "srm"),
-            autosave: Some(game.state_path(&data.roms(), "autosave")),
+            rom: roms.file(&game.path).unwrap_or_default(),
+            save: game.save_path(&saves, "srm"),
+            autosave: Some(game.state_path(&roms, &saves, "autosave")),
             autosave_when: autosave,
             system_dir: data.bios(),
             options,
@@ -119,8 +120,8 @@ impl Playing {
         let match_display = Box::new(move |hz| display.match_refresh(hz));
         let hardware = r.hardware.clone();
         let set_cpu_min = Box::new(move |mhz| { let _ = hardware.send(crate::HwCmd::CpuMin(mhz)); });
-        let state = game.state_path(&data.roms(), "state1");
-        let (roms, saves, learned, played, device, sounds) = (data.roms(), data.saves(), data.learned_options(), game.clone(), r.device.clone(), r.sounds.clone());
+        let state = game.state_path(&roms, &saves, "state1");
+        let (learned, played, device, sounds) = (data.learned_options(), game.clone(), r.device.clone(), r.sounds.clone());
         std::thread::spawn(move || {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);

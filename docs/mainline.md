@@ -43,6 +43,7 @@ Vsync for games and for the menus' animations is `DrmVsync`: `DRM_IOCTL_WAIT_VBL
 | Rumble | force feedback on the board's motor device (`EvdevRumble::motor`) |
 | Sticks | the board's joystick device (`EvdevSticks`): ranges from the driver, the left stick also as the d-pad in menus |
 | Panel rate | `Device::match_refresh`: the mode nearest a game's rate (`Kms::set_mode` at the next present) |
+| Games card | the second slot (RGB20 Pro): Crystaline OS's `mount-card games` mounts it at `/mnt/GAMES`; its games join the library (library-and-box-art.md) |
 | Menu button | Select + Start together (`Input::menu_chord`), named SELECT+START in hints |
 
 ## Findings

@@ -156,10 +156,10 @@ fn pictures_are_the_kinds_then_box_art_with_the_users_first() {
     let (roms, cache, rom) = (dir.path().join("roms"), dir.path().join("cache"), Path::new("gba/Golden Sun.gba"));
     let cached = |k| cache.join("art").join(k).join("gba/Golden Sun.png");
     assert_eq!(cached_image(&cache, ArtKind::TitleScreen, rom), cached("title"));
-    assert_eq!(pictures(&roms, &cache, rom, ArtKind::BoxArt), [cached("boxart")]);
+    assert_eq!(pictures(&Roms::system(&roms), &cache, rom, ArtKind::BoxArt), [cached("boxart")]);
     std::fs::create_dir_all(roms.join("gba")).unwrap();
     std::fs::write(roms.join("gba/Golden Sun.jpg"), b"").unwrap();
-    assert_eq!(pictures(&roms, &cache, rom, ArtKind::LeftOff), [cached("left-off"), roms.join("gba/Golden Sun.jpg"), cached("boxart")]);
+    assert_eq!(pictures(&Roms::system(&roms), &cache, rom, ArtKind::LeftOff), [cached("left-off"), roms.join("gba/Golden Sun.jpg"), cached("boxart")]);
 }
 
 #[test]
@@ -294,9 +294,9 @@ fn user_images_are_png_else_jpeg() {
     let dir = tempfile::tempdir().unwrap();
     let (roms, rom) = (dir.path(), Path::new("gba/Golden Sun.gba"));
     std::fs::create_dir_all(roms.join("gba")).unwrap();
-    assert_eq!(user_image(roms, rom), None);
+    assert_eq!(user_image(&Roms::system(roms), rom), None);
     for ext in ["jpeg", "jpg", "png"] {
         std::fs::write(roms.join(rom).with_extension(ext), b"").unwrap();
-        assert_eq!(user_image(roms, rom), Some(roms.join(rom).with_extension(ext)));
+        assert_eq!(user_image(&Roms::system(roms), rom), Some(roms.join(rom).with_extension(ext)));
     }
 }

@@ -2,7 +2,10 @@
 //! hardware, sound through ALSA, and the keyboard as the gamepad (see `specular_ui::run` for the
 //! keys). Games are paced by a timer (a desktop window can't wait for the display's refresh).
 //!
-//! Usage: specular [data folder, with roms/ and config/ (default ./sdcard)]
+//! Usage: specular [data folder, with roms/ and config/ (default ./sdcard)] [games card folder]
+//! The games card folder stands for a second card holding only games (its roms/ joins the
+//! library); move its roms/ away and back to take it out and put it in, and put a `state` file
+//! there whose first line starts with "failed" (its second, the message) for one that can't be read.
 //! Cores are looked for in `cores/` next to the binary, or in $SPECULAR_CORES. The SD card's
 //! state is read from the file $SPECULAR_CARD_STATE names, if set (format:
 //! `specular_core::card::Card::parse`), else from the scenario's `"card"`
@@ -16,7 +19,7 @@ use specular_core::device::{Device, DeviceProfile, Hardware, Output, SoundOut, V
 use specular_core::input::Button;
 use specular_core::wireless::trace::Traced;
 use specular_linux::card_state::{self, StateFile};
-use specular_ui::DataRoot;
+use specular_ui::{DataRoot, GamesCard};
 
 /// The desktop, with its data folder (the stand-in for the SD card).
 struct Desktop(PathBuf);
@@ -82,5 +85,6 @@ fn main() -> Result<(), specular_ui::Error> {
     // SAFETY: before any other thread exists.
     unsafe { std::env::set_var("TZ", "UTC") };
     let data = std::env::args().nth(1).unwrap_or_else(|| "sdcard".into());
-    specular_ui::run(Box::new(Desktop(data.clone().into())), DataRoot(data.into()), None, CREDITS)
+    let games_card = std::env::args().nth(2).map(|d| GamesCard { roms: PathBuf::from(&d).join("roms"), changes: d.into() });
+    specular_ui::run(Box::new(Desktop(data.clone().into())), DataRoot(data.into(), games_card), None, CREDITS)
 }

@@ -38,6 +38,9 @@ pub struct LeftOut {
     /// Settings files under `games/` that match no game on the card, each as its game's path under
     /// `roms/` without the file type ("gba/Old Name").
     pub orphans: Vec<String>,
+    /// Crystaline OS's message (`mount-card games`) when a games card is in but couldn't be
+    /// mounted; None otherwise.
+    pub games_card: Option<String>,
 }
 
 pub(super) fn register(screens: &mut std::collections::HashMap<ScreenId, Box<dyn Screen>>) {
@@ -53,6 +56,7 @@ pub(super) fn problems(ctx: &Ctx) -> Vec<Problem> {
         all.extend(ctx.left_out.set_aside.iter().map(|(bad, why)| set_aside(bad, why)));
         all.extend(ctx.settings.ignored().iter().map(|(layer, key, why)| ignored(layer, key, why)));
         all.extend(ctx.left_out.orphans.iter().map(|game| orphan(game)));
+        all.extend(ctx.left_out.games_card.as_deref().map(games_card));
         all.extend(ctx.settings_unsaved.as_deref().map(unsaved));
     }
     all.extend(ctx.fonts_turned_away.iter().map(font_turned_away));
@@ -121,9 +125,17 @@ fn ignored(layer: &Layer, key: &str, why: &str) -> Problem {
 }
 
 fn orphan(game: &str) -> Problem {
+    let at = match game.strip_prefix(&format!("{}/", crate::library::SECOND_CARD)) {
+        Some(rest) => format!("roms/{rest} on the games card"),
+        None => format!("roms/{game}"),
+    };
     problem(format!("{} matches no game", in_config(&Path::new("games").join(format!("{game}.json")))),
-            format!("There is no game at roms/{game} (of any file type), so its settings aren't used."),
+            format!("There is no game at {at} (of any file type), so its settings aren't used."),
             "If the game was renamed or moved, rename or move this file to match; otherwise delete it.")
+}
+
+fn games_card(why: &str) -> Problem {
+    problem("The games card's games aren't listed", why.to_string(), "Games on the SD card itself are listed as usual.")
 }
 
 fn unsaved(why: &str) -> Problem {

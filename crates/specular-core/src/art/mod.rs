@@ -13,6 +13,7 @@ mod disc;
 mod index;
 mod kind;
 
+use crate::library::Roms;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -136,11 +137,11 @@ fn crc32(f: &mut File, len: u64, dump_header: u64) -> io::Result<u32> {
     Ok(hasher.finalize())
 }
 
-/// The user's own picture for the game at `rom` (under `roms/`), if there is one: an image next
-/// to the ROM with the same name, `.png`, else `.jpg`, else `.jpeg`. Only lower-case extensions
-/// are tried, which on FAT cards (case-insensitive) finds any case.
-pub fn user_image(roms: &Path, rom: &Path) -> Option<PathBuf> {
-    let rom = roms.join(rom);
+/// The user's own picture for the game at `rom` (a `Game::path`), if there is one: an image next
+/// to the ROM with the same name, `.png`, else `.jpg`, else `.jpeg`; None while its card is out.
+/// Only lower-case extensions are tried, which on FAT cards (case-insensitive) finds any case.
+pub fn user_image(roms: &Roms, rom: &Path) -> Option<PathBuf> {
+    let rom = roms.file(rom)?;
     ["png", "jpg", "jpeg"].into_iter().map(|ext| rom.with_extension(ext)).find(|p| p.is_file())
 }
 

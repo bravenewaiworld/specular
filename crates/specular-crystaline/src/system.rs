@@ -27,6 +27,12 @@ fn parse_board_env(text: &str, name: &str) -> Option<String> {
         .map(|v| v.split(" #").next().unwrap_or(v).trim().trim_matches('\'').to_string())
 }
 
+/// The games card's `roms/` (a card in a second slot, holding only games), there while it is
+/// mounted (`mount-card games`).
+pub const GAMES_CARD_ROMS: &str = "/mnt/GAMES/roms";
+/// The folder of the games card's state file, which changes whenever the card does.
+pub const GAMES_CARD_STATE: &str = "/run/card-games";
+
 /// Runs `program` with `args`; fails unless it exits with success.
 pub fn run(program: &str, args: &[&str]) -> io::Result<()> {
     let status = std::process::Command::new(program).args(args).status()?;

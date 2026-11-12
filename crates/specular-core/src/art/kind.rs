@@ -1,6 +1,7 @@
 //! The kinds of picture a game can be shown with (the "Art" setting, per system), and where each
 //! is kept: `cache/art/<kind id>/` mirrors `roms/`.
 
+use crate::library::Roms;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -63,14 +64,14 @@ pub fn cached_image(cache: &Path, kind: ArtKind, rom: &Path) -> PathBuf { cache.
 
 /// The files the game's picture of `kind` may be in, best first: for box art, the user's own
 /// image (only if there is one), then the cached one (whether or not it exists).
-pub fn files(roms: &Path, cache: &Path, rom: &Path, kind: ArtKind) -> Vec<PathBuf> {
+pub fn files(roms: &Roms, cache: &Path, rom: &Path, kind: ArtKind) -> Vec<PathBuf> {
     let user = if kind == ArtKind::BoxArt { user_image(roms, rom) } else { None };
     user.into_iter().chain([cached_image(cache, kind, rom)]).collect()
 }
 
 /// The files a game shown as `kind` takes its picture from, best first: `files` of each of
 /// `ArtKind::fallbacks`.
-pub fn pictures(roms: &Path, cache: &Path, rom: &Path, kind: ArtKind) -> Vec<PathBuf> {
+pub fn pictures(roms: &Roms, cache: &Path, rom: &Path, kind: ArtKind) -> Vec<PathBuf> {
     kind.fallbacks().iter().flat_map(|&k| files(roms, cache, rom, k)).collect()
 }
 
