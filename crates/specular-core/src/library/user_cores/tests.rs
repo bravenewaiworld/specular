@@ -118,7 +118,7 @@ fn a_user_core_serves_its_systems_after_their_own_core_and_one_without_becomes_p
     let systems = playable(builtin_systems(), &found.cores);
     let cores: Vec<(&str, Vec<&str>)> = systems.iter().map(|s| (s.id, s.cores.iter().map(|c| c.id()).collect())).collect();
     assert_eq!(cores, [("gb", vec!["mgba", "gambatte"]), ("gbc", vec!["mgba", "gambatte"]), ("gba", vec!["mgba"]), ("nes", vec!["nestopia"]),
-                       ("snes", vec!["snes9x"]), ("ps1", vec!["swanstation"])]); // no core for the Mega Drive
+                       ("snes", vec!["snes9x"]), ("ps1", vec!["swanstation"]), ("gc", vec!["tesseract"])]); // no core for the Mega Drive
 }
 
 #[test]

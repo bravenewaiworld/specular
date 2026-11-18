@@ -377,7 +377,9 @@ pub fn games_with_settings(config: &Path) -> BTreeSet<String> {
 pub fn declarations(systems: &[SystemDecl]) -> Vec<SettingDecl> {
     let cores = crate::library::cores(systems);
     let mut decls = builtin::settings();
-    builtin::describe_cores(&mut decls, &cores);
+    // (Native cores have no autosave and no frames for the CPU minimum to follow.)
+    let libretro: Vec<_> = cores.iter().copied().filter(|c| !c.native).collect();
+    builtin::describe_cores(&mut decls, &libretro);
     decls.extend(systems.iter().filter_map(core_choice));
     for d in cores.into_iter().flat_map(|c| core_options::decls(c)) {
         if !decls.iter().any(|k| k.key == d.key) { decls.push(d.clone()); }

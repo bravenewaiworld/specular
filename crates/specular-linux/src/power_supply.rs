@@ -15,12 +15,15 @@ fn read(dir: &Path, name: &str) -> Option<String> {
 impl PowerSupply {
     /// Finds the supplies under `root` (normally /sys/class/power_supply): the first of type
     /// "Battery", and every external one ("USB", "Mains") for whether the device is plugged in.
+    /// Supplies of a connected device (`scope` "Device", e.g. a Bluetooth pad's battery) aren't
+    /// the device's own.
     pub fn find(root: &Path) -> Self {
         let mut s = Self { battery: None, mains: Vec::new() };
         let Ok(entries) = std::fs::read_dir(root) else { return s };
         let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
         dirs.sort();
         for d in dirs {
+            if read(&d, "scope").as_deref() == Some("Device") { continue; }
             match read(&d, "type").as_deref() {
                 Some("Battery") if s.battery.is_none() => s.battery = Some(d),
                 Some("USB" | "Mains") => s.mains.push(d),
@@ -56,6 +59,9 @@ mod tests {
             std::fs::create_dir_all(root.join(dir)).unwrap();
             for (f, v) in files { std::fs::write(root.join(dir).join(f), v).unwrap(); }
         }
+        // A Bluetooth pad's battery, sorting first: not the device's.
+        std::fs::create_dir_all(root.join("a-pad")).unwrap();
+        for (f, v) in [("type", "Battery"), ("scope", "Device"), ("capacity", "5")] { std::fs::write(root.join("a-pad").join(f), v).unwrap(); }
         let b = PowerSupply::find(root).battery().unwrap();
         assert_eq!(b, Battery { percent: Some(78), charging: true, plugged: true });
         assert!(PowerSupply::find(&root.join("nothing")).battery().is_err());

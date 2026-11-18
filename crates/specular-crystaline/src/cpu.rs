@@ -1,7 +1,6 @@
-//! The CPU's speed: Crystaline OS's crystaline-power, which sets the speed range of the one clock
-//! all the CPU cores share (on the Brick and the RK3566 boards), and a minimum within it (its
-//! `cpu-min`, refused until a profile has been applied since start-up). Nothing it sets outlasts a
-//! restart.
+//! The CPU's speed: Crystaline OS's crystaline-power, which sets the CPU's speed range, and a
+//! minimum within it (its `cpu-min`, refused until a profile has been applied since start-up).
+//! Nothing it sets outlasts a restart.
 
 use specular_core::device::Cpu;
 

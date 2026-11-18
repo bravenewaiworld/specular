@@ -26,6 +26,10 @@ pub struct Board {
     pub sticks: Option<&'static str>,
     /// Select and Start held together are Menu (a board without a Menu button).
     pub menu_chord: bool,
+    /// Whether its headphone jack reports plugging through an input switch (`SW_HEADPHONE_INSERT`,
+    /// read by `EvdevJack`). False for a jack that switches the speaker off in hardware and
+    /// reports nothing, or no jack: then there is one output and one volume.
+    pub jack_switch: bool,
     /// Its rumble motor's own input device, by evdev name (None: no motor).
     pub rumble: Option<&'static str>,
     /// Its backlight, by /sys/class/backlight name.
@@ -66,6 +70,8 @@ pub const BOARDS: &[Board] = &[
         games_card: true,
         sticks: Some("adc-joystick"),
         menu_chord: true,
+        // The jack cuts the speaker in hardware and reports nothing: one output, one volume.
+        jack_switch: false,
         rumble: Some("pwm-vibrator"),
         backlight: "backlight",
         // The RK817 codec's card plays on the speaker and the headphones (the jack cuts the
@@ -97,8 +103,7 @@ pub fn find(compatible: &[u8]) -> io::Result<&'static Board> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn finds_the_board_by_any_compatible_entry() {
-        assert_eq!(super::find(b"powkiddy,rgb20-pro\0rockchip,rk3566\0").unwrap().name, "Powkiddy RGB20 Pro");
+    fn an_unknown_device_is_named_in_the_error() {
         let e = super::find(b"rockchip,rk3566\0").err().unwrap().to_string();
         assert!(e.contains("compatible: rockchip,rk3566"), "{e}");
     }

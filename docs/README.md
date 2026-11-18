@@ -7,6 +7,7 @@ Why Specular works the way it does: decisions, designs and research, one doc per
 | [architecture.md](architecture.md) | Stack, crates, threads, the device boundary, extension points, credits, the launch record, memory and licence |
 | [look-and-motion.md](look-and-motion.md) | The Light Bar look, theme, motion, prefabs, sounds, lights and rumble effects, fonts |
 | [runtime.md](runtime.md) | The libretro runtime: frame pacing, sound, saves and states, discs, rumble, cores (Specular's and those added to the card) |
+| [native-cores.md](native-cores.md) | Native cores: programs of their own (Tesseract, for GameCube), the protocol, handing the screen over |
 | [library-and-box-art.md](library-and-box-art.md) | Scanning, systems, search, game identification, box art and other pictures |
 | [guides-and-problems.md](guides-and-problems.md) | The guide files on the SD card, and the list of what needs attention |
 | [sd-card.md](sd-card.md) | Following the SD card: its states, reading it afresh, what is never written, a game whose card goes |

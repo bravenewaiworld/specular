@@ -144,8 +144,7 @@ impl Device for Mainline {
             installer: Some(Box::new(specular_crystaline::install::CrystalineInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),
-            // The jack cuts the speaker in hardware and reports nothing: one output, one volume.
-            headphones: None,
+            headphones: self.board.jack_switch.then(|| Box::new(specular_linux::jack::EvdevJack) as Box<dyn specular_core::device::HeadphoneJack>),
             hdmi: self.hdmi.1.lock().unwrap().take().map(|r| Box::new(HdmiMoves(r)) as Box<dyn Hdmi>),
             rumble: self.board.rumble.map(|m| Box::new(EvdevRumble::motor(m)) as Box<dyn specular_core::device::Rumble>),
             file_transfer: Some(Box::new(specular_crystaline::transfer::WebdavTransfer)),
@@ -249,19 +248,18 @@ impl Lights for NoLights {
 }
 
 /// The volume through the board's mixer control, set with amixer. Specular's levels are 2 dB
-/// apart, the top one at 0 dB; 0 is the control's lowest. The speaker's level is the one used
-/// (there is no headphone detection), Bluetooth has its own (through bluez-alsa), and a TV its
-/// own, in software (`hdmi`, which its `SoftVolume` reads).
+/// apart, the top one at 0 dB; 0 is the control's lowest. The speaker and the headphones share
+/// the one control, Bluetooth has its own (through bluez-alsa), and a TV its own, in software
+/// (`hdmi`, which its `SoftVolume` reads).
 struct Volume { mixer: &'static Mixer, hdmi: Arc<AtomicU8> }
 
 impl Audio for Volume {
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()> {
         match output {
-            Output::Speaker => {
+            Output::Speaker | Output::Headphones => {
                 let m = self.mixer;
                 system::run("/usr/bin/amixer", &["-q", "-c", m.card, "cset", &format!("name={}", m.control), &step(m, level).to_string()])
             }
-            Output::Headphones => Ok(()),
             Output::Bluetooth(address) => specular_linux::sound::set_bluetooth_volume(address, level),
             Output::Hdmi => { self.hdmi.store(level, std::sync::atomic::Ordering::Relaxed); Ok(()) }
         }
@@ -278,7 +276,8 @@ fn step(m: &Mixer, level: u8) -> u32 {
 mod tests {
     #[test]
     fn levels_are_2_db_apart_with_the_top_at_0_db() {
-        let m = &crate::boards::BOARDS[0].volume;
+        // A control of 255 steps from -95 to 0 dB.
+        let m = &crate::boards::Mixer { card: "card", control: "Master Playback Volume", max: 255, db_per_step: 95.0 / 255.0 };
         let steps: Vec<u32> = [0, 1, 10, 19, 20].into_iter().map(|l| super::step(m, l)).collect();
         assert_eq!(steps, [0, 153, 201, 250, 255]);
     }
