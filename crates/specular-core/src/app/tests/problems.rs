@@ -130,3 +130,12 @@ fn set_aside_files_are_looked_for_again_as_home_or_the_problems_are_shown_while_
     a.handle(Msg::SetAside(vec![("games/gba/X.json.bad".into(), "it can't be read".into())]));
     assert!(a.problems().is_empty());
 }
+
+#[test]
+fn a_games_card_that_cant_be_read_and_its_orphans_say_so() {
+    let mut a = app();
+    a.handle(Msg::LeftOut(LeftOut { orphans: vec!["@card2/gba/Old".into()], games_card: Some("The games card has no FAT32 or exFAT partition.".into()), ..Default::default() }));
+    let problems = a.problems();
+    assert!(problems.iter().any(|p| p.what == "The games card's games aren't listed" && p.why.contains("no FAT32")));
+    assert!(problems.iter().any(|p| p.why.contains("roms/gba/Old on the games card")));
+}

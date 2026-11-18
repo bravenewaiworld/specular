@@ -1,6 +1,7 @@
 //! Rumble through Linux force feedback: an `FF_RUMBLE` effect on the first gamepad that offers it
 //! (on handhelds, a program often presents the buttons as a virtual gamepad and passes its rumble
-//! on to the motor, as the Brick's padbridge does). One effect is uploaded, updated as the strength
+//! on to the motor, as the Brick's padbridge does), or on a motor's own device named by the port
+//! (the RGB20 Pro's `pwm-vibrator`, where no program sits between). One effect is uploaded, updated as the strength
 //! changes, and played until stopped. The kernel erases a file's effects when it closes, which
 //! stops them, so the motor stops if Specular ends in any way.
 
@@ -43,8 +44,10 @@ const _: () = assert!(std::mem::size_of::<FfEffect>() == 48);
 /// `EVIOCSFF`: `_IOW('E', 0x80, struct ff_effect)`.
 const EVIOCSFF: libc::c_ulong = 0x4000_4580 | (std::mem::size_of::<FfEffect>() as libc::c_ulong) << 16;
 
-/// The rumble of the first gamepad offering it.
+/// The rumble of the first gamepad offering it, or of the device named.
 pub struct EvdevRumble {
+    /// The device's name, if a motor's own device is used instead of a gamepad.
+    motor: Option<&'static str>,
     sysfs: PathBuf,
     dev: PathBuf,
     pad: Option<Pad>,
@@ -61,10 +64,14 @@ struct Pad { name: String, file: File, effect: i16, playing: bool }
 impl EvdevRumble {
     /// Looks for the gamepad now, logging what it finds; one missing (or gone) is looked for again
     /// when something next rumbles.
-    pub fn new() -> Self { Self::at(Path::new(SYSFS), Path::new(DEV)) }
+    pub fn new() -> Self { Self::at(None, Path::new(SYSFS), Path::new(DEV)) }
 
-    fn at(sysfs: &Path, dev: &Path) -> Self {
-        let mut r = Self { sysfs: sysfs.into(), dev: dev.into(), pad: None, next_look: Instant::now(), missing: false };
+    /// The input device of this name (as /sys/class/input/*/device/name has it), a motor's own,
+    /// rather than a gamepad.
+    pub fn motor(name: &'static str) -> Self { Self::at(Some(name), Path::new(SYSFS), Path::new(DEV)) }
+
+    fn at(motor: Option<&'static str>, sysfs: &Path, dev: &Path) -> Self {
+        let mut r = Self { motor, sysfs: sysfs.into(), dev: dev.into(), pad: None, next_look: Instant::now(), missing: false };
         r.look();
         r
     }
@@ -73,12 +80,15 @@ impl EvdevRumble {
     fn look(&mut self) {
         if Instant::now() < self.next_look { return; }
         self.next_look = Instant::now() + LOOK_AGAIN;
-        let pad = open_first(&self.sysfs, &self.dev, File::options().write(true), "rumble", |d| d.has("ff", FF_RUMBLE) && d.has("key", BTN_GAMEPAD));
+        let pad = open_first(&self.sysfs, &self.dev, File::options().write(true), "rumble", |d| d.has("ff", FF_RUMBLE) && self.motor.map_or(d.has("key", BTN_GAMEPAD), |m| d.name == m));
         if let Some((name, file)) = pad {
             self.pad = Some(Pad { name, file, effect: -1, playing: false });
             self.missing = false;
         } else if !std::mem::replace(&mut self.missing, true) {
-            eprintln!("rumble: no gamepad offers it (FF_RUMBLE) yet; looking again when something next rumbles");
+            match self.motor {
+                Some(m) => eprintln!("rumble: no {m} device offers it (FF_RUMBLE) yet; looking again when something next rumbles"),
+                None => eprintln!("rumble: no gamepad offers it (FF_RUMBLE) yet; looking again when something next rumbles"),
+            }
         }
     }
 }
@@ -146,10 +156,10 @@ mod tests {
             std::fs::write(caps.join("key"), key).unwrap();
             std::fs::write(dev.path().join(node), "").unwrap();
         }
-        let r = EvdevRumble::at(sysfs.path(), dev.path());
+        let r = EvdevRumble::at(None, sysfs.path(), dev.path());
         assert_eq!(r.pad.as_ref().map(|p| p.name.as_str()), Some("TRIMUI Player1"));
         // Without one, stopping is fine and rumbling an error.
-        let mut none = EvdevRumble::at(&sysfs.path().join("none"), dev.path());
+        let mut none = EvdevRumble::at(None, &sysfs.path().join("none"), dev.path());
         assert!(none.set(Motors::STILL).is_ok());
         assert!(none.set(Motors { strong: 1, weak: 0 }).is_err());
     }

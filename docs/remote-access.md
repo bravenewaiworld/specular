@@ -43,7 +43,7 @@ pub enum SshCmd { Status, Switch(bool), ImportKeys }
 pub struct SshStatus { pub switchable: bool, pub on: bool, pub keys: u32 }
 ```
 
-On the Brick (`devices/brick/src/transfer.rs`, `ssh.rs`):
+On Crystaline OS (`crates/specular-crystaline/src/transfer.rs`, `ssh.rs`):
 
 | | |
 |---|---|

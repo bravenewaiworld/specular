@@ -99,6 +99,7 @@
 - **Keep Wi-Fi on** (a developer setting): stops WiFi Auto from turning WiFi off, so SSH over WiFi stays up.
 - **Watchdog.** A core stuck on one frame for 6 s is reported, and Specular exits so the service manager restarts it.
 - **Launch record.** `cache/launch.json` exists while a game runs. If Specular finds it at start-up (after a crash, the watchdog or a power cut), it logs it in full (`game: the last game didn't end; its launch record: …`), says which core stopped with which game, and removes it.
+- **Page flips on a mainline board.** With `SPECULAR_FLIP_STATS=1` in Specular's environment, a `kms:` line every 10 s while frames are shown says how many flips there were, how many came more than 1.5 refreshes after the one before, and the longest gap. The start-up `kms:` lines list the card, every connector and mode, the mode and CRTC chosen and the measured refresh rate. `cat /sys/kernel/debug/dri/0/state` shows the planes and CRTC as the kernel has them, and `modetest -M rockchip` (Specular stopped) the modes.
 - **Seeing the Brick's screen.** `/dev/fb0` holds two 1024×768 BGRA buffers, one above the other; `/sys/class/graphics/fb0/pan` gives the one on show (`0,0` or `0,768`). `cat /dev/fb0` over SSH, then cut out that buffer (stride 4096 bytes) on the PC.
 
 ## Reproducing and testing
@@ -146,6 +147,7 @@ These are cargo examples. Build them for a device and run them there through Cry
   - Slint on the device's GPU.
   - Frames handed from another thread.
   - Display timing.
+- **The display stack on a mainline board** (`devices/mainline/examples/kms_spike`). With the frontend stopped (`sv stop frontend`: it needs to be the DRM master), opens the panel through KMS, GBM and EGL, flips a changing colour for 300 frames and prints the measured refresh rate and how the flips went. On the RGB20 Pro: 59.33 Hz measured, 298 flips, none late (docs/mainline.md).
 - **Input injection** (`inject`). Writes button presses into a device's input, to drive a running Specular remotely. On the Brick, padbridge re-reports its own state after each write, so a d-pad hold ends early and a switch written there (the FN switch, `SW_TABLET_MODE`) lasts only until padbridge's next report. For holds, use `SPECULAR_SCRIPT` (Reproducing and testing).
 - **WiFi and Bluetooth consoles** (`specular-linux`'s `wifi` and `bluetooth`). An interactive WiFi console, and a scripted Bluetooth session with a test tone. Both talk to the real services on a device.
 

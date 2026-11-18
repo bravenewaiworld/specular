@@ -39,9 +39,9 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use glow::HasContext;
-use specular_brick::egl::{EglDisplay, SharedContext};
+use specular_linux::egl::{EglDisplay, Native, SharedContext};
 use specular_linux::input::{Input, clock};
-use specular_brick::platform::{BrickPlatform, SCREEN};
+use specular_brick::platform::SCREEN;
 
 const W: i32 = 256;
 const H: i32 = 224;
@@ -233,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 /// Direct: our own loop. Each new frame is drawn with one textured quad and presented.
 fn run_direct(o: &Options, stats: Arc<Stats>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let egl = EglDisplay::open()?;
+    let egl = EglDisplay::open(Native::Default)?;
     let gl = unsafe { glow::Context::from_loader_function_cstr(|n| egl.proc_address(n)) };
     let ctx = egl.shared_context()?;
     let (free_tx, free_rx) = mpsc::channel();
@@ -320,8 +320,8 @@ thread_local! {
 
 /// Composite: the frame is an image in the Slint scene; every new frame redraws the scene.
 fn run_composite(o: &Options, stats: Arc<Stats>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let platform = BrickPlatform::new(None)?;
-    let egl = platform.egl();
+    let platform = specular_brick::platform::open(None)?;
+    let egl = platform.surface();
     let gl = Rc::new(unsafe { glow::Context::from_loader_function_cstr(|n| egl.proc_address(n)) });
     let ctx = egl.shared_context()?;
     let (free_tx, free_rx) = mpsc::channel();

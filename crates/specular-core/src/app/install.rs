@@ -221,7 +221,7 @@ pub(super) fn settings_rows(ctx: &Ctx) -> Vec<Row> {
                 storage.push(Row::note("install:what", "Copies the system onto the device, so it starts from its internal storage. Games and saves stay on the SD card."));
             }
             if !o.backups.is_empty() && !matches!(o.restore, Some(Err(_))) { storage.push(action("install:restore", "Restore internal storage")); }
-            if let (None, Some(why)) = (&o.install, &o.why_not) {
+            if o.internal != Internal::None && let (None, Some(why)) = (&o.install, &o.why_not) {
                 // Only the installed system reports `restore` (see `confirmed_task`).
                 let plain = if o.restore.is_some() { "The system is installed: the device starts from its internal storage." }
                             else { "Installing to internal storage isn't possible on this device." };
@@ -291,7 +291,7 @@ impl Screen for InstallScreen {
             Internal::ThisSystem => "Erases everything on the internal storage, including the system installed on it.",
             Internal::UnfinishedInstall => "Erases everything on the internal storage, including what the unfinished install left.",
             Internal::UnfinishedRestore => "Erases everything on the internal storage, including what the unfinished restore left.",
-            Internal::Unknown => "Erases everything on the internal storage.",
+            Internal::Unknown | Internal::None => "Erases everything on the internal storage.",
         };
         let mut rows = vec![Row::note("note:erase", erase), Row::note("note:card", "Games and saves stay on the SD card.")];
         match offer(ctx).and_then(|o| o.install.as_ref()) {

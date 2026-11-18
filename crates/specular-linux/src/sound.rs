@@ -1,9 +1,12 @@
 //! Sound through ALSA's standard library, libasound.so.2, loaded each time an output opens (a
 //! game's or the interface sounds'), like the GPU libraries, so Specular doesn't link to it and
 //! runs without it (silently). Bluetooth headphones and speakers play through bluez-alsa's ALSA plugin.
+//! An output without a mixer control (HDMI) gets its volume in software (`SoftVolume`).
 
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use specular_core::device::SoundOut;
 use specular_core::settings::builtin::VOLUME_MAX;
@@ -180,4 +183,66 @@ pub fn set_bluetooth_volume(address: &BtAddress, level: u8) -> io::Result<()> {
         .args(["-q", "-D", &format!("bluealsa:DEV={}", address.0), "cset", "name=A2DP Playback Volume", &format!("{percent}%")])
         .status()?;
     if status.success() { Ok(()) } else { Err(io::Error::other(format!("amixer (bluealsa {}): {status}", address.0))) }
+}
+
+/// An output with its volume set in software, for one without a mixer control (HDMI): its
+/// samples are scaled by `level` (`gain`), read at each write, so a change is heard within the
+/// queue's length.
+pub struct SoftVolume<S> { out: S, level: Arc<AtomicU8>, buf: Vec<[i16; 2]> }
+
+impl<S: SoundOut> SoftVolume<S> {
+    /// `out`, at the volume `level` holds (0 to `VOLUME_MAX`).
+    pub fn new(out: S, level: Arc<AtomicU8>) -> Self { Self { out, level, buf: Vec::new() } }
+}
+
+/// The factor a volume level scales samples by: levels 2 dB apart, as on devices with a mixer,
+/// the top one unchanged; 0 is silent.
+pub fn gain(level: u8) -> f32 {
+    let below_top = (VOLUME_MAX - level as i64).max(0) as f32;
+    if level == 0 { 0.0 } else { 10f32.powf(-2.0 * below_top / 20.0) }
+}
+
+impl<S: SoundOut> SoundOut for SoftVolume<S> {
+    fn rate(&self) -> u32 { self.out.rate() }
+
+    fn write(&mut self, frames: &[[i16; 2]]) -> io::Result<usize> {
+        let g = gain(self.level.load(Ordering::Relaxed));
+        if g == 1.0 { return self.out.write(frames); }
+        self.buf.clear();
+        self.buf.extend(frames.iter().map(|f| f.map(|s| (s as f32 * g) as i16)));
+        self.out.write(&self.buf)
+    }
+
+    fn queued(&mut self) -> usize { self.out.queued() }
+
+    fn capacity(&self) -> usize { self.out.capacity() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An output that keeps what is written.
+    struct Kept(Vec<[i16; 2]>);
+
+    impl SoundOut for Kept {
+        fn rate(&self) -> u32 { RATE }
+        fn write(&mut self, frames: &[[i16; 2]]) -> io::Result<usize> { self.0.extend_from_slice(frames); Ok(frames.len()) }
+        fn queued(&mut self) -> usize { 0 }
+        fn capacity(&self) -> usize { 1024 }
+    }
+
+    #[test]
+    fn soft_volume_steps_2_db_and_follows_the_level() {
+        assert_eq!((gain(20), gain(0)), (1.0, 0.0));
+        assert!((gain(10) - 0.1).abs() < 1e-6); // 20 dB down
+        let level = Arc::new(AtomicU8::new(20));
+        let mut out = SoftVolume::new(Kept(Vec::new()), level.clone());
+        out.write(&[[1000, -1000]]).unwrap();
+        level.store(10, Ordering::Relaxed);
+        out.write(&[[1000, -1000]]).unwrap();
+        level.store(0, Ordering::Relaxed);
+        out.write(&[[1000, -1000]]).unwrap();
+        assert_eq!(out.out.0, [[1000, -1000], [100, -100], [0, 0]]);
+    }
 }

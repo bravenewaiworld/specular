@@ -20,6 +20,8 @@ pub const VOLUME_MAX: i64 = 20;
 pub const HEADPHONE_VOLUME: &str = "sound.headphone_volume";
 /// The volume of Bluetooth headphones and speakers (all of them share it), 0 to `VOLUME_MAX`.
 pub const BLUETOOTH_VOLUME: &str = "sound.bluetooth_volume";
+/// The volume of a TV the picture is on (HDMI), 0 to `VOLUME_MAX`.
+pub const HDMI_VOLUME: &str = "sound.hdmi_volume";
 /// Whether the interface makes its sounds (`app::Sound`).
 pub const INTERFACE_SOUNDS: &str = "sound.interface_sounds";
 /// WiFi: "on", "off", or "auto" (on only while something needs it: see `app::WifiNeed`). Shown
@@ -107,6 +109,11 @@ pub fn settings() -> Vec<SettingDecl> {
         SettingDecl { key: BLUETOOTH_VOLUME, section: "Sound", label: "Bluetooth volume",
             help: "The volume of Bluetooth headphones and speakers (all of them share it), from 0 (silent) to 20. The volume keys change it while sound goes to one.",
             kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(10),
+            visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
+        // Full by default: the TV has its own volume.
+        SettingDecl { key: HDMI_VOLUME, section: "Sound", label: "TV volume",
+            help: "The volume of a TV connected by HDMI, from 0 (silent) to 20. The volume keys change it while the picture is on the TV.",
+            kind: SettingKind::Int { min: 0, max: VOLUME_MAX, step: 1, unit: "" }, default: json!(VOLUME_MAX),
             visibility: Visibility::User, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: INTERFACE_SOUNDS, section: "Sound", label: "Interface sounds",
             help: "Plays a quiet tick as the selection moves, and short tones as screens open and close and switches turn on and off. They are never played over a game, even while it is paused.",

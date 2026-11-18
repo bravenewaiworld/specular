@@ -3,7 +3,6 @@
 //! Usage: specular [data folder (default /mnt/SDCARD)]
 
 use specular_brick::device::Brick;
-use specular_brick::platform::BrickPlatform;
 use specular_core::device::Device;
 use specular_ui::DataRoot;
 
@@ -12,8 +11,8 @@ const CREDITS: &[specular_core::app::Credit] = include!(concat!(env!("OUT_DIR"),
 
 fn main() -> Result<(), specular_ui::Error> {
     let data = std::env::args().nth(1).unwrap_or_else(|| "/mnt/SDCARD".into());
-    specular_ui::run(Box::new(Brick), DataRoot(data.into()), Some(Box::new(|on_button| {
-        let platform = BrickPlatform::new(Brick.open_vsync())?;
+    specular_ui::run(Box::new(Brick), DataRoot(data.into(), None), Some(Box::new(|on_button| {
+        let platform = specular_brick::platform::open(Brick.open_vsync())?;
         platform.on_button(on_button);
         slint::platform::set_platform(Box::new(platform)).map_err(|e| format!("{e:?}"))?;
         Ok(())

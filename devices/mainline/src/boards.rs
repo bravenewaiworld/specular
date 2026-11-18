@@ -1,0 +1,81 @@
+//! What differs between mainline boards, as data: one entry per board, found at start-up by the
+//! device tree's `compatible`. Everything else is found through the standard interfaces.
+
+use std::io;
+
+use specular_core::input::Button;
+use specular_linux::input::Input;
+
+/// One board.
+pub struct Board {
+    /// Matched against the entries of /proc/device-tree/compatible.
+    pub compatible: &'static str,
+    /// As the UI names the device.
+    pub name: &'static str,
+    /// The panel's pixels per inch (UI sizes scale by ppi / 400).
+    pub ppi: u32,
+    /// The buttons it has (hints show only these).
+    pub buttons: &'static [Button],
+    /// The input devices its buttons come from, by evdev name.
+    pub inputs: &'static [&'static str],
+    /// Whether a game may switch the panel to the mode nearest its rate (`Device::match_refresh`).
+    pub game_rates: bool,
+    /// Whether it has a second slot for a games card (Crystaline OS's `mount-card games`).
+    pub games_card: bool,
+    /// Its analog sticks' joystick device, by evdev name (None: no sticks).
+    pub sticks: Option<&'static str>,
+    /// Select and Start held together are Menu (a board without a Menu button).
+    pub menu_chord: bool,
+    /// Its rumble motor's own input device, by evdev name (None: no motor).
+    pub rumble: Option<&'static str>,
+    /// Its backlight, by /sys/class/backlight name.
+    pub backlight: &'static str,
+    /// The ALSA device sound plays on.
+    pub sound: &'static str,
+    /// The ALSA device that plays on a TV through HDMI (None: no HDMI sound). It has no mixer
+    /// control: its volume is set in software.
+    pub hdmi_sound: Option<&'static str>,
+    /// The volume control.
+    pub volume: Mixer,
+}
+
+/// An ALSA mixer control that sets the volume of every output: values `0..=max`, where `max` is
+/// 0 dB and each step `db_per_step` below it.
+pub struct Mixer {
+    /// The ALSA card's name, and the control's.
+    pub card: &'static str,
+    pub control: &'static str,
+    pub max: u32,
+    pub db_per_step: f64,
+}
+
+/// Every board this binary runs on: none yet, so `find` fails on every device. Each board's entry is
+/// added along with its port.
+pub const BOARDS: &[Board] = &[];
+
+impl Board {
+    /// Its buttons' input. Mainline boards' buttons come from kernel drivers, which send the face
+    /// buttons' codes by position.
+    pub fn input(&self) -> Input {
+        let mut input = Input::new(self.inputs).positional();
+        if let Some(s) = self.sticks { input = input.menu_stick(s); }
+        if self.menu_chord { input.menu_chord() } else { input }
+    }
+}
+
+/// The board in `compatible` (the device tree's list, NUL-separated), or an error naming it.
+pub fn find(compatible: &[u8]) -> io::Result<&'static Board> {
+    let names: Vec<&str> = compatible.split(|&b| b == 0).filter_map(|n| std::str::from_utf8(n).ok()).filter(|n| !n.is_empty()).collect();
+    BOARDS.iter().find(|b| names.contains(&b.compatible)).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound,
+        format!("no board entry for this device (compatible: {}); boards: {}", names.join(", "),
+            BOARDS.iter().map(|b| b.compatible).collect::<Vec<_>>().join(", "))))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn an_unknown_device_is_named_in_the_error() {
+        let e = super::find(b"rockchip,rk3566\0").err().unwrap().to_string();
+        assert!(e.contains("compatible: rockchip,rk3566"), "{e}");
+    }
+}

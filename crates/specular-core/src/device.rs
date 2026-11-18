@@ -24,6 +24,9 @@ pub struct DeviceProfile {
     pub refresh_hz: f64,
     /// The buttons the device has; hints never show others.
     pub buttons: &'static [Button],
+    /// What hints call a button where the device differs from the usual name (e.g. Menu as
+    /// "SELECT+START" on a device without a Menu button).
+    pub labels: &'static [(Button, &'static str)],
     /// The device's RGB LEDs in chain order, with the accent each one shows (empty for none).
     pub leds: &'static [Accent],
 }
@@ -121,21 +124,33 @@ pub enum Output {
     Headphones,
     /// A connected Bluetooth audio device.
     Bluetooth(BtAddress),
+    /// The TV the picture is on (HDMI): its sound goes with it.
+    Hdmi,
 }
 
 impl Output {
     /// The setting holding this output's volume (all Bluetooth devices share one).
     pub fn volume_setting(&self) -> &'static str {
         use crate::settings::builtin;
-        match self { Output::Speaker => builtin::VOLUME, Output::Headphones => builtin::HEADPHONE_VOLUME, Output::Bluetooth(_) => builtin::BLUETOOTH_VOLUME }
+        match self {
+            Output::Speaker => builtin::VOLUME,
+            Output::Headphones => builtin::HEADPHONE_VOLUME,
+            Output::Bluetooth(_) => builtin::BLUETOOTH_VOLUME,
+            Output::Hdmi => builtin::HDMI_VOLUME,
+        }
     }
 
     /// Whether a game's open `SoundOut` can carry on unchanged when sound moves between these
     /// outputs. True for the speaker and the jack: the device's sound driver switches one stream
     /// between them.
     pub fn same_stream(&self, other: &Output) -> bool {
-        self == other || !matches!(self, Output::Bluetooth(_)) && !matches!(other, Output::Bluetooth(_))
+        let built_in = |o: &Output| matches!(o, Output::Speaker | Output::Headphones);
+        self == other || built_in(self) && built_in(other)
     }
+
+    /// Whether it is there only some of the time (Bluetooth, HDMI): its level is set only while
+    /// sound goes to it (`Audio::set_volume`).
+    pub fn comes_and_goes(&self) -> bool { matches!(self, Output::Bluetooth(_) | Output::Hdmi) }
 }
 
 /// Sound output.
@@ -145,7 +160,7 @@ pub trait Audio: Send {
     /// unmuted, whichever output plays. A port must keep both and play the level of the output in
     /// use (on the Brick the kernel's codec driver does), so setting the other one isn't heard; a
     /// port without a jack (`Hardware::headphones` is None) may ignore the headphones'. A
-    /// Bluetooth output's is set only while sound goes to it.
+    /// Bluetooth or HDMI output's is set only while sound goes to it.
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()>;
 }
 
@@ -156,6 +171,15 @@ pub trait HeadphoneJack: Send {
     /// Follows the jack until it can't any more, blocking (the UI crate gives it a thread of its
     /// own): calls `plugged` with the state at the start, if it can be read, then on each change.
     fn watch(self: Box<Self>, plugged: Box<dyn FnMut(bool) + Send>);
+}
+
+/// Whether the picture is on a TV (HDMI) instead of the device's own screen. The device moves the
+/// picture by itself; this tells the app, which moves the sound there too (`Output::Hdmi`) and
+/// pauses a game (its frames are paced by another display now).
+pub trait Hdmi: Send {
+    /// Follows the picture until it can't any more, blocking (the UI crate gives it a thread of its
+    /// own): calls `on_tv` with true as the picture moves to a TV, and false as it comes back.
+    fn watch(self: Box<Self>, on_tv: Box<dyn FnMut(bool) + Send>);
 }
 
 /// Where a game's or the interface's sound goes: a queue of 16-bit stereo frames, played at a
@@ -190,6 +214,13 @@ pub trait Rumble: Send {
     /// a while (on Linux a program presenting the gamepad may have to answer first), so the UI
     /// crate calls it on a thread of its own (see `rumble::RumbleLine`).
     fn set(&mut self, motors: Motors) -> io::Result<()>;
+}
+
+/// A device's analog sticks, read by a game's thread once a frame.
+pub trait Sticks: Send {
+    /// Both sticks' positions now, -32768 to 32767 per axis (left X, left Y, right X, right Y;
+    /// right and down positive), centred within a dead zone. Never blocks.
+    fn read(&mut self) -> [i16; 4];
 }
 
 /// The display's refresh, for pacing a game's frames, and the UI's where the device's Slint
@@ -271,6 +302,8 @@ pub struct Hardware {
     pub time_zone: Option<Box<dyn crate::timezone::TimeZone>>,
     /// None on devices that can't tell when headphones are plugged in.
     pub headphones: Option<Box<dyn HeadphoneJack>>,
+    /// None on devices without HDMI.
+    pub hdmi: Option<Box<dyn Hdmi>>,
     /// None on devices without a rumble motor.
     pub rumble: Option<Box<dyn Rumble>>,
     /// None on devices without file transfer.
@@ -302,6 +335,12 @@ pub trait Device {
     /// timer at their own frame rate. Each call opens a separate one: give each waiting thread its
     /// own.
     fn open_vsync(&self) -> Option<Box<dyn Vsync>>;
+    /// The analog sticks, for a game (None: the device has none). Each call opens a separate one.
+    fn open_sticks(&self) -> Option<Box<dyn Sticks>> { None }
+    /// Asks the display to refresh as close to `hz` as it can (a game's own rate; None: back to its
+    /// usual rate, as a game ends), and returns the rate it will refresh at. The change may take
+    /// effect at the next frame shown. A display with one rate keeps it.
+    fn match_refresh(&self, hz: Option<f64>) -> f64 { let _ = hz; self.profile().refresh_hz }
 }
 
 /// Simulated hardware, for the desktop build: it prints what it is asked to do (rumble too), its
@@ -408,6 +447,7 @@ pub mod simulated {
             installer: Some(Box::new(crate::install::Simulated)),
             time_zone: Some(Box::new(crate::timezone::Simulated::new())),
             headphones: None,
+            hdmi: None,
             rumble: Some(Box::new(Sim(t))),
             file_transfer: Some(Box::new(SimTransfer)),
             ssh: Some(Box::new(SimSsh(ssh.into()))),

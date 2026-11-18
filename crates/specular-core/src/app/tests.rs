@@ -44,7 +44,7 @@ fn tap(app: &mut App, button: Button, t: u64) -> Vec<Effect> {
 
 /// A press (`pressed`) or release of `button` at time `t` (ms).
 fn event(app: &mut App, button: Button, pressed: bool, t: u64) -> Vec<Effect> {
-    app.handle(Msg::Button(ButtonEvent { button, pressed, time: Duration::from_millis(t) }))
+    app.handle(Msg::Button(ButtonEvent { button, pressed, time: Duration::from_millis(t), stick: false }))
 }
 
 fn focused(app: &App) -> String { app.view().rows[app.focus()].label.clone() }
@@ -133,12 +133,12 @@ fn a_game_that_stops_for_good_is_quit_and_says_why() {
 #[test]
 fn holding_down_repeats_and_stops_at_the_end() {
     let mut a = app();
-    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: true, time: Duration::ZERO }));
+    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: true, time: Duration::ZERO, stick: false }));
     assert_eq!(focused(&a), "Super Nintendo");
     for t in (0..2000).step_by(10) { a.handle(Msg::Tick(Duration::from_millis(t))); }
     assert_eq!(focused(&a), "Settings"); // held: no wrap back to the top
     assert!(a.next_deadline().is_some());
-    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: false, time: Duration::from_millis(2000) }));
+    a.handle(Msg::Button(ButtonEvent { button: Button::Down, pressed: false, time: Duration::from_millis(2000), stick: false }));
     assert_eq!(a.next_deadline(), None);
     tap(&mut a, Button::Down, 2100); // a fresh press wraps
     assert_eq!(focused(&a), "Game Boy Advance");
@@ -467,7 +467,7 @@ fn volume_keys_work_in_games_and_stop_at_the_ends() {
 #[test]
 fn the_mute_switch_mutes_without_touching_the_volume() {
     let mut a = app();
-    let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t) }));
+    let switch = |a: &mut App, on: bool, t: u64| a.handle(Msg::Button(ButtonEvent { button: Button::Mute, pressed: on, time: Duration::from_millis(t), stick: false }));
     assert_eq!(switch(&mut a, true, 0), vec![Effect::Mute(true), Effect::ShowVolume { level: 12, muted: true, output: Output::Speaker }]);
     assert_eq!(switch(&mut a, true, 10), vec![]); // already on
     // The volume keys still work, and say the sound is muted.
@@ -490,6 +490,32 @@ fn headphones_in_the_jack_have_their_own_volume_also_mid_game() {
     // Unplugged: back to the speaker, at its own level.
     assert_eq!(a.handle(Msg::Headphones(false)), vec![Effect::SoundTo(Output::Speaker)]);
     assert!(tap(&mut a, Button::VolDown, 30).contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Speaker }));
+}
+
+#[test]
+fn a_tv_takes_the_sound_and_pauses_the_game_as_the_picture_moves() {
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    tap(&mut a, Button::A, 0);
+    tap(&mut a, Button::A, 10); // playing
+    a.handle(Msg::Headphones(true));
+    // The TV comes before the jack; the game is paused, with its menu open.
+    let e = a.handle(Msg::Hdmi(true));
+    assert_eq!(e.first(), Some(&Effect::PauseGame(true)));
+    assert_eq!(e.last(), Some(&Effect::SoundTo(Output::Hdmi)));
+    assert_eq!(a.input_target(), InputTarget::App);
+    assert_eq!(a.handle(Msg::Hdmi(true)), vec![]); // no change
+    let e = tap(&mut a, Button::VolDown, 20);
+    assert!(e.contains(&Effect::Apply { key: builtin::HDMI_VOLUME, value: json!(19) }), "{e:?}");
+    // Resumed, then unplugged: paused again, the sound back in the headphones.
+    assert!(tap(&mut a, Button::B, 30).contains(&Effect::PauseGame(false)));
+    let e = a.handle(Msg::Hdmi(false));
+    assert_eq!(e.first(), Some(&Effect::PauseGame(true)));
+    assert_eq!(e.last(), Some(&Effect::SoundTo(Output::Headphones)));
+    // Out of a game, only the sound moves.
+    let mut a = app();
+    a.handle(Msg::SettingsLoaded(Layer::Global, Default::default()));
+    assert_eq!(a.handle(Msg::Hdmi(true)), vec![Effect::SoundTo(Output::Hdmi)]);
 }
 
 #[test]
@@ -965,6 +991,19 @@ mod wireless {
         a.handle(Msg::Bluetooth(BtEvent::Devices(vec![])));
         assert!(tap(&mut a, Button::VolUp, 0).contains(&Effect::ShowVolume { level: 11, muted: false, output: Output::Headphones }));
     }
+
+    #[test]
+    fn a_bluetooth_headset_comes_before_a_tv() {
+        let mut a = radio_app();
+        let mut on = serde_json::Map::new();
+        on.insert(builtin::BLUETOOTH.into(), json!(true));
+        a.handle(Msg::SettingsLoaded(Layer::Global, on));
+        let address = BtAddress("00:11:22:33:44:55".into());
+        let headset = BtDevice { address: address.clone(), name: "Buds".into(), kind: BtKind::Headphones, paired: true, connected: true, audio: true };
+        a.handle(Msg::Bluetooth(BtEvent::Devices(vec![headset])));
+        assert_eq!(radio_effects(&a.handle(Msg::Hdmi(true))), Vec::<&Effect>::new());
+        assert_eq!(radio_effects(&a.handle(Msg::Bluetooth(BtEvent::Devices(vec![])))), [&Effect::SoundTo(Output::Hdmi)]);
+    }
 }
 
 mod install {
@@ -1026,6 +1065,15 @@ mod install {
         assert!(!a.view().rows.iter().any(|r| r.label == "Updates" || r.label == "Install to internal storage"));
         let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
         assert!(labels.ends_with(&["Internal storage".into(), "Installing to internal storage isn't possible on this device.".into()]), "{labels:?}");
+    }
+
+    #[test]
+    fn settings_leave_out_internal_storage_on_a_device_without_it() {
+        let mut a = install_app();
+        settings(&mut a, Offer { install: None, why_not: Some("this device has no internal storage".into()), internal: Internal::None, backups: vec![], ..offer() });
+        let labels: Vec<String> = a.view().rows.iter().map(|r| r.label.clone()).collect();
+        assert!(labels.contains(&"Updates".into()) && labels.contains(&"Install update".into()), "{labels:?}");
+        assert!(!labels.contains(&"Internal storage".into()), "{labels:?}");
     }
 
     #[test]

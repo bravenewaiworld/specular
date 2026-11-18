@@ -1,4 +1,4 @@
-//! SSH on the Brick: Crystaline OS's crystaline-ssh. On release systems the user switches SSH and
+//! SSH: Crystaline OS's crystaline-ssh. On release systems the user switches SSH and
 //! imports its login keys; on development systems it is always on with the key built into the
 //! system, and crystaline-ssh refuses to change it.
 
@@ -8,16 +8,16 @@ use crate::command::run;
 
 const PROGRAM: &str = "/usr/sbin/crystaline-ssh";
 
-/// The Brick's `Ssh`: crystaline-ssh.
-pub struct BrickSsh;
+/// `Ssh` through crystaline-ssh.
+pub struct CrystalineSsh;
 
-impl Ssh for BrickSsh {
+impl Ssh for CrystalineSsh {
     fn send(&self, cmd: SshCmd) -> Result<SshStatus, String> {
         let arg = match cmd { SshCmd::Status => None, SshCmd::Switch(true) => Some("on"), SshCmd::Switch(false) => Some("off"), SshCmd::ImportKeys => Some("import") };
         // crystaline-ssh's error messages start with "crystaline-ssh: ", which the user needn't see.
-        let brick_ssh = |args: &[&str]| run("ssh", PROGRAM, args).map_err(|e| e.strip_prefix("crystaline-ssh: ").unwrap_or(&e).to_string());
-        if let Some(arg) = arg { brick_ssh(&[arg])?; }
-        status(&brick_ssh(&[])?)
+        let crystaline_ssh = |args: &[&str]| run("ssh", PROGRAM, args).map_err(|e| e.strip_prefix("crystaline-ssh: ").unwrap_or(&e).to_string());
+        if let Some(arg) = arg { crystaline_ssh(&[arg])?; }
+        status(&crystaline_ssh(&[])?)
     }
 }
 
@@ -38,7 +38,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_brick_sshs_state() {
+    fn reads_crystaline_sshs_state() {
         assert_eq!(status("image=release\nssh=off\nkeys=0\n"), Ok(SshStatus { switchable: true, on: false, keys: 0 }));
         assert_eq!(status("image=release\nssh=on\nkeys=3"), Ok(SshStatus { switchable: true, on: true, keys: 3 }));
         assert_eq!(status("image=development\nssh=on\n"), Ok(SshStatus { switchable: false, on: true, keys: 0 }));

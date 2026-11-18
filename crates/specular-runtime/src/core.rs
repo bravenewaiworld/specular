@@ -49,6 +49,7 @@ const EXPERIMENTAL: c_uint = 0x10000;
 const PRIVATE: c_uint = 0x20000;
 
 pub const DEVICE_JOYPAD: c_uint = 1;
+pub const DEVICE_ANALOG: c_uint = 5;
 /// Asks for every joypad button at once, as a bit mask.
 pub const DEVICE_ID_JOYPAD_MASK: c_uint = 256;
 pub const MEMORY_SAVE_RAM: c_uint = 0;

@@ -6,7 +6,7 @@
 import { Theme } from "theme.slint";
 
 // `bluetooth` is the bare Bluetooth mark (a device of no known kind); `none` draws nothing.
-export enum IconKind { none, wifi, bluetooth, headphones, speaker, controller, keyboard, phone, computer, battery }
+export enum IconKind { none, wifi, bluetooth, headphones, speaker, controller, keyboard, phone, computer, tv, battery }
 
 export struct IconData {
     kind: IconKind,
@@ -183,6 +183,10 @@ export component Icon inherits Rectangle {
     if root.data.kind == IconKind.computer : Drawing {
         width: root.size; paint: root.device-color;
         lines: "M 5 5.5 H 19 V 15.5 H 5 Z M 2.5 19 H 21.5";
+    }
+    if root.data.kind == IconKind.tv : Drawing {
+        width: root.size; paint: root.device-color;
+        lines: "M 2.5 4.5 H 21.5 V 16.5 H 2.5 Z M 12 16.5 V 20 M 8 20 H 16";
     }
     // Always present, hidden for other kinds (not an `if`): the width above reads its size.
     battery := BatteryGauge {

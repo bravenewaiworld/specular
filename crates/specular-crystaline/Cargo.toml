@@ -1,0 +1,11 @@
+[package]
+name = "specular-crystaline"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde_json = "1"
+specular-core = { path = "../specular-core" }
+specular-linux = { path = "../specular-linux" }

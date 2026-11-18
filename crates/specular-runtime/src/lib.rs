@@ -8,7 +8,9 @@
 //! next refresh; starting late means buttons are read late, so a press reaches the screen
 //! sooner), then runs the core once and hands the frame to the UI. Without a vsync, or when the
 //! display's rate is far from the game's, the core is run by a timer at its own frame rate.
-//! Paced by the vsync, the frames also choose the CPU's minimum speed (see `cpu`).
+//! Paced by the vsync, the frames also choose the CPU's minimum speed (see `cpu`). The display's
+//! rate is asked for as the game starts, and again each time it resumes: the picture may have
+//! moved to another display meanwhile (a TV plugged in or out).
 
 mod core;
 mod cpu;
@@ -30,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use specular_core::app::Discs;
 use specular_core::cpu::CpuMin;
-use specular_core::device::{SoundOut, Vsync};
+use specular_core::device::{SoundOut, Sticks, Vsync};
 use specular_core::input::Button;
 use specular_core::launch::LaunchRecord;
 use specular_core::library::Autosave;
@@ -97,8 +99,9 @@ pub struct Outputs {
     /// Where the sound plays at first (`Session::set_sound` changes it).
     pub sound: Option<Box<dyn SoundOut>>,
     pub vsync: Option<Box<dyn Vsync>>,
-    /// The display's refresh rate (Hz).
-    pub display_hz: f64,
+    /// Asks the display for a refresh rate near the game's (Hz; None as the game ends) and returns
+    /// the rate it will have (`Device::match_refresh`). Asked again each time the game resumes.
+    pub match_display: Box<dyn Fn(Option<f64>) -> f64 + Send>,
     pub frames: Arc<FrameSlot>,
     /// Called on the game's thread after each new frame is put in `frames`.
     pub on_frame: Box<dyn Fn() + Send>,
@@ -126,6 +129,8 @@ pub struct Outputs {
     /// default): as the game starts, as `cpu_min` changes it, on pausing and resuming, and as the
     /// game ends. It mustn't block: the device sets it on another thread.
     pub set_cpu_min: Box<dyn Fn(Option<u32>) + Send>,
+    /// The device's analog sticks, read once a frame (None: the core gets none).
+    pub sticks: Option<Box<dyn Sticks>>,
 }
 
 /// About the running game.
@@ -202,12 +207,13 @@ impl FrameSlot {
 }
 
 /// The libretro joypad button for one of the device's buttons. L2/R2 are the shoulder buttons'
-/// second row; Menu, the volume keys and Power never reach the game.
+/// second row; F1/F2 are L3/R3 (the Brick's F1/F2 and the RGB20 Pro's stick clicks report the same
+/// codes); Menu, the volume keys and Power never reach the game.
 pub fn joypad_bit(b: Button) -> Option<u16> {
     use Button::*;
     let id = match b {
         B => 0, Y => 1, Select => 2, Start => 3, Up => 4, Down => 5, Left => 6, Right => 7,
-        A => 8, X => 9, L1 => 10, R1 => 11, L2 => 12, R2 => 13,
+        A => 8, X => 9, L1 => 10, R1 => 11, L2 => 12, R2 => 13, F1 => 14, F2 => 15, // F1, F2: the stick clicks (L3, R3)
         _ => return None,
     };
     Some(1 << id)
@@ -395,6 +401,8 @@ const UI_TIME: Duration = Duration::from_millis(6);
 /// Times the game's frames (see the module doc).
 struct Pacer {
     vsync: Option<Box<dyn Vsync>>,
+    /// Whether the vsync paces the frames (else a timer, at `period`).
+    by_display: bool,
     period: Duration,
     next: Instant,
     delay: Duration,
@@ -405,14 +413,29 @@ struct Pacer {
 }
 
 impl Pacer {
+    /// Paces by `vsync` (if any) at `hz` until `pace` says otherwise.
     fn new(vsync: Option<Box<dyn Vsync>>, hz: f64) -> Self {
-        Self { vsync, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new(), last_vsync: None }
+        let by_display = vsync.is_some();
+        Self { vsync, by_display, period: Duration::from_secs_f64(1.0 / hz), next: Instant::now(), delay: Duration::ZERO, runs: Vec::new(), last_vsync: None }
     }
 
-    /// Waits until the core should run. With a vsync, returns how long after the previous wait
+    /// Paces a game at `fps` on a display refreshing at `display_hz`: by the vsync if there is one
+    /// and the display is within `MAX_SPEED_CHANGE` of `fps`, else by a timer at `fps`. Returns the
+    /// speed-up to give the sound (`display_hz / fps`, or 1 on a timer). Forgets the frame delay
+    /// learned so far: the display may be another one.
+    fn pace(&mut self, fps: f64, display_hz: f64) -> f64 {
+        let speed = display_hz / fps;
+        self.by_display = self.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
+        self.period = Duration::from_secs_f64(1.0 / if self.by_display { display_hz } else { fps });
+        (self.delay, self.last_vsync) = (Duration::ZERO, None);
+        self.runs.clear();
+        if self.by_display { speed } else { 1.0 }
+    }
+
+    /// Waits until the core should run. Paced by the vsync, returns how long after the previous wait
     /// this one's vsync came (None for the first, after a pause, and on a timer).
     fn wait(&mut self) -> Option<Duration> {
-        if let Some(v) = self.vsync.as_mut() {
+        if self.by_display && let Some(v) = self.vsync.as_mut() {
             match v.wait() {
                 Ok(()) => {
                     let now = Instant::now();
@@ -433,10 +456,10 @@ impl Pacer {
     /// The game paused or resumed: the next wait's gap would count the pause.
     fn paused(&mut self) { self.last_vsync = None; }
 
-    /// With a vsync, records how long a run took, and every 60 runs sets the frame delay to what
+    /// Paced by the vsync, records how long a run took, and every 60 runs sets the frame delay to what
     /// the slowest runs (the 95th percentile) leave.
     fn ran(&mut self, took: Duration) {
-        if self.vsync.is_none() { return; }
+        if !self.by_display || self.vsync.is_none() { return; }
         self.runs.push(took);
         if self.runs.len() < 60 { return; }
         self.runs.sort();
@@ -455,21 +478,28 @@ fn game_thread(spec: LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Ar
     if let Some((path, _)) = &spec.record { report(LaunchRecord::remove(path), path); }
 }
 
+/// Asks for the display's usual rate when dropped.
+struct Restore(Box<dyn Fn(Option<f64>) -> f64 + Send>);
+
+impl Drop for Restore {
+    fn drop(&mut self) { (self.0)(None); }
+}
+
 /// Loads and runs the game until it is quit (or fails to load); its core is unloaded on return.
 fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mutex<Runs>>, cmds: mpsc::Receiver<Cmd>,
         started: mpsc::Sender<Result<GameInfo, StartError>>) {
-    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble, out.write_failed) {
+    let mut game = match Game::load(spec, buttons, out.frames.clone(), out.on_frame, out.rumble, out.sticks, out.write_failed) {
         Ok(g) => g,
         Err(e) => { let _ = started.send(Err(e)); return; }
     };
     let av = game.av;
     let fps = av.timing.fps.max(1.0);
-    // A display within MAX_SPEED_CHANGE of the game's rate paces it (so it runs at the display's
-    // rate, its sound sped up or slowed to match); otherwise a timer does, at the game's own.
-    let speed = out.display_hz / fps;
-    let by_display = out.vsync.is_some() && (speed - 1.0).abs() <= sound::MAX_SPEED_CHANGE;
-    let mut pacer = Pacer::new(if by_display { out.vsync } else { None }, if by_display { out.display_hz } else { fps });
-    let mut sound = sound::Sound::new(out.sound, av.timing.sample_rate, if by_display { speed } else { 1.0 });
+    // Asks the display for the game's rate, as it starts and at each resume; dropped, for the
+    // display's usual rate again, however the game ends.
+    let display = Restore(out.match_display);
+    let mut pacer = Pacer::new(out.vsync, fps);
+    let speed = pacer.pace(fps, (display.0)(Some(fps)));
+    let mut sound = sound::Sound::new(out.sound, av.timing.sample_rate, speed);
     let g = av.geometry;
     let options = frontend::with(|f| f.options.declared.clone()).unwrap_or_default();
     let _ = started.send(Ok(GameInfo { width: g.base_width, height: g.base_height, aspect: g.aspect_ratio, fps, options }));
@@ -494,6 +524,7 @@ fn play(spec: &LaunchSpec, out: Outputs, buttons: Arc<AtomicU16>, runs: Arc<Mute
                     frontend::with(|f| f.pause_rumble(p));
                     pacer.paused();
                     cpu.pause(p);
+                    if !p { sound.set_speed(pacer.pace(fps, (display.0)(Some(fps)))); }
                 }
                 // Its compressing may still slow the frames after the game resumes.
                 Cmd::Autosave => { game.write_autosave(); cpu.state_made(); }
@@ -580,7 +611,7 @@ struct Game {
 
 impl Game {
     fn load(spec: &LaunchSpec, buttons: Arc<AtomicU16>, frames: Arc<FrameSlot>, on_frame: Box<dyn Fn() + Send>, rumble: Option<RumbleLine>,
-            write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, StartError> {
+            sticks: Option<Box<dyn Sticks>>, write_failed: Box<dyn Fn(&io::Error) + Send>) -> Result<Self, StartError> {
         let core = Core::load(&spec.core).map_err(StartError::Core)?;
         // SAFETY: null pointers and false are valid values for every field.
         let mut info: core::SystemInfo = unsafe { std::mem::zeroed() };
@@ -598,7 +629,7 @@ impl Game {
         };
         let rom_data = rom.as_ref().map_or(&[][..], |m| m.bytes());
         frontend::install(Some(Frontend {
-            buttons, frames, on_frame, options: options::Options::new(spec.options.clone()), system_dir, save_dir, rumble, ..Frontend::default()
+            buttons, frames, on_frame, options: options::Options::new(spec.options.clone()), system_dir, save_dir, rumble, sticks, ..Frontend::default()
         }));
         frontend::connect(&core);
         unsafe { (core.init)() };

@@ -145,11 +145,12 @@ impl Playing {
         let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
         let library = core.user.map_or_else(|| cores_dir().join(format!("{}.so", core.library)), |u| u.path.clone());
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &library, game));
+        let (roms, saves) = (data.games(), data.saves());
         let spec = LaunchSpec {
             core: library,
-            rom: data.roms().join(&game.path),
-            save: game.save_path(&data.saves(), "srm"),
-            autosave: Some(game.state_path(&data.roms(), "autosave")),
+            rom: roms.file(&game.path).unwrap_or_default(),
+            save: game.save_path(&saves, "srm"),
+            autosave: Some(game.state_path(&roms, &saves, "autosave")),
             autosave_when: autosave,
             system_dir: data.bios(),
             options,
@@ -182,18 +183,21 @@ impl Playing {
                 crate::post(Msg::GameStopped(why));
             });
         });
-        let (vsync, display_hz) = (r.device.open_vsync(), r.profile.refresh_hz);
+        let vsync = r.device.open_vsync();
+        let display = r.device.clone();
+        let match_display = Box::new(move |hz| display.match_refresh(hz));
         let hardware = r.hardware.clone();
         let set_cpu_min = Box::new(move |mhz| { let _ = hardware.send(crate::HwCmd::CpuMin(mhz)); });
-        let state = game.state_path(&data.roms(), "state1");
-        let (roms, saves, learned, played, device, sounds) = (data.roms(), data.saves(), data.learned_options(), game.clone(), r.device.clone(), r.sounds.clone());
+        let state = game.state_path(&roms, &saves, "state1");
+        let (learned, played, device, sounds) = (data.learned_options(), game.clone(), r.device.clone(), r.sounds.clone());
         std::thread::spawn(move || {
             sounds.close();
             let sound = open_sound(device.as_ref(), &output);
             let sound_failed = sound.is_none();
             // The runtime logs failed save writes; this only tells the app of one refused as read-only.
             let write_failed = Box::new(crate::tell_if_read_only);
-            let out = Outputs { sound, vsync, display_hz, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt, write_failed, cpu_min, set_cpu_min };
+            let sticks = device.open_sticks();
+            let out = Outputs { sound, vsync, match_display, sticks, frames: frames.clone(), on_frame, rumble, on_save, on_bios_halt, write_failed, cpu_min, set_cpu_min };
             // So its saves can follow it if it is renamed (see `library::saves`).
             if let Err(e) = specular_core::library::saves::note_played(&roms, &saves, &played) { eprintln!("saves: {e}"); }
             if let Err(e) = specular_core::library::saves::move_old_state(&roms, &saves, &played) { eprintln!("saves: {e}"); }
@@ -268,18 +272,19 @@ impl Playing {
     /// paused: `pause(false)` hands it the screen.
     fn start_native(r: &Runner, game: &Game, core: &'static CoreDecl, started: impl FnOnce(Result<Self, String>) + Send + 'static) {
         let data = &r.data;
-        let package = data.roms().join(&game.path);
+        let games = data.games();
+        let package = games.file(&game.path).unwrap_or_default();
         let saves = data.saves().join(game.path.with_extension(""));
         let cache = data.cache().join("native").join(&game.path);
         let record = (launch::path(&data.cache()), LaunchRecord::new(core.name, &cache.join("program"), game));
         let system = r.app.borrow().ctx().systems.iter().find(|s| s.id == game.system).map_or(game.system, |s| s.name);
         let frames = Arc::new(FrameSlot::default());
-        let state = game.state_path(&data.roms(), "state1");
+        let state = game.state_path(&games, &data.saves(), "state1");
         let stuck = Arc::new(AtomicBool::new(false));
         let top = r.cpu_steps.get().and_then(|s| s.last().copied());
         let hardware = r.hardware.clone();
         let output = r.output.borrow().clone();
-        let (roms, all_saves, played, device, sounds) = (data.roms(), data.saves(), game.clone(), r.device.clone(), r.sounds.clone());
+        let (all_saves, played, device, sounds) = (data.saves(), game.clone(), r.device.clone(), r.sounds.clone());
         // The app is told the game stopped, unless another ROM is playing by the time the UI
         // thread has this.
         let (rom, stuck_seen, stop_hardware) = (game.path.clone(), stuck.clone(), hardware.clone());
@@ -332,7 +337,7 @@ impl Playing {
             }));
             // After the start: the first time, this reads the whole package (a disc image, ~1.5 GB:
             // about 20 s from the Brick's card), which held the launch up when it came first.
-            if let Err(e) = specular_core::library::saves::note_played(&roms, &all_saves, &played) { eprintln!("saves: {e}"); }
+            if let Err(e) = specular_core::library::saves::note_played(&games, &all_saves, &played) { eprintln!("saves: {e}"); }
         });
     }
 }
