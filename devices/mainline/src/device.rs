@@ -248,19 +248,18 @@ impl Lights for NoLights {
 }
 
 /// The volume through the board's mixer control, set with amixer. Specular's levels are 2 dB
-/// apart, the top one at 0 dB; 0 is the control's lowest. The speaker's level is the one used
-/// (there is no headphone detection), Bluetooth has its own (through bluez-alsa), and a TV its
-/// own, in software (`hdmi`, which its `SoftVolume` reads).
+/// apart, the top one at 0 dB; 0 is the control's lowest. The speaker and the headphones share
+/// the one control, Bluetooth has its own (through bluez-alsa), and a TV its own, in software
+/// (`hdmi`, which its `SoftVolume` reads).
 struct Volume { mixer: &'static Mixer, hdmi: Arc<AtomicU8> }
 
 impl Audio for Volume {
     fn set_volume(&self, output: &Output, level: u8) -> io::Result<()> {
         match output {
-            Output::Speaker => {
+            Output::Speaker | Output::Headphones => {
                 let m = self.mixer;
                 system::run("/usr/bin/amixer", &["-q", "-c", m.card, "cset", &format!("name={}", m.control), &step(m, level).to_string()])
             }
-            Output::Headphones => Ok(()),
             Output::Bluetooth(address) => specular_linux::sound::set_bluetooth_volume(address, level),
             Output::Hdmi => { self.hdmi.store(level, std::sync::atomic::Ordering::Relaxed); Ok(()) }
         }
