@@ -1,5 +1,5 @@
-//! The Brick's installer: the system's brick-install program (Crystaline OS's
-//! userspace/brick-install), run with its output read line by line (its protocol is in its
+//! The Brick's installer: the system's crystaline-install program (Crystaline OS's
+//! userspace/crystaline-install), run with its output read line by line (its protocol is in its
 //! report.rs, its offer in its main.rs).
 
 use std::io::{BufRead, BufReader};
@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use specular_core::install::{Backup, InstallOffer, Installer, Internal, Offer, PendingRestore, Progress, Task, TaskError, TaskKind, UpdateFile};
 
-const PROGRAM: &str = "/usr/sbin/brick-install";
+const PROGRAM: &str = "/usr/sbin/crystaline-install";
 
 pub struct BrickInstaller;
 
@@ -26,7 +26,7 @@ impl Installer for BrickInstaller {
     fn follow(&self, progress: Box<dyn FnMut(Progress) + Send>) { run(vec!["follow".into()], true, progress); }
 }
 
-/// brick-install's command line for `task`. brick-install itself decides whether `restore`
+/// crystaline-install's command line for `task`. crystaline-install itself decides whether `restore`
 /// restores or prepares one, by where the system runs from.
 fn args(task: Task) -> Vec<String> {
     match task {
@@ -39,7 +39,7 @@ fn args(task: Task) -> Vec<String> {
     }
 }
 
-/// Runs brick-install with `args`, reporting what it prints to `progress`, from a thread of its
+/// Runs crystaline-install with `args`, reporting what it prints to `progress`, from a thread of its
 /// own. With `may_say_nothing` (`follow`: no task running), reports nothing if it prints nothing.
 fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Progress) + Send>) {
     eprintln!("install: {PROGRAM} {}", args.join(" "));
@@ -63,7 +63,7 @@ fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Pro
         }
         let status = child.wait();
         // It stopped without saying how it ended: the task crashed or was killed. (When following,
-        // brick-install exits normally even if the task it follows was killed, so its exit status
+        // crystaline-install exits normally even if the task it follows was killed, so its exit status
         // says nothing then.)
         if !ended && (said || !may_say_nothing) {
             match status { Ok(s) if s.success() => {}, Ok(s) => eprintln!("install: {PROGRAM} ended with {s}"), Err(e) => eprintln!("install: waiting for {PROGRAM}: {e}") }
@@ -72,12 +72,12 @@ fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Pro
     });
 }
 
-/// One line of brick-install's output, as progress (None for lines that aren't, including a task
+/// One line of crystaline-install's output, as progress (None for lines that aren't, including a task
 /// this version of Specular doesn't know).
 fn parse(line: &str, log: &Option<String>) -> Option<Progress> {
     let (word, rest) = line.split_once(' ').unwrap_or((line, ""));
     Some(match word {
-        // `restore` also names preparing and cancelling one: brick-install doesn't tell them apart.
+        // `restore` also names preparing and cancelling one: crystaline-install doesn't tell them apart.
         "TASK" => Progress::Task(match rest {
             "install" => TaskKind::Install,
             "restore" => TaskKind::Restore,
@@ -100,7 +100,7 @@ fn parse(line: &str, log: &Option<String>) -> Option<Progress> {
     })
 }
 
-/// brick-install's offer (see its main.rs). Fields an older brick-install doesn't print are left
+/// crystaline-install's offer (see its main.rs). Fields an older crystaline-install doesn't print are left
 /// empty.
 fn offer(v: &serde_json::Value) -> Offer {
     let install = v["install"].as_object().map(|i| InstallOffer {
@@ -127,7 +127,7 @@ fn offer(v: &serde_json::Value) -> Offer {
     }
 }
 
-/// What the internal storage holds, as brick-install names it (brick-install's `install::holds`).
+/// What the internal storage holds, as crystaline-install names it (crystaline-install's `install::holds`).
 fn internal(name: &str) -> Internal {
     match name {
         "trimui" => Internal::TrimUi,
@@ -142,15 +142,15 @@ fn internal(name: &str) -> Internal {
 mod tests {
     use super::*;
 
-    // Lines as Crystaline OS's userspace/brick-install prints them (report.rs; the tasks in
+    // Lines as Crystaline OS's userspace/crystaline-install prints them (report.rs; the tasks in
     // install.rs, backup.rs, update.rs and slots.rs); its tools/system/test-installer.sh tests them.
     #[test]
-    fn reads_brick_installs_output() {
+    fn reads_crystaline_installs_output() {
         let log = Some("/mnt/SDCARD/logs/install-x.log".to_string());
         for (line, kind) in [("TASK install", TaskKind::Install), ("TASK restore", TaskKind::Restore), ("TASK update", TaskKind::Update), ("TASK activate", TaskKind::Activate)] {
             assert_eq!(parse(line, &log), Some(Progress::Task(kind)), "{line}");
         }
-        assert_eq!(parse("TASK defragment", &log), None); // a task from a newer brick-install
+        assert_eq!(parse("TASK defragment", &log), None); // a task from a newer crystaline-install
         assert_eq!(parse("STEP 2/6 Backing up the internal storage", &log), Some(Progress::Step { index: 2, of: 6, label: "Backing up the internal storage".into() }));
         assert_eq!(parse("STEP 3/3 Switching to version 20261018-212347-b3a6d97", &log),
                    Some(Progress::Step { index: 3, of: 3, label: "Switching to version 20261018-212347-b3a6d97".into() }));
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(installed.previous, None);
         assert_eq!(offer(&serde_json::json!({"restore":{"possible":true}})).restore, Some(Ok(())));
 
-        // An older brick-install, without the newer fields.
+        // An older crystaline-install, without the newer fields.
         let older = offer(&serde_json::json!({"install": null, "why_not": "the system isn't running from an SD card", "backups": []}));
         assert_eq!(older, Offer { why_not: Some("the system isn't running from an SD card".into()), ..Offer::default() });
     }

@@ -1,4 +1,4 @@
-//! The CPU's speed on the Brick: Crystaline OS's brick-power, which sets the speed range of the
+//! The CPU's speed on the Brick: Crystaline OS's crystaline-power, which sets the speed range of the
 //! one clock all four CPU cores share, and a minimum within it (its `cpu-min`, refused until a profile
 //! has been applied since start-up). Nothing it sets outlasts a restart.
 
@@ -6,9 +6,9 @@ use specular_core::device::Cpu;
 
 use crate::command::run;
 
-const PROGRAM: &str = "/usr/sbin/brick-power";
+const PROGRAM: &str = "/usr/sbin/crystaline-power";
 
-/// The Brick's `Cpu`: brick-power.
+/// The Brick's `Cpu`: crystaline-power.
 pub struct BrickCpu;
 
 impl Cpu for BrickCpu {
@@ -25,11 +25,11 @@ impl Cpu for BrickCpu {
     }
 }
 
-/// The speed steps in brick-power's status: its line `cpu-steps 408 600 … 2000` (MHz).
+/// The speed steps in crystaline-power's status: its line `cpu-steps 408 600 … 2000` (MHz).
 fn steps(status: &str) -> Result<Vec<u32>, String> {
-    let line = status.lines().find_map(|l| l.strip_prefix("cpu-steps")).ok_or("brick-power's status has no cpu-steps line")?;
-    let steps: Vec<u32> = line.split_whitespace().map(|s| s.parse().map_err(|_| format!("brick-power's cpu-steps has {s:?}"))).collect::<Result<_, _>>()?;
-    if steps.is_empty() || !steps.is_sorted() { return Err(format!("brick-power's cpu-steps aren't a list of speeds, slowest first: {:?}", line.trim())); }
+    let line = status.lines().find_map(|l| l.strip_prefix("cpu-steps")).ok_or("crystaline-power's status has no cpu-steps line")?;
+    let steps: Vec<u32> = line.split_whitespace().map(|s| s.parse().map_err(|_| format!("crystaline-power's cpu-steps has {s:?}"))).collect::<Result<_, _>>()?;
+    if steps.is_empty() || !steps.is_sorted() { return Err(format!("crystaline-power's cpu-steps aren't a list of speeds, slowest first: {:?}", line.trim())); }
     Ok(steps)
 }
 

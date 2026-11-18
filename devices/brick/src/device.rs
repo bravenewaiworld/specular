@@ -27,7 +27,7 @@ const LED_LIMIT: u8 = 40;
 
 /// The SD card's state, kept by the system's `mount-card`, which a recheck runs.
 const CARD_STATE: &str = "/run/card/state";
-const MOUNT_CARD: &str = "/usr/libexec/brick/mount-card";
+const MOUNT_CARD: &str = "/usr/libexec/crystaline/mount-card";
 
 pub struct Brick;
 
@@ -112,7 +112,7 @@ impl Power for BrickPower {
 }
 
 /// How the last run ended, when not cleanly: one word and a newline.
-const LAST_SHUTDOWN: &str = "/run/brick/last-shutdown";
+const LAST_SHUTDOWN: &str = "/run/crystaline/last-shutdown";
 
 fn run(program: &str, args: &[&str]) -> io::Result<()> {
     let status = std::process::Command::new(program).args(args).status()?;

@@ -29,7 +29,7 @@ Completed:
 TODO:
  - File transfer: Settings → File transfer runs Crystaline OS's WebDAV server and browser page only while open, and shows the addresses to open (WiFi's, and the USB cable's while a PC is connected) and that anyone on the network can reach the card meanwhile. "No SD card" without one; a failed start says why. No idle sleep while open; sleeping stops it, waking starts it again; stopped whenever Specular starts and quits (built; on the Brick, uploading, downloading and deleting over the USB link work, and leaving the screen stops the server; Crystaline OS brings the loopback interface (`lo`) up at start-up, which Specular's check that the server is up needs (checked on the Brick); left: the rest of DEVELOPMENT.md's check, WiFi and the browser page by a person)
  - SSH on release systems: an "SSH" switch and "Import SSH keys from the SD card" in the developer settings (built; to check on the Brick, see DEVELOPMENT.md)
- - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `brick-timezone`; the clock changes at once. The question ignores presses for its first half second, so a press meant for the Wi-Fi screen can't answer it (built; to check on the Brick, see DEVELOPMENT.md)
+ - Time zone: Automatic (looked up from ipinfo.io each time WiFi connects, once the user allows it) or picked by hand, through the system's `crystaline-timezone`; the clock changes at once. The question ignores presses for its first half second, so a press meant for the Wi-Fi screen can't answer it (built; to check on the Brick, see DEVELOPMENT.md)
  - Rumble from games: checked on the Brick without hands (the motor follows a game's sound, the buttons keep working, the game menu stops it); left: that a game's rumble feels right, PS1 games included (they get a DualShock)
  - SD card pulled and inserted, in the library and mid-game; a read-only card; a write refused as read-only runs `mount-card` (built; on the Brick, a card turned read-only and a repaired one checked; pulling and inserting cards needs a person, see DEVELOPMENT.md)
  - Zooming into and out of a game runs at half rate on the Brick (a median of 33 ms between frames, most of them late): find why
@@ -51,7 +51,7 @@ Completed:
  - After a crash, a core stuck or a power cut during a game, Specular says at start-up which core stopped with which game (from a launch record, `cache/launch.json`)
  - Screen scaling: integer, fit, stretch
  - Measured on the Brick: Nestopia at full speed (Contra 6.8 ms a frame, Zelda 5.7 ms) SwanStation reaches full speed only with the CPU at 1.8 GHz or more (Metal Gear Solid, Castlevania: Symphony of the Night), its drawing thread helping (docs/runtime.md)
- - The CPU's speed held up from the game's own frames, through the OS's `brick-power cpu-min`: PS1 games start with a minimum of 1.8 GHz; two frames that miss their refresh within a second raise it a step (from the system's default, the first step is 1.2 GHz; lower steps only when set in the config files), and it stays there until the game ends; the system's default in the game's menu and outside games. `power.cpu_min` in the config files turns it off or fixes it, per system or per game. Logged with each change's reason, and shown in the frame statistics
+ - The CPU's speed held up from the game's own frames, through the OS's `crystaline-power cpu-min`: PS1 games start with a minimum of 1.8 GHz; two frames that miss their refresh within a second raise it a step (from the system's default, the first step is 1.2 GHz; lower steps only when set in the config files), and it stays there until the game ends; the system's default in the game's menu and outside games. `power.cpu_min` in the config files turns it off or fixes it, per system or per game. Logged with each change's reason, and shown in the frame statistics
  - Measured on the Brick: GBA at full speed (60.2 fps) beside the UI; Specular itself uses about 29 MB while a game runs
  - Zipped games play, Famicom Disk System games too: the ROM is unzipped into memory, never onto the card, and given to the core under the zip's name; a zip that can't be played says why
  - Cores' own log messages go into Specular's log (debug messages left out, and at most 30 a second)
@@ -135,7 +135,7 @@ Completed:
  - The design mockup (`design/mockup.html`) shows the Light Bar look only
  - Every setting's help on screen (Y About on its row), the same text as its schema's; the help texts name values by their labels
  - Hints for L1/R1 Page and L2/R2 Letter on game lists, on a line above the hint bar; "Game menu" with the Menu button on a game's splash
- - At start-up, a notice when the last run didn't end in order (the battery ran out, or the device stopped without powering off), from Crystaline OS's `/run/brick/last-shutdown`
+ - At start-up, a notice when the last run didn't end in order (the battery ran out, or the device stopped without powering off), from Crystaline OS's `/run/crystaline/last-shutdown`
  - Credits in Settings: every project shipped (cores, fonts, data, libraries) and its licence, worked out when the binary is built; the full licence texts installed beside it
  - Fallback fonts from `{sd card}/fonts/`, for non-Latin game names
  - A splash while a game starts: "Powered by" its core, the core's copyright notice and web address (from the credits), over the zooming picture until the game's first frame, for at least 1 s
@@ -155,8 +155,8 @@ TODO:
 TODO:
  - USB audio output (headset dongles, USB-C DACs)
  - Step the CPU minimum down during a game when it has room to spare, tuned so it never costs missed frames (the consequence of a false step down is a worse game than a shorter battery life); see docs/runtime.md, Findings, "The CPU minimum with the step down at 85 % of a refresh" (2026-10-19), for Symphony of the Night's lone misses and the rule tried
- - CPU profile chosen by Specular for the menus and for saving power (the OS's `brick-power profile performance|balanced|saver`; games already get a minimum speed of their own), never a setting in the UI; overridable only in the config files
- - The top USB-C port's power on or off (`brick-power usb-top on|off`, which refuses while a device is attached)
+ - CPU profile chosen by Specular for the menus and for saving power (the OS's `crystaline-power profile performance|balanced|saver`; games already get a minimum speed of their own), never a setting in the UI; overridable only in the config files
+ - The top USB-C port's power on or off (`crystaline-power usb-top on|off`, which refuses while a device is attached)
  - At 3 % battery, the game is saved and quit (the OS powers off at 1 %)
  - A power-saving mode: dimming, the screen off, WiFi and Bluetooth off while unused, the LEDs off, a lower refresh rate
  - The panel run at the game's own refresh rate, once the OS can set it (`DISP_LCD_SET_FPS` on `/dev/disp`, 40–60.2 Hz)

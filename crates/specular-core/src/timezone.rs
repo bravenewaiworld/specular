@@ -1,5 +1,5 @@
 //! The time zone local times (the clock) are shown in. The device keeps the zone, across restarts
-//! (the Brick's brick-timezone); its clocks stay in UTC, so a change moves only what is shown.
+//! (the Brick's crystaline-timezone); its clocks stay in UTC, so a change moves only what is shown.
 //! Specular chooses it: by hand, or automatically by asking a lookup service for the network's
 //! zone (see app::timezone and docs/time-zone.md).
 
@@ -49,7 +49,7 @@ pub fn zone_name(answer: &str) -> Result<String, String> {
 
 /// A stand-in for the desktop build: the zone is kept in memory (UTC at start) and given to the
 /// process as $TZ, and the zones are the PC's (`ZONEINFO`): UTC, then `zone.tab`'s by name, as
-/// brick-timezone lists them. Needs $TZ to be set before any thread starts (the desktop's `main`
+/// crystaline-timezone lists them. Needs $TZ to be set before any thread starts (the desktop's `main`
 /// sets it to UTC), so that `set` only swaps its value rather than growing the environment,
 /// which other threads may be reading.
 pub struct Simulated { zone: String }
@@ -69,7 +69,7 @@ impl TimeZone for Simulated {
     fn get(&mut self) -> Result<String, String> { Ok(self.zone.clone()) }
 
     /// Refuses names that aren't a zone file, and the `posix/` and `right/` copies, as
-    /// brick-timezone does.
+    /// crystaline-timezone does.
     fn set(&mut self, zone: &str) -> Result<(), String> {
         let path = std::path::Path::new(ZONEINFO).join(zone);
         let tzif = std::fs::read(&path).is_ok_and(|b| b.starts_with(b"TZif"));
