@@ -26,6 +26,10 @@ pub struct Board {
     pub sticks: Option<&'static str>,
     /// Select and Start held together are Menu (a board without a Menu button).
     pub menu_chord: bool,
+    /// Whether its headphone jack reports plugging through an input switch (`SW_HEADPHONE_INSERT`,
+    /// followed by `EvdevJack`). False for a jack that switches the speaker off in hardware and
+    /// reports nothing, or no jack: then there is one output and one volume.
+    pub jack_switch: bool,
     /// Its rumble motor's own input device, by evdev name (None: no motor).
     pub rumble: Option<&'static str>,
     /// Its backlight, by /sys/class/backlight name.

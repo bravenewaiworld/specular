@@ -144,8 +144,7 @@ impl Device for Mainline {
             installer: Some(Box::new(specular_crystaline::install::CrystalineInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),
-            // The jack cuts the speaker in hardware and reports nothing: one output, one volume.
-            headphones: None,
+            headphones: self.board.jack_switch.then(|| Box::new(specular_linux::jack::EvdevJack) as Box<dyn specular_core::device::HeadphoneJack>),
             hdmi: self.hdmi.1.lock().unwrap().take().map(|r| Box::new(HdmiMoves(r)) as Box<dyn Hdmi>),
             rumble: self.board.rumble.map(|m| Box::new(EvdevRumble::motor(m)) as Box<dyn specular_core::device::Rumble>),
             file_transfer: Some(Box::new(specular_crystaline::transfer::WebdavTransfer)),

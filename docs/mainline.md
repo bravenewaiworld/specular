@@ -1,6 +1,6 @@
 # Mainline boards
 
-Status: In progress · Updated: 2026-11-12
+Status: In progress · Updated: 2026-11-18
 
 The port to boards running mainline Linux under Crystaline OS's mainline family (`devices/mainline`): first the Powkiddy RGB20 Pro (Rockchip RK3566), later the Orange Pi 5. How Specular draws through DRM/KMS, how one binary serves every board, and what was measured. Unlike the Brick, everything here goes through standard Linux interfaces, so this is also the reference for any future Linux device with a KMS display.
 
@@ -19,6 +19,12 @@ The port to boards running mainline Linux under Crystaline OS's mainline family 
 - **The UI keeps the panel's size and the GPU scales it onto the TV, 4:3 with black bars** (2026-11-12). Slint draws into the panel-sized surface as always; each frame is then copied onto the TV's surface with a linear-filtered `glBlitFramebuffer` into the largest centred 4:3 rectangle (`kms::fit`: 1440×1080 at 240,0 on a 1080p TV). Layout, sizes and a game's scaling setting are as on the panel: Integer, Fit and Stretch apply within the 4:3 picture, so Integer is no longer whole TV pixels. Still legacy KMS: a move is a `drmModeSetCrtc` off and one on. Rejected: drawing the UI at the TV's size (a layout per TV, and none for 16:9); the display controller's scaler on a plane (legacy KMS can't scale the primary plane; atomic KMS for one feature); a game filling the 16:9 screen (its picture is part of the UI's).
 - **Sound follows the picture** (2026-11-12): to `Output::Hdmi` (the board's `hdmi_sound`), unless a Bluetooth device takes it, and back to the speaker as the TV goes. HDMI has no mixer control, so its volume is in software (`SoftVolume`), with a setting of its own ("TV volume", full by default: the TV has its own). Rejected: the speaker's level (a TV wants nothing like a handheld speaker's).
 - **A game is paused as the picture moves, and fitted to the new display as it resumes** (2026-11-12). The game menu opens (`Msg::Hdmi`); the runtime asks for the display's rate again at every resume (`Device::match_refresh`), which picks among the TV's modes of the same size within 0.5 % of the game's (59.94 for GBA, 60 for NES, 50 for PAL) and otherwise its usual one, measured. Vsync waits follow the picture to the new CRTC (`kms::ActiveCrtc`). Rejected: playing on through the move (frames paced by a CRTC being turned off, sound reopened mid-play).
+- **The board table is shaped for the handhelds that exist; it grows with the next board** (2026-11-18). Known limits, each to lift when a board needs it:
+  - `Board` assumes a built-in panel with a backlight and a mixer: `ppi`, `backlight`, `sound` and `volume` are required. A board without a panel (the Orange Pi 5) wants `panel: Option<Panel>` (ppi, backlight, game rates) and `volume: Option<Mixer>` falling back to `SoftVolume`.
+  - The display is `/dev/dri/card0`. Where the GPU registers its own DRM device first (Panfrost, Panthor), the display controller can be another card: scan for the one with connectors and CRTCs.
+  - With no built-in panel, `Kms::choose_main` takes the first connected output's preferred mode uncapped (a 4K TV gives a 4K UI), and `ppi` means nothing on it; it should take `choose_tv`'s mode and scale. The connector's `panel orientation` isn't read, so a panel mounted rotated would show sideways.
+  - The CPU is one speed range (`specular_crystaline::cpu`, over Crystaline OS's `crystaline-power`, which handles one cpufreq policy). A big.LITTLE SoC (the RK3588) wants `crystaline-power` to handle each cluster behind the same range.
+  - LEDs: `leds` is empty on every mainline board (the RGB20 Pro's decision, below); a board whose LEDs Specular should drive needs a `leds` field.
 - **The RGB20 Pro's LEDs stay with the system** (2026-11-11). The green and red LEDs show status and charging; `leds` is empty, so Specular's accent lights don't drive them.
 
 ## Design
@@ -62,7 +68,7 @@ The `display:` line after each move gives the output, its mode, the measured ref
 | Volume | one mixer control for every output, through amixer: `rk817ext`'s "Master Playback Volume" (0–255, −95 to 0 dB). Levels 2 dB apart, the top at 0 dB |
 | Sound | ALSA `default:CARD=rk817ext`; on a TV, `default:CARD=HDMI` at a software volume |
 | TV | HDMI hotplug from the kernel's uevents (`specular-linux/src/hotplug.rs`); the picture as above |
-| Headphones | none: the jack cuts the speaker in hardware and reports nothing |
+| Headphones | the board's `jack_switch`: followed through `SW_HEADPHONE_INSERT` (`EvdevJack`) where the codec reports it; the RGB20 Pro's jack cuts the speaker in hardware and reports nothing, so it has one output and one volume |
 | SSH, file transfer, time zone, SD card, power off, restart | Crystaline OS (`specular-crystaline`) |
 | Sleep, WiFi, CPU speed | Crystaline OS (`sleepnow`, the `wpa_supplicant` service with the board's driver, `crystaline-power`), through `specular-crystaline` |
 | Bluetooth | BlueZ (`specular-linux`) |
