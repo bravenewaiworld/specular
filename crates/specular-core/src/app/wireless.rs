@@ -253,9 +253,10 @@ impl App {
             e.extend(cmds.into_iter().map(Effect::Bluetooth));
             headsets = b.devices.iter().filter(|d| d.audio && power).map(|d| Output::Bluetooth(d.address.clone())).collect();
         }
-        // A Bluetooth device taking sound comes first, then headphones in the jack.
+        // A Bluetooth device taking sound comes first, then the TV the picture is on, then
+        // headphones in the jack.
         if self.radios.failed.as_ref().is_some_and(|f| !headsets.contains(f)) { self.radios.failed = None; }
-        let wired = if self.headphones { Output::Headphones } else { Output::Speaker };
+        let wired = if self.hdmi { Output::Hdmi } else if self.headphones { Output::Headphones } else { Output::Speaker };
         let output = headsets.into_iter().find(|o| Some(o) != self.radios.failed.as_ref()).unwrap_or(wired);
         if self.radios.output != output {
             self.radios.output = output.clone();

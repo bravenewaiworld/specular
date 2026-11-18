@@ -16,7 +16,7 @@ use std::time::SystemTime;
 
 use serde_json::{Map, Value, json};
 
-use super::Game;
+use super::{Game, Roms};
 use crate::settings::store::{self, LoadError};
 
 /// Held while the record is read and rewritten: each launch notes its game on its own thread, and
@@ -56,8 +56,8 @@ fn checksum(path: &Path) -> io::Result<u32> {
 
 /// Notes the ROM of `game` as played: its size and checksum (worked out again only if the file
 /// has changed since). Reads the whole file the first time: call it off the UI thread.
-pub fn note_played(roms: &Path, saves: &Path, game: &Game) -> io::Result<()> {
-    let rom = roms.join(&game.path);
+pub fn note_played(roms: &Roms, saves: &Path, game: &Game) -> io::Result<()> {
+    let rom = roms.file(&game.path).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the games card isn't in"))?;
     let (size, modified) = stamp(&rom)?;
     let key = game.path.to_string_lossy().into_owned();
     let _held = RECORD.lock().unwrap_or_else(|e| e.into_inner());
@@ -67,22 +67,21 @@ pub fn note_played(roms: &Path, saves: &Path, game: &Game) -> io::Result<()> {
     store::store_layer(&record_path(saves), &records)
 }
 
-/// The name, extension aside, of the battery saves of the game whose ROM is at `rom` (under
-/// `roms/`).
+/// The name, extension aside, of the battery saves of the game whose ROM is at `rom` (a
+/// `Game::path`).
 fn battery_name(saves: &Path, rom: &Path) -> PathBuf { saves.join(rom).with_extension("") }
 
-/// The name, extension aside, of the save states of the game whose ROM is at `rom` (under
-/// `roms/`).
-fn state_name(roms: &Path, rom: &Path) -> PathBuf { in_states_folder(&roms.join(rom).with_extension("")) }
+/// The name, extension aside, of the save states of the game whose ROM is at `rom` (a `Game::path`).
+fn state_name(roms: &Roms, saves: &Path, rom: &Path) -> PathBuf { in_states_folder(&roms.beside(saves, rom).with_extension("")) }
 
 /// The path `file` would have in a `.states` folder in its own folder, where save states are kept.
 pub(super) fn in_states_folder(file: &Path) -> PathBuf {
     file.with_file_name(".states").join(file.file_name().unwrap_or_default())
 }
 
-/// The names, extension aside, of the saves of the game whose ROM is at `rom` (under `roms`): its
+/// The names, extension aside, of the saves of the game whose ROM is at `rom` (a `Game::path`): its
 /// battery saves', then its save states'.
-fn save_names(roms: &Path, saves: &Path, rom: &Path) -> [PathBuf; 2] { [battery_name(saves, rom), state_name(roms, rom)] }
+fn save_names(roms: &Roms, saves: &Path, rom: &Path) -> [PathBuf; 2] { [battery_name(saves, rom), state_name(roms, saves, rom)] }
 
 /// The files named `name` with any extension ("pokehns" → "pokehns.srm", "pokehns.state1").
 fn files_named(name: &Path) -> Vec<PathBuf> {
@@ -94,16 +93,16 @@ fn files_named(name: &Path) -> Vec<PathBuf> {
 /// Moves the game's `state1` save state from its folder under `saves/`, where earlier builds of
 /// Specular kept it, to `.states/` beside its ROM; unless `.states/` already has one, which wins
 /// (the old one then stays where it is).
-pub fn move_old_state(roms: &Path, saves: &Path, game: &Game) -> io::Result<()> {
-    let (old, new) = (game.save_path(saves, "state1"), game.state_path(roms, "state1"));
+pub fn move_old_state(roms: &Roms, saves: &Path, game: &Game) -> io::Result<()> {
+    let (old, new) = (game.save_path(saves, "state1"), game.state_path(roms, saves, "state1"));
     if !old.is_file() || new.exists() { return Ok(()); }
-    fs::create_dir_all(new.parent().unwrap_or(roms))?;
+    fs::create_dir_all(new.parent().unwrap_or(saves))?;
     fs::rename(old, new)
 }
 
 /// Moves the saves of ROMs that are gone to the game whose ROM is the same file under a new
 /// name (see the module doc). Returns the moves made, as (old ROM path, new ROM path).
-pub fn follow_moved_roms(roms: &Path, saves: &Path, games: &[Game]) -> Vec<(PathBuf, PathBuf)> {
+pub fn follow_moved_roms(roms: &Roms, saves: &Path, games: &[Game]) -> Vec<(PathBuf, PathBuf)> {
     let _held = RECORD.lock().unwrap_or_else(|e| e.into_inner());
     let mut records = match load(saves) {
         Ok(r) => r,
@@ -113,8 +112,9 @@ pub fn follow_moved_roms(roms: &Path, saves: &Path, games: &[Game]) -> Vec<(Path
     // name (say "Game.gba", since zipped up as "Game.zip").
     let in_use: HashSet<PathBuf> = games.iter().map(|g| g.path.with_extension("")).collect();
     let gone: Vec<(String, u64, u64)> = records.iter()
-        // Gone from the card, not just from the list (the scan may have skipped a folder).
-        .filter(|(rom, _)| !in_use.contains(&Path::new(rom).with_extension("")) && !roms.join(rom).exists())
+        // Gone from the card, not just from the list (the scan may have skipped a folder); a
+        // games-card ROM only while that card is in (`file` is None while it is out).
+        .filter(|(rom, _)| !in_use.contains(&Path::new(rom).with_extension("")) && roms.file(Path::new(rom)).is_some_and(|f| !f.exists()))
         .filter_map(|(rom, r)| Some((rom.clone(), r["size"].as_u64()?, r["crc32"].as_u64()?)))
         .filter(|(rom, _, _)| save_names(roms, saves, Path::new(rom)).iter().any(|n| !files_named(n).is_empty()))
         .collect();
@@ -122,12 +122,12 @@ pub fn follow_moved_roms(roms: &Path, saves: &Path, games: &[Game]) -> Vec<(Path
     for (old, size, crc) in gone {
         // Cheapest test first; the checksum reads the whole ROM.
         let same: Vec<&Game> = games.iter()
-            .filter(|g| fs::metadata(roms.join(&g.path)).is_ok_and(|m| m.len() == size))
+            .filter(|g| roms.file(&g.path).is_some_and(|f| fs::metadata(f).is_ok_and(|m| m.len() == size)))
             // A game with states still qualifies: when a ROM's whole folder is renamed, its
             // `.states/` goes along, leaving only the battery saves to move. (`move_saves` refuses
             // to replace a file, should both have states.)
             .filter(|g| files_named(&battery_name(saves, &g.path)).is_empty())
-            .filter(|g| checksum(&roms.join(&g.path)).is_ok_and(|c| c as u64 == crc))
+            .filter(|g| roms.file(&g.path).is_some_and(|f| checksum(&f).is_ok_and(|c| c as u64 == crc)))
             .collect();
         let [game] = same[..] else { continue };
         if !move_saves(roms, saves, Path::new(&old), &game.path) { continue; }
@@ -138,10 +138,10 @@ pub fn follow_moved_roms(roms: &Path, saves: &Path, games: &[Game]) -> Vec<(Path
     moves
 }
 
-/// Renames the save files of the ROM `from` to go with the ROM `to` (both under `roms/`): all of
+/// Renames the save files of the ROM `from` to go with the ROM `to` (both `Game::path`s): all of
 /// them, or none, putting back any already moved if one can't be, or would replace a file.
 /// Returns whether they moved.
-fn move_saves(roms: &Path, saves: &Path, from: &Path, to: &Path) -> bool {
+fn move_saves(roms: &Roms, saves: &Path, from: &Path, to: &Path) -> bool {
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (from, to) in save_names(roms, saves, from).into_iter().zip(save_names(roms, saves, to)) {
         for file in files_named(&from) {
@@ -178,20 +178,34 @@ mod tests {
     }
 
     #[test]
+    fn a_games_card_out_isnt_taken_for_its_roms_moving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (roms, second, saves) = (tmp.path().join("roms"), tmp.path().join("games"), tmp.path().join("saves"));
+        write(&second.join("gba/Game.gba"), b"rom one");
+        write(&saves.join("@card2/gba/Game.srm"), b"battery");
+        let both = Roms { system: roms.clone(), second: Some(second.clone()) };
+        note_played(&both, &saves, &game("@card2/gba/Game.gba")).unwrap();
+        // The card out, and the same ROM on the system card: its saves stay put.
+        write(&roms.join("gba/Copy.gba"), b"rom one");
+        assert_eq!(follow_moved_roms(&Roms::system(&roms), &saves, &[game("gba/Copy.gba")]), vec![]);
+        assert!(saves.join("@card2/gba/Game.srm").exists());
+    }
+
+    #[test]
     fn saves_follow_a_renamed_rom_but_not_to_an_ambiguous_one() {
         let tmp = tempfile::tempdir().unwrap();
         let (roms, saves) = (tmp.path().join("roms"), tmp.path().join("saves"));
         write(&roms.join("gba/Old Name.gba"), b"rom one");
         write(&saves.join("gba/Old Name.srm"), b"battery");
         write(&roms.join("gba/.states/Old Name.state1"), b"state");
-        note_played(&roms, &saves, &game("gba/Old Name.gba")).unwrap();
+        note_played(&Roms::system(&roms), &saves, &game("gba/Old Name.gba")).unwrap();
         assert_eq!(record(&saves, "gba/Old Name.gba").unwrap()["crc32"], crc32fast::hash(b"rom one"));
         // Renamed and moved into a folder; another game with different contents, and one with saves.
         fs::remove_file(roms.join("gba/Old Name.gba")).unwrap();
         write(&roms.join("gba/RPG/New v1.1.gba"), b"rom one");
         write(&roms.join("gba/Other.gba"), b"rom two");
         let games = [game("gba/RPG/New v1.1.gba"), game("gba/Other.gba")];
-        assert_eq!(follow_moved_roms(&roms, &saves, &games), vec![(PathBuf::from("gba/Old Name.gba"), PathBuf::from("gba/RPG/New v1.1.gba"))]);
+        assert_eq!(follow_moved_roms(&Roms::system(&roms), &saves, &games), vec![(PathBuf::from("gba/Old Name.gba"), PathBuf::from("gba/RPG/New v1.1.gba"))]);
         assert_eq!(fs::read(saves.join("gba/RPG/New v1.1.srm")).unwrap(), b"battery");
         assert!(roms.join("gba/RPG/.states/New v1.1.state1").exists() && !saves.join("gba/Old Name.srm").exists());
         assert!(record(&saves, "gba/RPG/New v1.1.gba").is_some());
@@ -199,7 +213,7 @@ mod tests {
         fs::remove_file(roms.join("gba/RPG/New v1.1.gba")).unwrap();
         write(&roms.join("a/Copy 1.gba"), b"rom one");
         write(&roms.join("a/Copy 2.gba"), b"rom one");
-        assert_eq!(follow_moved_roms(&roms, &saves, &[game("a/Copy 1.gba"), game("a/Copy 2.gba")]), vec![]);
+        assert_eq!(follow_moved_roms(&Roms::system(&roms), &saves, &[game("a/Copy 1.gba"), game("a/Copy 2.gba")]), vec![]);
         assert!(saves.join("gba/RPG/New v1.1.srm").exists());
     }
 
@@ -210,14 +224,14 @@ mod tests {
         write(&roms.join("gba/Old.gba"), b"rom");
         write(&saves.join("gba/Old.srm"), b"battery");
         write(&roms.join("gba/.states/Old.state1"), b"state");
-        note_played(&roms, &saves, &game("gba/Old.gba")).unwrap();
+        note_played(&Roms::system(&roms), &saves, &game("gba/Old.gba")).unwrap();
         write(&roms.join("gba/New.gba"), b"rom");
         // Not listed (say its folder couldn't be read), but still on the card.
-        assert_eq!(follow_moved_roms(&roms, &saves, &[game("gba/New.gba")]), vec![]);
+        assert_eq!(follow_moved_roms(&Roms::system(&roms), &saves, &[game("gba/New.gba")]), vec![]);
         // Gone, but one of its saves would replace a state the new name already has.
         fs::remove_file(roms.join("gba/Old.gba")).unwrap();
         write(&roms.join("gba/.states/New.state1"), b"newer state");
-        assert_eq!(follow_moved_roms(&roms, &saves, &[game("gba/New.gba")]), vec![]);
+        assert_eq!(follow_moved_roms(&Roms::system(&roms), &saves, &[game("gba/New.gba")]), vec![]);
         assert!(saves.join("gba/Old.srm").exists() && !saves.join("gba/New.srm").exists());
         assert_eq!(fs::read(roms.join("gba/.states/New.state1")).unwrap(), b"newer state");
     }
@@ -229,9 +243,9 @@ mod tests {
         write(&roms.join("gba/RPG/Game.gba"), b"rom");
         write(&saves.join("gba/RPG/Game.srm"), b"battery");
         write(&roms.join("gba/RPG/.states/Game.state1"), b"state");
-        note_played(&roms, &saves, &game("gba/RPG/Game.gba")).unwrap();
+        note_played(&Roms::system(&roms), &saves, &game("gba/RPG/Game.gba")).unwrap();
         fs::rename(roms.join("gba/RPG"), roms.join("gba/Role-playing")).unwrap(); // its states go along
-        assert_eq!(follow_moved_roms(&roms, &saves, &[game("gba/Role-playing/Game.gba")]).len(), 1);
+        assert_eq!(follow_moved_roms(&Roms::system(&roms), &saves, &[game("gba/Role-playing/Game.gba")]).len(), 1);
         assert!(saves.join("gba/Role-playing/Game.srm").exists() && roms.join("gba/Role-playing/.states/Game.state1").exists());
     }
 
@@ -242,7 +256,7 @@ mod tests {
         let mut files = files_named(&battery_name(tmp.path(), Path::new("gba/pokehns.gba")));
         files.sort();
         assert_eq!(files, [tmp.path().join("gba/pokehns.srm"), tmp.path().join("gba/pokehns.state1")]);
-        assert_eq!(game("gba/pokehns.v2.gba").state_path(Path::new("/roms"), "autosave"), Path::new("/roms/gba/.states/pokehns.v2.autosave"));
+        assert_eq!(game("gba/pokehns.v2.gba").state_path(&Roms::system("/roms"), Path::new("/saves"), "autosave"), Path::new("/roms/gba/.states/pokehns.v2.autosave"));
     }
 
     #[test]
@@ -253,8 +267,8 @@ mod tests {
         write(&saves.join("gba/A.state1"), b"old");
         write(&saves.join("gba/B.state1"), b"old");
         write(&roms.join("gba/.states/B.state1"), b"new");
-        move_old_state(&roms, &saves, &a).unwrap();
-        move_old_state(&roms, &saves, &b).unwrap();
+        move_old_state(&Roms::system(&roms), &saves, &a).unwrap();
+        move_old_state(&Roms::system(&roms), &saves, &b).unwrap();
         assert_eq!(fs::read(roms.join("gba/.states/A.state1")).unwrap(), b"old");
         assert_eq!(fs::read(roms.join("gba/.states/B.state1")).unwrap(), b"new");
         assert!(!saves.join("gba/A.state1").exists() && saves.join("gba/B.state1").exists());

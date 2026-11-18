@@ -50,6 +50,8 @@ impl Resampler {
 pub struct Sound {
     out: Option<Box<dyn SoundOut>>,
     resampler: Resampler,
+    /// The core's sample rate.
+    sample_rate: f64,
     /// The rate the game's samples are made at, as paced (its own rate, scaled by the speed-up).
     in_rate: f64,
     buf: Vec<[i16; 2]>,
@@ -59,8 +61,11 @@ impl Sound {
     /// `sample_rate` is the core's; `speed` is how much faster than its own rate the game runs
     /// (display rate / game frame rate, or 1). Without an output, samples are dropped.
     pub fn new(out: Option<Box<dyn SoundOut>>, sample_rate: f64, speed: f64) -> Self {
-        Self { out, resampler: Resampler::default(), in_rate: sample_rate * speed, buf: Vec::new() }
+        Self { out, resampler: Resampler::default(), sample_rate, in_rate: sample_rate * speed, buf: Vec::new() }
     }
+
+    /// The game runs at a new `speed` (as for `new`).
+    pub fn set_speed(&mut self, speed: f64) { self.in_rate = self.sample_rate * speed; }
 
     /// Replaces (and closes) the output. A fresh output reports nothing queued, so the next `play`
     /// first fills it with silence, as after an underrun.

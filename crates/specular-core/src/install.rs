@@ -57,17 +57,19 @@ pub enum Internal {
     /// Unreadable, or a layout we don't recognise.
     #[default]
     Unknown,
+    /// The device has no internal storage: Settings doesn't say why installing isn't possible.
+    None,
 }
 
 impl Internal {
-    /// "TrimUI's system" and so on; None for `Unknown`.
+    /// "TrimUI's system" and so on; None for `Unknown` and `None`.
     pub fn name(self) -> Option<&'static str> {
         Some(match self {
             Internal::TrimUi => "TrimUI's system",
             Internal::ThisSystem => "This system",
             Internal::UnfinishedInstall => "Unfinished install",
             Internal::UnfinishedRestore => "Unfinished restore",
-            Internal::Unknown => return None,
+            Internal::Unknown | Internal::None => return None,
         })
     }
 
