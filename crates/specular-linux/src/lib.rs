@@ -16,6 +16,7 @@ pub mod jack;
 pub mod kms;
 pub mod leds;
 pub mod power_supply;
+pub mod process;
 pub mod rumble;
 pub mod sound;
 pub mod sticks;

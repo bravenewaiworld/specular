@@ -12,7 +12,7 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::*};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
@@ -176,7 +176,7 @@ impl NativeSession {
         let shared = Arc::new(Mapping::new()?);
         let (ours, theirs) = socket_pair()?;
         let theirs_fd = theirs.as_raw_fd();
-        let mut command = Command::new(&launch.program);
+        let mut command = specular_linux::process::command(&launch.program);
         command.args(&launch.args).arg("--specular").arg(CORE_FD.to_string())
             .stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
         // SAFETY: only async-signal-safe calls between fork and exec.

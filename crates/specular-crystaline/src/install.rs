@@ -4,9 +4,10 @@
 //! one.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use specular_core::install::{Backup, InstallOffer, Installer, Internal, Offer, PendingRestore, Progress, Task, TaskError, TaskKind, UpdateFile};
+use specular_linux::process::command;
 
 const PROGRAM: &str = "/usr/sbin/crystaline-install";
 
@@ -14,7 +15,7 @@ pub struct CrystalineInstaller;
 
 impl Installer for CrystalineInstaller {
     fn offer(&self) -> Result<Offer, String> {
-        let out = Command::new(PROGRAM).arg("offer").output().map_err(|e| format!("{PROGRAM}: {e}"))?;
+        let out = command(PROGRAM).arg("offer").output().map_err(|e| format!("{PROGRAM}: {e}"))?;
         // Logged whole, so what Settings showed can be worked out afterwards from the log.
         eprintln!("install: offer {}", String::from_utf8_lossy(&out.stdout).trim());
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)
@@ -44,7 +45,7 @@ fn args(task: Task) -> Vec<String> {
 /// its own. With `may_say_nothing` (`follow`: no task running), reports nothing if it prints nothing.
 fn run(args: Vec<String>, may_say_nothing: bool, mut progress: Box<dyn FnMut(Progress) + Send>) {
     eprintln!("install: {PROGRAM} {}", args.join(" "));
-    let child = Command::new(PROGRAM).args(&args).stdout(Stdio::piped()).spawn();
+    let child = command(PROGRAM).args(&args).stdout(Stdio::piped()).spawn();
     std::thread::spawn(move || {
         let mut child = match child {
             Ok(c) => c,

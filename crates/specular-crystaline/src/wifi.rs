@@ -51,7 +51,7 @@ impl WifiDevice for CrystalineWifi {
 
 /// Runs a program; its output, if it fails, is the error.
 fn run(program: &str, args: &[&str]) -> io::Result<()> {
-    let out = std::process::Command::new(program).args(args).output()?;
+    let out = specular_linux::process::command(program).args(args).output()?;
     if out.status.success() { return Ok(()); }
     let said = String::from_utf8_lossy(&out.stderr).trim().to_string() + String::from_utf8_lossy(&out.stdout).trim();
     Err(io::Error::other(format!("{program} {}: {} {said}", args.join(" "), out.status)))

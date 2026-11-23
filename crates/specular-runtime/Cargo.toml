@@ -11,11 +11,12 @@ libc = "0.2"
 serde_json = "1"
 zstd = { version = "0.13", default-features = false }
 specular-core = { path = "../specular-core" }
+# `process::command`, for starting a native core.
+specular-linux = { path = "../specular-linux" }
 
 [build-dependencies]
 cc = "1"
 
 [dev-dependencies]
-specular-linux = { path = "../specular-linux" }
 tempfile = "3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

@@ -1,6 +1,7 @@
 //! The protocol against `native/mock_core.c`, built with the system's C compiler.
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc;
 
 use super::*;

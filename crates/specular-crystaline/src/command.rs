@@ -1,13 +1,13 @@
 //! Running the system's programs, with every run and its result logged.
 
-use std::process::Command;
+use specular_linux::process::command;
 
 /// Runs `program` with `args`, logging the command line, its exit status and what it printed,
 /// prefixed by `area` (e.g. "transfer"). Ok: what it printed on stdout. Err: what it printed on
 /// stderr (else stdout, else its exit status), or why it couldn't run.
 pub fn run(area: &str, program: &str, args: &[&str]) -> Result<String, String> {
     let line = [&[program][..], args].concat().join(" ");
-    let out = match Command::new(program).args(args).output() {
+    let out = match command(program).args(args).output() {
         Ok(out) => out,
         Err(e) => { eprintln!("{area}: {line}: {e}"); return Err(format!("{program}: {e}")); }
     };

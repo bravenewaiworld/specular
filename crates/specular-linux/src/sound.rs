@@ -179,7 +179,7 @@ impl Drop for Alsa {
 /// on to devices that take volume commands (AVRCP), and otherwise scales the sound itself.
 pub fn set_bluetooth_volume(address: &BtAddress, level: u8) -> io::Result<()> {
     let percent = (level as i64).min(VOLUME_MAX) * 100 / VOLUME_MAX;
-    let status = std::process::Command::new("amixer")
+    let status = crate::process::command("amixer")
         .args(["-q", "-D", &format!("bluealsa:DEV={}", address.0), "cset", "name=A2DP Playback Volume", &format!("{percent}%")])
         .status()?;
     if status.success() { Ok(()) } else { Err(io::Error::other(format!("amixer (bluealsa {}): {status}", address.0))) }

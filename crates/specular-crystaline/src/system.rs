@@ -35,7 +35,7 @@ pub const GAMES_CARD_STATE: &str = "/run/card-games";
 
 /// Runs `program` with `args`; fails unless it exits with success.
 pub fn run(program: &str, args: &[&str]) -> io::Result<()> {
-    let status = std::process::Command::new(program).args(args).status()?;
+    let status = specular_linux::process::command(program).args(args).status()?;
     if status.success() { Ok(()) } else { Err(io::Error::other(format!("{program}: {status}"))) }
 }
 

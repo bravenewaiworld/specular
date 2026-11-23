@@ -104,7 +104,7 @@ pub trait Screen {
 | Time zone | the device's time zone, and looking it up (see [time-zone.md](time-zone.md)) |
 | Art worker, art loader | finding and storing pictures (and the frame each game was left on); decoding pictures for display |
 | Game, save writer, watchdog | the running core; its file writes; detecting a stuck core |
-| Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written |
+| Signals | turns SIGTERM and SIGINT into a normal quit, so saves are written. They are blocked in every other thread, so programs Specular starts go through `specular_linux::process::command`, which unblocks them in the program |
 | Vsync | in a display platform that paces animations by the display (the Brick's): after an animation's frame is presented, waits for the vsync that shows it and wakes the UI |
 
 Opening a sound output can block, so a game's opens on short-lived threads, and the interface sounds' output on the Sounds thread.

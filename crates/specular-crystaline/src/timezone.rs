@@ -3,7 +3,7 @@
 //! it has no file for), `list` prints UTC then tzdata's `zone.tab` zones by name. It keeps the
 //! zone across restarts, and logs its own errors to the system log too.
 
-use std::process::Command;
+use specular_linux::process::command;
 
 use specular_core::timezone::TimeZone;
 
@@ -21,7 +21,7 @@ impl TimeZone for CrystalineTimeZone {
 
 /// What crystaline-timezone prints, or what went wrong (its exit status and error message).
 fn run(args: &[&str]) -> Result<String, String> {
-    let out = Command::new(PROGRAM).args(args).output().map_err(|e| format!("{PROGRAM}: {e}"))?;
+    let out = command(PROGRAM).args(args).output().map_err(|e| format!("{PROGRAM}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{PROGRAM} {}: {}: {}", args.join(" "), out.status, String::from_utf8_lossy(&out.stderr).trim()));
     }
