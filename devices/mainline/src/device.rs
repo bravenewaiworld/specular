@@ -12,9 +12,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use specular_core::input::Button;
 use specular_core::device::{Sticks, Audio, Battery, Device, DeviceProfile, Display, Hardware, Hdmi, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_crystaline::system;
-use specular_core::wireless::trace::Traced;
 use specular_linux::backlight::SysfsBacklight;
-use specular_linux::bluez::Bluez;
 use specular_linux::rumble::EvdevRumble;
 use specular_linux::sticks::EvdevSticks;
 use specular_linux::kms::{self, ActiveCrtc, DrmVsync, Kms, Mode, ModeRequest};
@@ -140,7 +138,7 @@ impl Device for Mainline {
             lights: Box::new(NoLights),
             audio: Box::new(Volume { mixer: &self.board.volume, hdmi: self.hdmi_volume.clone() }),
             wifi: specular_crystaline::wifi::wifi(),
-            bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
+            bluetooth: Some(specular_crystaline::bluetooth::bluetooth()),
             installer: Some(Box::new(specular_crystaline::install::CrystalineInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),

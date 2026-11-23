@@ -12,6 +12,7 @@ WiFi and Bluetooth: the services that drive the radios, how the app keeps them a
 - **A network is saved only once it has connected** (2026-10-14), so a wrong password is never kept.
 - **Failures are shown only on the radio's own screen** (2026-10-14), where the user asked for something. Elsewhere they are only in the trace.
 - **Every exchange with a radio is traced, always** (2026-10-14). It is a few lines per user action, so it costs the same everywhere and there is no separate mode in which behaviour could differ. Passwords are never written.
+- **Bluetooth's power follows its setting alone, and a device may switch its controller's power with it** (2026-11-23). A device whose controller BlueZ can't power off gives `Bluez` a `BtController`: `BtCmd::Power(true)` powers the controller before the adapter, and `Power(false)` after the adapter, so devices are disconnected first. On Crystaline OS it is the board's attach service (`BOARD_BT_ATTACH`); boards without one keep the adapter's power only. BlueZ without an adapter is Bluetooth off, not a failure: the power wanted is applied when an adapter appears (on the Brick 2.5–4 s after powering on), and the search once it is powered. BlueZ powers a new adapter itself, so our request can meet a power change already under way: its Busy answer isn't a failure. So a controller that never starts shows only as Bluetooth staying off; its own log says why. Rejected, for now: also powering off while On but unused (with headphones paired it must stay on for them to reconnect by themselves).
 - **Bluetooth headphones and speakers are a sound output** (2026-10-14), through bluez-alsa, with one volume they all share. A game's sound can switch to them mid-game, and falls back to the device's own output (headphones in the jack, or the speaker) if they fail.
 - **The Wi-Fi screen shows the device's address while connected; with Developer details, also its other interfaces' addresses** (2026-10-18), so files can be sent to it, and a developer can find it over the USB link even with WiFi off. The other interfaces come from the WiFi service, as an event, so they are traced and can be scripted like the rest. Only IPv4 addresses are shown. Rejected: a network service of its own (a third beside WiFi and Bluetooth, with its own trace and scenario, for one list); IPv6 addresses (long, and a link-local one can't be typed without its interface).
 - **Addresses are kept current by reading the interfaces every 5 s** (2026-10-18), with getifaddrs. The other interfaces are reported when they change; when WiFi's interface no longer has the link's address (a renewal gave a new one, or the lease ran out), wpa_supplicant's status is read again. Rejected: netlink address notifications (more code than a poll, for a screen that can wait 5 s); reading the status with every signal reading (twice the trace lines while connected, all the time, for a change that is rare).
@@ -74,6 +75,18 @@ pub trait WifiDevice: Send {
 A WiFi password must be 8–63 printable ASCII characters, or 64 hex digits; others are refused before they reach the service.
 
 **BlueZ.** Over the system D-Bus. One thread follows BlueZ's objects (the adapter, devices and audio connections), keeping only the properties Specular reads, and reports what changed. Slow calls (pairing, connecting: tens of seconds) each get a thread of their own, so later commands aren't held up. If the bus or bluetoothd isn't there yet, the service reports `NotAvailable` once and tries again every 5 s. Specular registers a "NoInputNoOutput" pairing agent that agrees only to pairings Specular started. Pairing also trusts the device, so it may reconnect by itself.
+
+```rust
+/// Switches a device's Bluetooth controller on and off: its own power, which BlueZ's adapter power
+/// doesn't cut.
+pub trait BtController: Send {
+    /// Powers the controller on or off. Returns once asked, not once done: when powered on, the
+    /// controller appears to BlueZ as an adapter some seconds later; when powered off, its adapter
+    /// goes away.
+    fn set_power(&mut self, on: bool) -> io::Result<()>;
+}
+impl Bluez { pub fn new() -> Self; pub fn with_controller(c: Box<dyn BtController>) -> Self; }
+```
 
 ### Keeping the radios as wanted
 

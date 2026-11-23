@@ -695,6 +695,17 @@ mod wireless {
         e.iter().filter(|e| matches!(e, Effect::Wifi(_) | Effect::Bluetooth(_) | Effect::SoundTo(_))).collect()
     }
 
+    /// Bluetooth saved On is powered at start-up, without searching (its screen isn't open).
+    /// Off, the default, is powered off at start-up (`radio_app`); toggling: see
+    /// `bluetooth_searches_on_its_screen_and_routes_sound_to_a_headset`.
+    #[test]
+    fn bluetooth_saved_on_is_powered_at_start_up() {
+        let mut a = app();
+        a.has_radios(true, true);
+        let e = a.handle(Msg::SettingsLoaded(Layer::Global, json!({"wireless.bluetooth": true}).as_object().unwrap().clone()));
+        assert_eq!(e.iter().filter(|e| matches!(e, Effect::Bluetooth(_))).collect::<Vec<_>>(), [&Effect::Bluetooth(BtCmd::Power(true))]);
+    }
+
     /// Opens Settings, then the row labelled `label` there.
     fn open(a: &mut App, label: &str, t: u64) {
         assert_eq!(a.view().title, "Library");

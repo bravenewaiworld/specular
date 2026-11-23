@@ -4,9 +4,13 @@
 //! own so later commands aren't held up. Every exchange with BlueZ is traced as `send` / `recv`.
 //!
 //! When the bus or bluetoothd isn't there (yet: it may start after Specular), the service reports
-//! `NotAvailable` once and keeps trying every few seconds.
+//! `NotAvailable` once and keeps trying every few seconds. BlueZ without an adapter is Bluetooth
+//! off, not a failure: with a `BtController`, the adapter is gone while the controller is off and
+//! appears a few seconds after it is powered on. So an adapter that never appears (a controller
+//! that fails to start, or no Bluetooth hardware) shows only as Bluetooth staying off.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -90,6 +94,11 @@ impl Objects {
     /// The first adapter (the Brick has one).
     fn adapter(&self) -> Option<&str> { self.with(ADAPTER).next().map(|(p, _)| p) }
 
+    fn adapter_state(&self) -> AdapterState {
+        let a = self.with(ADAPTER).next();
+        AdapterState { present: a.is_some(), powered: a.is_some_and(|(_, a)| flag(a, "Powered")) }
+    }
+
     fn devices(&self, adapter: &str) -> Vec<BtDevice> {
         self.with(DEVICE).filter(|(_, p)| text(p, "Adapter") == Some(adapter)).filter_map(|(path, p)| {
             let connected = flag(p, "Connected");
@@ -110,9 +119,10 @@ impl Objects {
         Some((path.into(), text(p, "Name").unwrap_or(&address.0).into()))
     }
 
-    fn state(&self, adapter: &str) -> State {
-        let a = self.get(adapter, ADAPTER);
-        State { powered: a.is_some_and(|a| flag(a, "Powered")), searching: a.is_some_and(|a| flag(a, "Discovering")), devices: self.devices(adapter) }
+    /// The adapter's state; with no adapter, off with no devices.
+    fn state(&self) -> State {
+        let Some((adapter, a)) = self.with(ADAPTER).next() else { return State::default() };
+        State { powered: flag(a, "Powered"), searching: flag(a, "Discovering"), devices: self.devices(adapter) }
     }
 }
 
@@ -131,6 +141,27 @@ fn kind(icon: &str) -> BtKind {
         _ => BtKind::Other,
     }
 }
+
+/// Whether BlueZ has an adapter, and whether it is powered.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct AdapterState { present: bool, powered: bool }
+
+/// The wanted commands due as the adapter went from `before` to `now`. The power when an adapter
+/// appears, or when its power changes to other than wanted (BlueZ powers a new adapter itself, as
+/// configured, racing our own request). The search once it is powered: BlueZ refuses to search
+/// with an unpowered adapter.
+fn due(before: AdapterState, now: AdapterState, wanted: Wanted) -> Vec<BtCmd> {
+    let mut cmds = vec![];
+    if !now.present { return cmds; }
+    let changed = !before.present || before.powered != now.powered;
+    if let Some(on) = wanted.power && changed && on != now.powered { cmds.push(BtCmd::Power(on)); }
+    if wanted.search && now.powered && !before.powered { cmds.push(BtCmd::Search(true)); }
+    cmds
+}
+
+/// BlueZ's answer to powering an adapter whose power is already changing (as BlueZ powers a new
+/// adapter itself): not a failure, as the change arrives as a property change.
+const POWER_CHANGING: &[&str] = &["org.bluez.Error.Busy"];
 
 /// What the app is told: the adapter's state and the devices.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -168,28 +199,52 @@ fn tolerate<T>(result: Result<T, Failure>, done: &[&str]) -> Result<(), Failure>
 }
 
 /// The connection to BlueZ, while there is one.
-struct Link { conn: Connection, adapter: String, objects: Objects }
+struct Link { conn: Connection, objects: Objects }
 
 struct Shared {
     events: Events<BtEvent>,
     link: Mutex<Option<Link>>,
     /// Devices (object paths) Specular is pairing with: the agent agrees only to these.
     pairing: Arc<Mutex<HashSet<String>>>,
-    /// The power and search last asked for, applied again on every connection to BlueZ: asked
-    /// for before BlueZ was reachable, or lost when bluetoothd restarted (its adapter then
-    /// starts powered as configured, and searches end with the connection that started them).
+    /// The power and search last asked for, applied again as an adapter appears and is powered
+    /// (see `due`): asked for before BlueZ or its adapter was there, or lost when bluetoothd
+    /// restarted or the controller was powered off (an adapter starts powered as BlueZ is
+    /// configured, and searches end with the connection or adapter that started them).
     wanted: Mutex<Wanted>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
 struct Wanted { power: Option<bool>, search: bool }
+
+/// Switches a device's Bluetooth controller on and off: its own power, which BlueZ's adapter power
+/// doesn't cut.
+pub trait BtController: Send {
+    /// Powers the controller on or off. Returns once asked, not once done: when powered on, the
+    /// controller appears to BlueZ as an adapter some seconds later; when powered off, its adapter
+    /// goes away.
+    fn set_power(&mut self, on: bool) -> io::Result<()>;
+}
 
 /// Bluetooth through BlueZ; see the module's description.
 #[derive(Default)]
-pub struct Bluez { shared: Option<Arc<Shared>> }
+pub struct Bluez { shared: Option<Arc<Shared>>, controller: Option<Box<dyn BtController>> }
 
 impl Bluez {
+    /// For a controller that is always powered: `BtCmd::Power` sets only the adapter's power.
     pub fn new() -> Self { Self::default() }
+
+    /// For a controller that `controller` powers: `BtCmd::Power(true)` powers it before the
+    /// adapter, and `BtCmd::Power(false)` after the adapter, so devices are disconnected first.
+    pub fn with_controller(controller: Box<dyn BtController>) -> Self { Self { shared: None, controller: Some(controller) } }
+
+    /// Powers the controller, if there is one to power, reporting a failure as an event.
+    fn power_controller(&mut self, on: bool) {
+        let (Some(c), Some(s)) = (&mut self.controller, &self.shared) else { return };
+        trace::line("bluetooth", "send", &format!("controller power {on}"));
+        let result = c.set_power(on);
+        trace::line("bluetooth", "recv", &format!("controller power {on}: {}", result.as_ref().map_or_else(|e| e.to_string(), |()| "ok".into())));
+        if let Err(e) = result { (s.events)(BtEvent::Failed(BtError::Service { step: "controller power".into(), detail: e.to_string() })); }
+    }
 }
 
 impl Wireless<BtCmd, BtEvent> for Bluez {
@@ -201,10 +256,11 @@ impl Wireless<BtCmd, BtEvent> for Bluez {
 
     fn send(&mut self, cmd: BtCmd) {
         let Some(shared) = self.shared.clone() else { return };
-        if matches!(cmd, BtCmd::Pair(_) | BtCmd::Connect(_)) {
-            std::thread::spawn(move || command(&shared, cmd));
-        } else {
-            command(&shared, cmd);
+        match cmd {
+            BtCmd::Power(true) => { self.power_controller(true); command(&shared, cmd); }
+            BtCmd::Power(false) => { command(&shared, cmd); self.power_controller(false); }
+            BtCmd::Pair(_) | BtCmd::Connect(_) => { std::thread::spawn(move || command(&shared, cmd)); }
+            _ => command(&shared, cmd),
         }
     }
 }
@@ -224,8 +280,9 @@ fn follow(s: &Shared) {
     }
 }
 
-/// Sets up with BlueZ (the adapter, its objects, the pairing agent) and follows its signals,
-/// reporting changes, until BlueZ or the bus goes away (the error says why).
+/// Sets up with BlueZ (its objects, the pairing agent) and follows its signals, reporting changes
+/// and applying `Shared::wanted` whenever an adapter appears, until BlueZ or the bus goes away
+/// (the error says why).
 fn session(s: &Shared, last: &mut Option<State>, available: &mut bool) -> Result<(), String> {
     let conn = zbus::blocking::connection::Builder::system().and_then(|b| b.method_timeout(CALL_TIMEOUT).build())
         .map_err(|e| format!("system bus: {e}"))?;
@@ -239,7 +296,6 @@ fn session(s: &Shared, last: &mut Option<State>, available: &mut bool) -> Result
         call(&conn, "/", OBJECT_MANAGER, "GetManagedObjects", &())?.body().deserialize().map_err(|e| e.to_string())?;
     let mut objects = Objects::default();
     all.iter().for_each(|(path, ifaces)| objects.added(path, ifaces));
-    let adapter = objects.adapter().ok_or("no Bluetooth adapter")?.to_string();
 
     conn.object_server().at(AGENT_PATH, Agent { pairing: s.pairing.clone() }).map_err(|e| e.to_string())?;
     let agent = OwnedObjectPath::try_from(AGENT_PATH).expect("a valid path");
@@ -247,16 +303,15 @@ fn session(s: &Shared, last: &mut Option<State>, available: &mut bool) -> Result
     call(&conn, "/org/bluez", "org.bluez.AgentManager1", "RequestDefaultAgent", &(&agent,))?;
 
     let report = |objects: &Objects, last: &mut Option<State>| {
-        let now = objects.state(&adapter);
+        let now = objects.state();
         changes(last.as_ref(), &now).into_iter().for_each(|e| (s.events)(e));
         *last = Some(now);
     };
     report(&objects, last);
-    *s.link.lock().unwrap() = Some(Link { conn: conn.clone(), adapter: adapter.clone(), objects });
+    let adapter = objects.adapter_state();
+    *s.link.lock().unwrap() = Some(Link { conn: conn.clone(), objects });
     *available = true;
-    let wanted = *s.wanted.lock().unwrap();
-    if let Some(on) = wanted.power { command(s, BtCmd::Power(on)); }
-    if wanted.search { command(s, BtCmd::Search(true)); }
+    apply_due(s, AdapterState::default(), adapter);
 
     for msg in signals {
         let msg = msg.map_err(|e| e.to_string())?;
@@ -269,37 +324,48 @@ fn session(s: &Shared, last: &mut Option<State>, available: &mut bool) -> Result
             continue;
         }
         if h.sender().map(|s| s.as_str()) != Some(owner.as_str()) { continue; }
-        let mut guard = s.link.lock().unwrap();
-        let Some(link) = guard.as_mut() else { return Err("disconnected".into()) };
-        let objects = &mut link.objects;
-        match (iface, member) {
-            (OBJECT_MANAGER, "InterfacesAdded") => {
-                let (path, ifaces): (OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>) = msg.body().deserialize().map_err(|e| e.to_string())?;
-                let kept: Vec<_> = ifaces.iter().filter_map(|(i, raw)| Some((short(i), kept_props(i, raw)?))).collect();
-                if kept.is_empty() { continue; }
-                trace::line("bluetooth", "recv", &format!("InterfacesAdded {} {kept:?}", path.as_str()));
-                objects.added(&path, &ifaces);
+        let (before, after) = {
+            let mut guard = s.link.lock().unwrap();
+            let Some(link) = guard.as_mut() else { return Err("disconnected".into()) };
+            let objects = &mut link.objects;
+            let before = objects.adapter_state();
+            match (iface, member) {
+                (OBJECT_MANAGER, "InterfacesAdded") => {
+                    let (path, ifaces): (OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>) = msg.body().deserialize().map_err(|e| e.to_string())?;
+                    let kept: Vec<_> = ifaces.iter().filter_map(|(i, raw)| Some((short(i), kept_props(i, raw)?))).collect();
+                    if kept.is_empty() { continue; }
+                    trace::line("bluetooth", "recv", &format!("InterfacesAdded {} {kept:?}", path.as_str()));
+                    objects.added(&path, &ifaces);
+                }
+                (OBJECT_MANAGER, "InterfacesRemoved") => {
+                    let (path, ifaces): (OwnedObjectPath, Vec<String>) = msg.body().deserialize().map_err(|e| e.to_string())?;
+                    if !ifaces.iter().any(|i| KEPT.iter().any(|(k, _)| k == i)) { continue; }
+                    trace::line("bluetooth", "recv", &format!("InterfacesRemoved {} {ifaces:?}", path.as_str()));
+                    objects.removed(&path, &ifaces);
+                }
+                (PROPERTIES, "PropertiesChanged") => {
+                    let (on, raw, invalidated): (String, HashMap<String, OwnedValue>, Vec<String>) = msg.body().deserialize().map_err(|e| e.to_string())?;
+                    let Some(props) = kept_props(&on, &raw) else { continue };
+                    let invalidated: Vec<String> = invalidated.into_iter().filter(|k| KEPT.iter().any(|(i, n)| *i == on && n.contains(&k.as_str()))).collect();
+                    if props.is_empty() && invalidated.is_empty() || objects.get(path, &on).is_none() { continue; }
+                    trace::line("bluetooth", "recv", &format!("PropertiesChanged {path} {} {props:?} invalidated {invalidated:?}", short(&on)));
+                    objects.changed(path, &on, props, &invalidated);
+                }
+                _ => continue,
             }
-            (OBJECT_MANAGER, "InterfacesRemoved") => {
-                let (path, ifaces): (OwnedObjectPath, Vec<String>) = msg.body().deserialize().map_err(|e| e.to_string())?;
-                if !ifaces.iter().any(|i| KEPT.iter().any(|(k, _)| k == i)) { continue; }
-                trace::line("bluetooth", "recv", &format!("InterfacesRemoved {} {ifaces:?}", path.as_str()));
-                objects.removed(&path, &ifaces);
-                if objects.get(&link.adapter, ADAPTER).is_none() { return Err("the Bluetooth adapter went away".into()); }
-            }
-            (PROPERTIES, "PropertiesChanged") => {
-                let (on, raw, invalidated): (String, HashMap<String, OwnedValue>, Vec<String>) = msg.body().deserialize().map_err(|e| e.to_string())?;
-                let Some(props) = kept_props(&on, &raw) else { continue };
-                let invalidated: Vec<String> = invalidated.into_iter().filter(|k| KEPT.iter().any(|(i, n)| *i == on && n.contains(&k.as_str()))).collect();
-                if props.is_empty() && invalidated.is_empty() || objects.get(path, &on).is_none() { continue; }
-                trace::line("bluetooth", "recv", &format!("PropertiesChanged {path} {} {props:?} invalidated {invalidated:?}", short(&on)));
-                objects.changed(path, &on, props, &invalidated);
-            }
-            _ => continue,
-        }
-        report(objects, last);
+            report(objects, last);
+            (before, objects.adapter_state())
+        };
+        // `apply_due` takes the link's lock, so it runs only once the block above released it.
+        apply_due(s, before, after);
     }
     Err("the bus connection closed".into())
+}
+
+/// Carries out the wanted commands that became due (see `due`).
+fn apply_due(s: &Shared, before: AdapterState, now: AdapterState) {
+    let wanted = *s.wanted.lock().unwrap();
+    due(before, now, wanted).into_iter().for_each(|cmd| command(s, cmd));
 }
 
 /// "Device1" for "org.bluez.Device1", for shorter trace lines.
@@ -324,19 +390,21 @@ fn set(conn: &Connection, path: &str, iface: &str, name: &str, value: bool) -> R
 /// Carries out `cmd`, reporting a failure as an event (the outcome itself arrives as BlueZ's
 /// property changes).
 fn command(s: &Shared, cmd: BtCmd) {
-    let linked = s.link.lock().unwrap().is_some();
     match cmd {
         BtCmd::Power(on) => s.wanted.lock().unwrap().power = Some(on),
         BtCmd::Search(on) => s.wanted.lock().unwrap().search = on,
         _ => {}
     }
-    // Applied once BlueZ is reachable (see `Shared::wanted`).
-    if !linked && matches!(cmd, BtCmd::Power(_) | BtCmd::Search(_)) { return; }
     let target = match &cmd { BtCmd::Pair(a) | BtCmd::Connect(a) | BtCmd::Disconnect(a) | BtCmd::Forget(a) => Some(a), _ => None };
-    let found = s.link.lock().unwrap().as_ref().map(|l| (l.conn.clone(), l.adapter.clone(), target.map(|a| l.objects.device(a))));
-    let Some((conn, adapter, device)) = found else {
-        return (s.events)(BtEvent::Failed(BtError::NotAvailable { detail: "BlueZ isn't reachable".into() }));
+    let found = s.link.lock().unwrap().as_ref()
+        .and_then(|l| Some((l.conn.clone(), l.objects.adapter()?.to_string(), l.objects.adapter_state().powered, target.map(|a| l.objects.device(a)))));
+    let Some((conn, adapter, powered, device)) = found else {
+        // Applied once BlueZ and an adapter are there (see `due`).
+        if matches!(cmd, BtCmd::Power(_) | BtCmd::Search(_)) { return; }
+        return (s.events)(BtEvent::Failed(BtError::NotAvailable { detail: "BlueZ or its adapter isn't there".into() }));
     };
+    // Applied once the adapter is powered (see `due`).
+    if cmd == BtCmd::Search(true) && !powered { return; }
     let (path, name) = match device {
         Some(None) => {
             let a = &target.unwrap().0;
@@ -346,7 +414,7 @@ fn command(s: &Shared, cmd: BtCmd) {
         None => Default::default(),
     };
     let result = match cmd {
-        BtCmd::Power(on) => set(&conn, &adapter, ADAPTER, "Powered", on).map_err(|e| ("power", e)),
+        BtCmd::Power(on) => tolerate(set(&conn, &adapter, ADAPTER, "Powered", on), POWER_CHANGING).map_err(|e| ("power", e)),
         BtCmd::Search(on) => search(&conn, &adapter, on).map_err(|e| ("search", e)),
         BtCmd::Pair(_) => pair(s, &conn, &path),
         BtCmd::Connect(_) => connect(&conn, &path),

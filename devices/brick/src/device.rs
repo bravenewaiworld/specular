@@ -8,9 +8,7 @@ use std::path::Path;
 
 use specular_core::device::{Accent, Audio, Device, DeviceProfile, Display, Hardware, Lights, Output, Power, Rgb, SoundOut, Vsync};
 use specular_core::input::Button;
-use specular_core::wireless::trace::Traced;
 use specular_crystaline::system::{self, run};
-use specular_linux::bluez::Bluez;
 use specular_linux::leds::RgbLeds;
 use specular_linux::power_supply::PowerSupply;
 use specular_linux::sound::Alsa;
@@ -49,7 +47,7 @@ impl Device for Brick {
             lights: Box::new(BrickLights(RgbLeds::new(Path::new("/sys/class/leds"), &names))),
             audio: Box::new(Volume),
             wifi: specular_crystaline::wifi::wifi(),
-            bluetooth: Some(Box::new(Traced::new("bluetooth", Bluez::new()))),
+            bluetooth: Some(specular_crystaline::bluetooth::bluetooth()),
             installer: Some(Box::new(specular_crystaline::install::CrystalineInstaller)),
             time_zone: Some(Box::new(specular_crystaline::timezone::CrystalineTimeZone)),
             card: Some(system::card()),
