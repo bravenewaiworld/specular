@@ -189,10 +189,12 @@ pub enum SettingError {
 pub struct Settings {
     decls: Vec<SettingDecl>,
     layers: HashMap<Layer, Map<String, Value>>,
+    /// Defaults set at run time, in place of the declared ones (`set_default`).
+    defaults: HashMap<&'static str, Value>,
 }
 
 impl Settings {
-    pub fn new(decls: Vec<SettingDecl>) -> Self { Self { decls, layers: HashMap::new() } }
+    pub fn new(decls: Vec<SettingDecl>) -> Self { Self { decls, layers: HashMap::new(), defaults: HashMap::new() } }
 
     /// A setting's declaration, by its key.
     pub fn decl(&self, key: &str) -> Option<&SettingDecl> { self.decls.iter().find(|d| d.key == key) }
@@ -219,6 +221,14 @@ impl Settings {
         layers.into_iter().flat_map(|(l, values)| ignored(&self.decls, l, values).into_iter().map(|(k, why)| (l.clone(), k, why))).collect()
     }
 
+    /// Makes `v` the default of the setting `key` in place of its declared one, for a default that
+    /// depends on what the device reports at run time. As with any default, a stored value wins,
+    /// and setting the value to it stores nothing. It isn't written to the settings' schema files,
+    /// which keep the declared default. Kept across `declare`; ignored if no such setting is declared.
+    pub fn set_default(&mut self, key: &str, v: Value) {
+        if let Some(d) = self.decl(key) { self.defaults.insert(d.key, v); }
+    }
+
     /// Forgets every layer, before another SD card's are loaded.
     pub fn clear_layers(&mut self) { self.layers.clear(); }
 
@@ -239,7 +249,7 @@ impl Settings {
                 return Some((v, Some(layer)));
             }
         }
-        Some((&d.default, None))
+        Some((self.defaults.get(d.key).unwrap_or(&d.default), None))
     }
 
     /// Whether a global Bool setting is on (false if it isn't declared).

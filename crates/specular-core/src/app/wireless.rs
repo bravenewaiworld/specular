@@ -6,8 +6,7 @@
 //! being open), then for `WIFI_GRACE` more, so needs that come and go don't keep restarting the
 //! radio. A need made while WiFi isn't connected lapses after `NEED_TIMEOUT` unless it connects by
 //! then, so a place with no known network doesn't keep the radio on; once connected, a need holds
-//! until it is dropped. On a development system, or with the developer setting Keep Wi-Fi on,
-//! Auto stays on (`kept_on`).
+//! until it is dropped.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -110,9 +109,6 @@ pub(super) fn register(screens: &mut HashMap<ScreenId, Box<dyn Screen>>) {
 
 fn setting<'a>(ctx: &'a Ctx, key: &str) -> Option<&'a serde_json::Value> { ctx.settings.get(key, &Layer::Global).map(|(v, _)| v) }
 pub(super) fn wifi_mode(ctx: &Ctx) -> &str { setting(ctx, builtin::WIFI).and_then(|v| v.as_str()).unwrap_or("off") }
-/// Whether WiFi on Auto stays on regardless of need: the developer setting, or a development
-/// system (so SSH can reach it over WiFi; SSH registers no `WifiNeed`).
-fn kept_on(ctx: &Ctx) -> bool { ctx.settings.on(builtin::WIFI_KEEP_ON) || super::ssh::development_system(ctx) }
 fn bluetooth_on(ctx: &Ctx) -> bool { ctx.settings.on(builtin::BLUETOOTH) }
 
 impl App {
@@ -233,7 +229,7 @@ impl App {
             let want = match wifi_mode(&self.ctx) {
                 "on" => true,
                 "off" => false,
-                _ => kept_on(&self.ctx) || needed || self.now < self.radios.grace_until,
+                _ => self.ctx.settings.on(builtin::WIFI_KEEP_ON) || needed || self.now < self.radios.grace_until,
             };
             if self.radios.wifi_power != Some(want) {
                 self.radios.wifi_power = Some(want);
@@ -356,10 +352,7 @@ impl Screen for WifiScreen {
         let address = |id: String, label: &str, address: &str| Row::new(id, label, RowKind::Note { detail: Some(address.into()) });
         let wifi = ctx.wifi.as_ref().filter(|_| mode != "off");
         // What needs it: `WifiNeed`, and the screens `App::wifi_needed` counts.
-        if mode == "auto" && wifi.is_some() {
-            let note = if kept_on(ctx) { "Kept on, for developers (SSH)." } else { "On only while needed: on this screen, for File transfer, and to download box art." };
-            rows.push(Row::note("note:auto", note));
-        }
+        if mode == "auto" && wifi.is_some() { rows.push(Row::note("note:auto", "On only while needed: on this screen, for File transfer, and to download box art.")); }
         if let Some(WifiLink::Connected { address: a, .. }) = wifi.map(|w| &w.link) { rows.push(address("address".into(), "Address for File transfer", a)); }
         if ctx.visibility() == Visibility::Developer && let Some(w) = &ctx.wifi {
             rows.extend(w.interfaces.iter().map(|i| address(format!("address:{}:{}", i.name, i.address), &i.name, &i.address)));

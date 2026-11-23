@@ -1,6 +1,7 @@
 //! SSH in the developer settings, on systems where the user may switch it
 //! (`SshStatus::switchable`): a switch, and importing login keys from the SD card. The system
-//! keeps the state; the app asks for it each time Settings opens.
+//! keeps the state; the app asks for it at start-up and each time Settings opens. On a
+//! development system, WiFi is On by default.
 
 use super::*;
 use crate::device::{SshCmd, SshStatus};
@@ -27,6 +28,10 @@ impl App {
             _ => None,
         };
         if result.is_ok() || cmd == SshCmd::Status { state.status = Some(result); }
+        // A development system is reached over SSH, so its WiFi is On unless the user chose
+        // otherwise (see docs/wireless.md).
+        let wifi = if development_system(&self.ctx) { "on" } else { "auto" };
+        self.ctx.settings.set_default(builtin::WIFI, wifi.into());
         self.changed();
         notice.map(Effect::Notice).into_iter().chain([Effect::Redraw(None)]).collect()
     }

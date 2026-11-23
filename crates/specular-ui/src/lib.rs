@@ -221,7 +221,7 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     let cpu_steps = Arc::new(OnceLock::new());
     let (hardware, hardware_thread) = hardware_thread(hardware, cpu_steps.clone());
     // Ask for SSH's state at start, not only when Settings opens: it tells whether this is a
-    // development system, where WiFi on Auto is always on.
+    // development system, where WiFi is On by default.
     if has_ssh { let _ = hardware.send(HwCmd::Ssh(SshCmd::Status)); }
     app.has_time_zone(time_zone.is_some());
     // Beside the binary, where `make install` puts it (and the build does, for development).

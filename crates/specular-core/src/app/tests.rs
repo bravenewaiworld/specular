@@ -832,18 +832,29 @@ mod wireless {
     }
 
     #[test]
-    fn a_development_system_keeps_auto_wifi_on_but_off_still_wins() {
+    fn wifi_is_on_by_default_on_a_development_system_but_a_choice_stands() {
         let status = |a: &mut App, switchable| a.handle(Msg::Ssh { cmd: SshCmd::Status, result: Ok(SshStatus { switchable, on: true, keys: 0 }) });
+        let stored = |a: &App| a.ctx.settings.layer(&Layer::Global).get(builtin::WIFI).cloned();
         let mut a = radio_app();
         a.has_ssh(true);
-        assert_eq!(radio_effects(&status(&mut a, true)), Vec::<&Effect>::new()); // a release system
+        assert_eq!(radio_effects(&status(&mut a, true)), Vec::<&Effect>::new()); // a release system: Auto
         let mut a = radio_app();
         a.has_ssh(true);
         assert_eq!(radio_effects(&status(&mut a, false)), [&Effect::Wifi(WifiCmd::Power(true))]);
+        assert_eq!(stored(&a), None); // the default isn't written
         open(&mut a, "Wi-Fi", 0);
-        assert!(labels(&a).contains(&"Kept on, for developers (SSH).".into()));
-        assert_eq!(radio_effects(&press(&mut a, "Wi-Fi")), Vec::<&Effect>::new()); // Auto to On
         assert_eq!(radio_effects(&press(&mut a, "Wi-Fi")), [&Effect::Wifi(WifiCmd::Power(false))]); // On to Off
+        assert_eq!(stored(&a), Some(json!("off")));
+        press(&mut a, "Wi-Fi"); // Off to Auto: stored, as it isn't the default here
+        assert_eq!(stored(&a), Some(json!("auto")));
+        press(&mut a, "Wi-Fi"); // Auto to On: the default again, so nothing is stored
+        assert_eq!(stored(&a), None);
+        // A choice made before stands on a development system.
+        let mut a = app();
+        a.has_radios(true, false);
+        a.has_ssh(true);
+        a.handle(Msg::SettingsLoaded(Layer::Global, serde_json::Map::from_iter([(builtin::WIFI.into(), json!("auto"))])));
+        assert_eq!(radio_effects(&status(&mut a, false)), Vec::<&Effect>::new());
     }
 
     #[test]

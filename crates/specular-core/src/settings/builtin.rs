@@ -25,12 +25,12 @@ pub const HDMI_VOLUME: &str = "sound.hdmi_volume";
 /// Whether the interface makes its sounds (`app::Sound`).
 pub const INTERFACE_SOUNDS: &str = "sound.interface_sounds";
 /// WiFi: "on", "off", or "auto" (on only while something needs it: see `app::WifiNeed`). Shown
-/// on the Wi-Fi screen.
+/// on the Wi-Fi screen. The default is "on" on a development system (`app::ssh`'s `ssh_done`).
 pub const WIFI: &str = "wireless.wifi";
 /// Bluetooth on or off. Shown on the Bluetooth screen.
 pub const BLUETOOTH: &str = "wireless.bluetooth";
 /// WiFi set to Auto stays on (a developer setting: SSH registers no `app::WifiNeed`, so on Auto
-/// WiFi would otherwise turn off while it is in use). Development systems behave as if it were set.
+/// WiFi would otherwise turn off while it is in use).
 pub const WIFI_KEEP_ON: &str = "dev.wifi_keep_on";
 /// The LEDs' brightness (its key predates there being more LEDs than the light bar).
 pub const LED_BRIGHTNESS: &str = "lights.brightness";
@@ -185,7 +185,7 @@ pub fn settings() -> Vec<SettingDecl> {
             help: "Whether the time zone may be looked up on the internet, from ipinfo.io, which then sees the network's public IP address. Specular asks before the first lookup.",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::OwnScreen, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: WIFI_KEEP_ON, section: "Developer", label: "Keep Wi-Fi on",
-            help: "Keeps Wi-Fi on while it is set to Auto, so the device can still be reached over Wi-Fi (for SSH, or copying files). On a development system, Wi-Fi stays on either way.",
+            help: "Keeps Wi-Fi on while it is set to Auto, so the device can still be reached over Wi-Fi (for SSH, or copying files).",
             kind: SettingKind::Bool, default: json!(false), visibility: Visibility::Developer, deepest: Scope::Global, core: None, system: None },
         SettingDecl { key: FRAME_STATS, section: "Developer", label: "Frame statistics",
             help: "Shows, over the game, its frame rate, how long the emulator spends on each frame, and how much sound is waiting to be played: for finding what causes slowdowns or crackling sound.",
