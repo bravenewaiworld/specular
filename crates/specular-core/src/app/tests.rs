@@ -821,6 +821,21 @@ mod wireless {
     }
 
     #[test]
+    fn a_development_system_keeps_auto_wifi_on_but_off_still_wins() {
+        let status = |a: &mut App, switchable| a.handle(Msg::Ssh { cmd: SshCmd::Status, result: Ok(SshStatus { switchable, on: true, keys: 0 }) });
+        let mut a = radio_app();
+        a.has_ssh(true);
+        assert_eq!(radio_effects(&status(&mut a, true)), Vec::<&Effect>::new()); // a release system
+        let mut a = radio_app();
+        a.has_ssh(true);
+        assert_eq!(radio_effects(&status(&mut a, false)), [&Effect::Wifi(WifiCmd::Power(true))]);
+        open(&mut a, "Wi-Fi", 0);
+        assert!(labels(&a).contains(&"Kept on, for developers (SSH).".into()));
+        assert_eq!(radio_effects(&press(&mut a, "Wi-Fi")), Vec::<&Effect>::new()); // Auto to On
+        assert_eq!(radio_effects(&press(&mut a, "Wi-Fi")), [&Effect::Wifi(WifiCmd::Power(false))]); // On to Off
+    }
+
+    #[test]
     fn joining_a_secured_network_asks_for_its_password() {
         let mut a = radio_app();
         open(&mut a, "Wi-Fi", 0);

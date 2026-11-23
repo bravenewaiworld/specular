@@ -216,9 +216,13 @@ pub fn run(device: Box<dyn Device + Send + Sync>, data: DataRoot, platform: Opti
     app.has_radios(wifi.is_some(), bluetooth.is_some());
     app.has_installer(installer.is_some());
     app.has_file_transfer(hardware.file_transfer.is_some());
-    app.has_ssh(hardware.ssh.is_some());
+    let has_ssh = hardware.ssh.is_some();
+    app.has_ssh(has_ssh);
     let cpu_steps = Arc::new(OnceLock::new());
     let (hardware, hardware_thread) = hardware_thread(hardware, cpu_steps.clone());
+    // Ask for SSH's state at start, not only when Settings opens: it tells whether this is a
+    // development system, where WiFi on Auto is always on.
+    if has_ssh { let _ = hardware.send(HwCmd::Ssh(SshCmd::Status)); }
     app.has_time_zone(time_zone.is_some());
     // Beside the binary, where `make install` puts it (and the build does, for development).
     let texts = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("licences.txt"))).filter(|p| p.is_file());

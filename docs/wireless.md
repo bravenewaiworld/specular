@@ -1,6 +1,6 @@
 # Wireless
 
-Status: Implemented · Updated: 2026-10-19
+Status: Implemented · Updated: 2026-11-23
 
 WiFi and Bluetooth: the services that drive the radios, how the app keeps them as the settings and screens want, Bluetooth audio, and the trace and scenarios that let a radio problem seen on a device be replayed on a PC. Radios are slow, flaky and stateful, so their behaviour has to be observable and reproducible.
 
@@ -8,6 +8,7 @@ WiFi and Bluetooth: the services that drive the radios, how the app keeps them a
 
 - **Radios go through the standard Linux services: wpa_supplicant and BlueZ** (2026-10-14), in `specular-linux`, shared by any Linux device. A port supplies only what isn't theirs: powering the WiFi hardware and asking for an address (DHCP).
 - **WiFi is On, Off or Auto, and Auto is the default** (2026-10-14). Auto turns WiFi on only while something needs it (box art downloads, or the Wi-Fi or file transfer screen being open), which saves battery. A developer setting, "Keep Wi-Fi on", stops Auto from turning it off, so SSH over WiFi stays up.
+- **A development system keeps WiFi on Auto on, as if "Keep Wi-Fi on" were set** (2026-11-23). It is reached over SSH, which registers no need, and a developer shouldn't have to open the Wi-Fi screen after every restart to reach it. Whether the system is a development one comes from SSH's state (`SshStatus::switchable`), which Specular asks for at start-up. Release systems are unchanged, and Off still turns WiFi off. Rejected: making On the default (it costs battery for everyone).
 - **A network is saved only once it has connected** (2026-10-14), so a wrong password is never kept.
 - **Failures are shown only on the radio's own screen** (2026-10-14), where the user asked for something. Elsewhere they are only in the trace.
 - **Every exchange with a radio is traced, always** (2026-10-14). It is a few lines per user action, so it costs the same everywhere and there is no separate mode in which behaviour could differ. Passwords are never written.
@@ -78,7 +79,7 @@ A WiFi password must be 8–63 printable ASCII characters, or 64 hex digits; oth
 
 After every message, the app works out what the radios and sound output should be from the settings and the screens open, and sends only the changes. Nothing is sent until the settings are loaded.
 
-- **WiFi on Auto** is on while something needs it, then for 60 s more, so needs that come and go don't keep restarting the radio. A need made while WiFi isn't connected lapses after 30 s unless it connects by then, so a place with no known network doesn't keep the radio on; once connected, a need holds until dropped.
+- **WiFi on Auto** is on while something needs it, then for 60 s more, so needs that come and go don't keep restarting the radio. A need made while WiFi isn't connected lapses after 30 s unless it connects by then, so a place with no known network doesn't keep the radio on; once connected, a need holds until dropped. On a development system, or with "Keep Wi-Fi on", Auto is always on.
 - **Bluetooth search** runs only while the Bluetooth screen is open: it costs power, and slows WiFi, which may share the antenna. It starts after powering on and stops before powering off.
 - **Sound output** follows the order in [architecture.md](architecture.md) (Bluetooth, then the jack, then the speaker). An output that failed to open isn't tried again until its device disconnects, so a reconnection tries it afresh.
 

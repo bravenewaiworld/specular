@@ -32,6 +32,12 @@ impl App {
     }
 }
 
+/// Whether this is a development system (SSH always on, not `switchable`), as last reported.
+/// False until the first report, or if SSH's state couldn't be read (or there is no SSH).
+pub(super) fn development_system(ctx: &Ctx) -> bool {
+    matches!(ctx.ssh.as_ref().and_then(|s| s.status.as_ref()), Some(Ok(s)) if !s.switchable)
+}
+
 /// "1 SSH key", "2 SSH keys".
 fn keys(n: u32) -> String { format!("{n} SSH key{}", if n == 1 { "" } else { "s" }) }
 
